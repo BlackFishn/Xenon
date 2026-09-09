@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-  [ValidateSet('Enable', 'Restore')]
+  [ValidateSet('Enable', 'Restart', 'Restore')]
   [string]$Mode = 'Enable',
   [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'Programs\Xenon'),
   [string]$TaskName = 'Xenon Edge Widget'
@@ -64,6 +64,18 @@ function Wait-ForSourceBackend {
 }
 
 Assert-SafeInstallRoot
+
+if ($Mode -eq 'Restart') {
+  if (-not (Test-Path -LiteralPath $statePath)) { throw 'Source backend is not enabled.' }
+  $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+  if ([string]$state.repoRoot -ne $repoRoot) {
+    throw "Source mode is owned by another checkout: $($state.repoRoot)"
+  }
+  Start-XenonTask
+  if (-not (Wait-ForSourceBackend)) { throw 'Source backend failed to restart.' }
+  Write-Host "Source backend restarted: $repoRoot"
+  exit 0
+}
 
 if ($Mode -eq 'Restore') {
   if (-not (Test-Path -LiteralPath $statePath)) { throw 'No source-mode state was found.' }
