@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- **Smart Home cards can be arranged instead of forced into device bundles.** Settings now offers a Custom card layout that shows every selected Home Assistant entity separately. In Dashboard edit mode, cards can be reordered by mouse or touch, resized independently, and split into named sections and one level of subsections. The existing room-and-device grouping remains the default.
+
 ## [v4.11.7] - 05-09-2026
 ### ✨ Added
 - **Widgets can read clock speeds and your frame rate.** Asked for by someone building a monitoring widget who had run out of numbers to draw: Xenon knew the CPU and GPU clocks and the frame rate in a game, and none of it reached the widgets people write.

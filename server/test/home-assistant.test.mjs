@@ -161,11 +161,31 @@ test('actionToServiceCall maps the new device-specific Deck actions', () => {
 
 // ── settings: normalization + write-only token ───────────────────────────────
 test('normalizeHomeAssistant keeps a valid url, drops a bad one, filters entities', () => {
-  const n = ha.normalizeHomeAssistant({ url: 'http://ha:8123', token: 'abc', entities: ['light.a', 'light.a', 'bad', 'switch.b'] });
+  const n = ha.normalizeHomeAssistant({ url: 'http://ha:8123', token: 'abc', entities: ['light.a', 'light.a', 'bad', 'switch.b'], tileLayout: 'custom' });
   assert.equal(n.url, 'http://ha:8123');
   assert.equal(n.token, 'abc');
   assert.deepEqual(n.entities, ['light.a', 'switch.b']);        // deduped + validated
+  assert.equal(n.tileLayout, 'custom');
+  assert.equal(ha.normalizeHomeAssistant({ tileLayout: 'hostile' }).tileLayout, 'rooms');
   assert.equal(ha.normalizeHomeAssistant({ url: 'javascript:1' }).url, '');
+});
+test('normalizeHomeAssistant bounds custom card sizes and section nesting', () => {
+  const n = ha.normalizeHomeAssistant({
+    tileSections: [
+      { id: 'shs_air', title: ' Air quality ', parent: '' },
+      { id: 'shs_dust', title: 'Dust', parent: 'shs_air' },
+      { id: 'bad id', title: 'Bad' },
+    ],
+    tileCards: {
+      'sensor.pm25': { width: 99, height: -2, section: 'shs_dust' },
+      '__proto__': { width: 2 },
+    },
+  });
+  assert.deepEqual(n.tileSections, [
+    { id: 'shs_air', title: 'Air quality', parent: '' },
+    { id: 'shs_dust', title: 'Dust', parent: 'shs_air' },
+  ]);
+  assert.deepEqual(n.tileCards['sensor.pm25'], { width: 4, height: 1, section: 'shs_dust' });
 });
 test('preserveHaToken restores an omitted token, keeps a provided one', () => {
   const prev = { homeAssistant: { token: 'SECRET' } };
@@ -180,10 +200,12 @@ test('preserveHaToken keeps the whole block when the payload omits it', () => {
   assert.deepEqual(out.homeAssistant.entities, ['light.a']);
 });
 test('redactHaToken blanks the token and flags tokenSet', () => {
-  const r = ha.redactHaToken({ homeAssistant: { url: 'x', token: 'SECRET', entities: ['light.a'] } });
+  const r = ha.redactHaToken({ homeAssistant: { url: 'x', token: 'SECRET', entities: ['light.a'], tileLayout: 'custom', tileCards: { 'light.a': { width: 2, height: 1, section: '' } }, tileSections: [] } });
   assert.equal(r.homeAssistant.token, '');
   assert.equal(r.homeAssistant.tokenSet, true);
   assert.deepEqual(r.homeAssistant.entities, ['light.a']);
+  assert.equal(r.homeAssistant.tileLayout, 'custom');
+  assert.deepEqual(r.homeAssistant.tileCards, { 'light.a': { width: 2, height: 1, section: '' } });
   assert.equal(ha.redactHaToken({ homeAssistant: { url: 'x', token: '' } }).homeAssistant.tokenSet, false);
 });
 

@@ -366,6 +366,41 @@ function normalizeHaCamAngles(value) {
   return out;
 }
 
+// Custom Smart Home card layout. Sections are intentionally limited to two
+// levels (section + subsection); cards carry only presentation metadata and the
+// canonical display order remains the validated `entities` array.
+function normalizeHaTileSections(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const base = [];
+  for (const raw of value) {
+    if (base.length >= 24 || !raw || typeof raw !== 'object') break;
+    const id = String(raw.id || '').trim();
+    if (!/^shs_[a-z0-9_-]{1,40}$/.test(id) || seen.has(id)) continue;
+    seen.add(id);
+    base.push({ id, title: String(raw.title || '').trim().slice(0, 48) || 'Section', parent: String(raw.parent || '').trim() });
+  }
+  const roots = new Set(base.filter((s) => !s.parent).map((s) => s.id));
+  return base.map((s) => ({ ...s, parent: roots.has(s.parent) && s.parent !== s.id ? s.parent : '' }));
+}
+
+function normalizeHaTileCards(value, sectionIds) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out = {};
+  let count = 0;
+  for (const id of Object.keys(value)) {
+    if (count >= HA_MAX_ENTITIES || !isEntityId(id)) continue;
+    const raw = value[id];
+    if (!raw || typeof raw !== 'object') continue;
+    const width = Math.min(4, Math.max(1, Math.round(Number(raw.width) || 1)));
+    const height = Math.min(3, Math.max(1, Math.round(Number(raw.height) || 1)));
+    const section = sectionIds.has(raw.section) ? raw.section : '';
+    out[id] = { width, height, section };
+    count++;
+  }
+  return out;
+}
+
 function normalizeHomeAssistant(input) {
   const src = (input && typeof input === 'object') ? input : {};
   const url = String(src.url == null ? '' : src.url).trim().slice(0, 200);
@@ -384,10 +419,17 @@ function normalizeHomeAssistant(input) {
   const energyEntities = Array.isArray(src.energyEntities)
     ? src.energyEntities.filter(isEntityId).filter((v, i, a) => a.indexOf(v) === i).slice(0, HA_MAX_ENERGY_ENTITIES)
     : [];
+  const tileSections = normalizeHaTileSections(src.tileSections);
+  const tileCards = normalizeHaTileCards(src.tileCards, new Set(tileSections.map((s) => s.id)));
   return {
     url: haWsUrl(url) ? url : '',                    // keep only a valid http(s) HA URL
     token: typeof src.token === 'string' ? src.token.slice(0, 400) : '',
     entities,
+    // `rooms` preserves the established area/device grouping. `custom` uses the
+    // entities array as an exact card order and never merges a physical device.
+    tileLayout: src.tileLayout === 'custom' ? 'custom' : 'rooms',
+    tileCards,
+    tileSections,
     cameras,
     energyEntities,
     camAngles: normalizeHaCamAngles(src.camAngles),
@@ -424,6 +466,9 @@ function redactHaToken(settings) {
     homeAssistant: {
       url: ha.url || '',
       entities: Array.isArray(ha.entities) ? ha.entities : [],
+      tileLayout: ha.tileLayout === 'custom' ? 'custom' : 'rooms',
+      tileCards: (ha.tileCards && typeof ha.tileCards === 'object') ? ha.tileCards : {},
+      tileSections: Array.isArray(ha.tileSections) ? ha.tileSections : [],
       // Camera selection + per-camera view transforms are NOT secrets — carry them
       // to the browser (already normalized on save). Missing them here would strip
       // the user's chosen cameras on every settings round-trip.

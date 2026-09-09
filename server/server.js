@@ -7990,7 +7990,7 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   // Home Assistant Smart Home bridge. url/entities are client-visible; `token`
   // (a long-lived access token) is a server-only secret (preserve-on-save +
   // redact-on-wire). `entities` = the entity_ids the Smart Home tile shows.
-  homeAssistant: Object.freeze({ url: '', token: '', entities: [] }),
+  homeAssistant: Object.freeze({ url: '', token: '', entities: [], tileLayout: 'rooms', tileCards: Object.freeze({}), tileSections: Object.freeze([]) }),
   // UniFi Protect cameras. host/username/cameras (the selection to display) are
   // client-managed; the console `password` is a server-only secret (redacted on
   // the wire, restored on save). Mirror of settings.js.

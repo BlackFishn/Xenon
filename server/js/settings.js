@@ -678,7 +678,7 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   // Home Assistant Smart Home bridge. url/entities are client-managed; `token` is
   // a server-only secret (redacted on the wire, restored on save), so the client
   // copy is always '' and the server surfaces a `tokenSet` flag for the UI.
-  homeAssistant: Object.freeze({ url: '', token: '', entities: Object.freeze([]), cameras: Object.freeze([]), energyEntities: Object.freeze([]), camAngles: Object.freeze({}), tokenSet: false }),
+  homeAssistant: Object.freeze({ url: '', token: '', entities: Object.freeze([]), tileLayout: 'rooms', tileCards: Object.freeze({}), tileSections: Object.freeze([]), cameras: Object.freeze([]), energyEntities: Object.freeze([]), camAngles: Object.freeze({}), tokenSet: false }),
   // UniFi Protect cameras. host/username/cameras are client-managed; the console
   // `password` is a server-only secret (redacted on the wire, restored on save),
   // so the client copy is always '' and the server surfaces a `passwordSet` flag.
@@ -1841,6 +1841,39 @@ function normalizeCamAngles(value, isId) {
 // token is a server-only secret — the client never persists a real one, but keeps
 // a freshly-typed value until it's saved (then the server redacts it back to '').
 // `tokenSet` (server-provided) drives the "saved" placeholder in the UI.
+function normalizeHomeAssistantTileSections(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const base = [];
+  for (const raw of value) {
+    if (base.length >= 24 || !raw || typeof raw !== 'object') break;
+    const id = String(raw.id || '').trim();
+    if (!/^shs_[a-z0-9_-]{1,40}$/.test(id) || seen.has(id)) continue;
+    seen.add(id);
+    base.push({ id, title: String(raw.title || '').trim().slice(0, 48) || 'Section', parent: String(raw.parent || '').trim() });
+  }
+  const roots = new Set(base.filter((s) => !s.parent).map((s) => s.id));
+  return base.map((s) => ({ ...s, parent: roots.has(s.parent) && s.parent !== s.id ? s.parent : '' }));
+}
+
+function normalizeHomeAssistantTileCards(value, sectionIds, isEntity) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out = {};
+  let count = 0;
+  for (const id of Object.keys(value)) {
+    if (count >= 100 || !isEntity(id)) continue;
+    const raw = value[id];
+    if (!raw || typeof raw !== 'object') continue;
+    out[id] = {
+      width: Math.min(4, Math.max(1, Math.round(Number(raw.width) || 1))),
+      height: Math.min(3, Math.max(1, Math.round(Number(raw.height) || 1))),
+      section: sectionIds.has(raw.section) ? raw.section : '',
+    };
+    count++;
+  }
+  return out;
+}
+
 function normalizeHomeAssistant(value) {
   const src = (value && typeof value === 'object') ? value : {};
   const isEntity = (s) => typeof s === 'string' && /^[a-z_]+\.[a-z0-9_]+$/.test(s.trim());
@@ -1859,11 +1892,16 @@ function normalizeHomeAssistant(value) {
   const energyEntities = Array.isArray(src.energyEntities)
     ? src.energyEntities.filter(isEntity).filter((v, i, a) => a.indexOf(v) === i).slice(0, 24)
     : [];
+  const tileSections = normalizeHomeAssistantTileSections(src.tileSections);
+  const tileCards = normalizeHomeAssistantTileCards(src.tileCards, new Set(tileSections.map((s) => s.id)), isEntity);
   const camAngles = normalizeCamAngles(src.camAngles, isCam);
   return {
     url: String(src.url || '').trim().slice(0, 200),
     token: typeof src.token === 'string' ? src.token.slice(0, 400) : '',
     entities,
+    tileLayout: src.tileLayout === 'custom' ? 'custom' : 'rooms',
+    tileCards,
+    tileSections,
     cameras,
     energyEntities,
     camAngles,
