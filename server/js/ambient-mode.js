@@ -137,6 +137,18 @@ if (typeof window !== 'undefined') (function () {
     const arr = (typeof hubSettings === 'object' && hubSettings) ? hubSettings.ambientScenes : null;
     return Array.isArray(arr) ? arr : [];
   }
+  function uniqueSceneId(base) {
+    const used = new Set(savedScenes().map(scene => scene && scene.id).filter(Boolean));
+    const clean = String(base || 'my-ambient').toLowerCase()
+      .replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 41) || 'my-ambient';
+    if (!used.has(clean)) return clean;
+    for (let number = 2; number < 1000; number++) {
+      const suffix = '-' + number;
+      const candidate = clean.slice(0, 41 - suffix.length).replace(/-+$/g, '') + suffix;
+      if (!used.has(candidate)) return candidate;
+    }
+    return 'my-ambient-' + Date.now().toString(36).slice(-6);
+  }
   function tt(key, fb) {
     const v = (typeof window.t === 'function') ? window.t(key) : key;
     return (v === key && fb != null) ? fb : v;
@@ -202,12 +214,16 @@ if (typeof window !== 'undefined') (function () {
   }
   function unmountCanvas() {
     gameWatch.disconnect();
+    if (window.AmbientEditor && AmbientEditor.isEditing && AmbientEditor.isEditing()) AmbientEditor.abort();
     if (window.AmbientCanvas && AmbientCanvas.unmount) AmbientCanvas.unmount();
   }
   function isOpen() { return sceneOpen() || builtinOpen() || canvasOpen(); }
 
   function openBuiltin(fallback) {
     if (typeof openWidgetLockScreen === 'function') openWidgetLockScreen();
+    document.body.classList.add('ambient-builtin-open');
+    const editButton = document.getElementById('ambient-builtin-edit');
+    if (editButton) editButton.hidden = false;
     // Tell the user (once per reason per session) why their chosen scene
     // didn't come up — a silent switcheroo reads like a broken setting.
     if (!fallback || warnedFallback.has(fallback) || !window.XenonToast) return;
@@ -219,6 +235,42 @@ if (typeof window !== 'undefined') (function () {
         ? tt('cw_review_hint', 'It was updated (or predates a Xenon feature) and now requests capabilities you haven\'t approved.')
         : tt('ambient_scene_missing_hint', 'The selected scene was removed — showing the built-in one.');
     window.XenonToast.show({ type: 'info', title, message });
+  }
+
+  // Edit only first-party Canvas scenes. The classic scene is converted into a
+  // new user-owned Canvas draft; SDK scenes remain opaque sandboxed packages.
+  function edit() {
+    if (!(window.AmbientEditor && window.AmbientEditorModel && window.AmbientCanvas)) return false;
+    if (sceneOpen()) return false;
+    disarmDismiss();
+    idleStarted = false;
+    const fromBuiltin = builtinOpen();
+    let source = null;
+    if (fromBuiltin) {
+      source = AmbientEditorModel.createDefaultScene({ id: uniqueSceneId('my-ambient'), name: 'My Ambient' });
+      if (!source) return false;
+      if (typeof closeWidgetLockScreen === 'function') closeWidgetLockScreen();
+      document.body.classList.remove('ambient-builtin-open');
+      const editButton = document.getElementById('ambient-builtin-edit');
+      if (editButton) editButton.hidden = true;
+      if (!mountCanvas(source)) { openBuiltin(); return false; }
+    } else if (canvasOpen() && AmbientCanvas.sceneSnapshot) {
+      source = AmbientCanvas.sceneSnapshot();
+    }
+    if (!source) return false;
+    const forkId = source.imported ? uniqueSceneId(source.id + '-copy') : undefined;
+    const started = AmbientEditor.open(source, {
+      forkId,
+      onDone: scene => (typeof window.saveAmbientCanvasScene === 'function'
+        ? window.saveAmbientCanvasScene(scene)
+        : scene),
+      onCancel: fromBuiltin ? () => {
+        unmountCanvas();
+        openBuiltin();
+      } : null,
+    });
+    if (!started && fromBuiltin) { unmountCanvas(); openBuiltin(); }
+    return started;
   }
 
   // manual = a user tap (may show the permission dialog); idle auto-start
@@ -282,9 +334,13 @@ if (typeof window !== 'undefined') (function () {
   function close() {
     disarmDismiss();
     idleStarted = false;
+    if (window.AmbientEditor && AmbientEditor.isEditing && AmbientEditor.isEditing()) AmbientEditor.cancel();
     if (sceneOpen()) unmountScene();
     if (canvasOpen()) unmountCanvas();
     if (builtinOpen() && typeof closeWidgetLockScreen === 'function') closeWidgetLockScreen();
+    document.body.classList.remove('ambient-builtin-open');
+    const editButton = document.getElementById('ambient-builtin-edit');
+    if (editButton) editButton.hidden = true;
     armIdleTimer();
   }
 
@@ -527,7 +583,7 @@ if (typeof window !== 'undefined') (function () {
 
   armIdleTimer();
 
-  window.AmbientMode = { toggle, open, close, isOpen, onSettingsChanged, onStatus };
+  window.AmbientMode = { toggle, open, close, edit, isOpen, onSettingsChanged, onStatus };
 })();
 
 if (typeof module !== 'undefined' && module.exports) {

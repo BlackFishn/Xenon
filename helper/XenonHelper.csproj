@@ -91,8 +91,11 @@
                   URI the first comma ends the media type, so the artwork was
                   handed to the browser as text and never decoded. Version-gated
                   because an existing install would otherwise keep the exe that
-                  loses every Apple Music cover. -->
-    <Version>0.12.3</Version>
+                  loses every Apple Music cover;
+         0.12.4 = audio-control-serve keeps Core Audio callbacks and controls in
+                  one sleeping host, replacing repeated SoundVolumeView launches
+                  with event-driven mixer updates and direct volume writes. -->
+    <Version>0.12.4</Version>
     <Description>Xenon Helper — native companion process for the Xenon dashboard server</Description>
   </PropertyGroup>
 

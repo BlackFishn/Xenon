@@ -22,6 +22,7 @@ async function handleTap(e) {
   try {
     const res = await fetch(SERVER + '/toggle', { method: 'POST' });
     const data = await res.json();
+    if (!res.ok || typeof data.muted !== 'boolean') throw new Error(data.error || 'Microphone mute failed');
     applyUI(data.muted);
     setOnline();
   } catch {
@@ -64,11 +65,16 @@ async function pollStatus() {
 
 // Mic mixer shares buildAppMixerRow + the delegated handlers wired in volume.js
 // (wireAppMixer covers both the speaker-apps and mic-apps containers).
+let micMixDeferred = null;
 function renderMicApps(apps) {
   const host = document.getElementById('mic-apps');
   if (!host) return;
   wireAppMixer();
-  if (appMixBusy() && host.querySelector('.app-mix-slider')) return;
+  clearTimeout(micMixDeferred);
+  if (appMixBusy() && host.querySelector('.app-mix-slider')) {
+    micMixDeferred = setTimeout(() => renderMicApps(apps), 1550);
+    return;
+  }
   if (!apps.length) { host.hidden = true; host.innerHTML = ''; host.dataset.mixKey = ''; return; }
   // Same dirty-check as renderSpeakerApps: skip the per-tick innerHTML rebuild when
   // the app set/levels are unchanged (appMixKey is defined in volume.js).

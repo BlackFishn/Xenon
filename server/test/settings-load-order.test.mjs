@@ -306,6 +306,34 @@ test('settings.js loads clean, and what was saved is still there afterwards', ()
     ['a news feed list the user chose',
       { news: { feeds: [{ id: 'ilpost', type: 'source', name: 'Il Post' }], refreshSec: 600 } },
       (hub) => assert.deepEqual([...hub.news.feeds].map((f) => f.id), ['ilpost'])],
+    ['a native Ambient canvas scene before its normalizer has loaded',
+      {
+        ambientMode: { enabled: true, idleMinutes: 5, sceneId: 'canvas:night-board' },
+        ambientScenes: [{
+          id: 'night-board',
+          v: 1,
+          name: 'Night board',
+          bg: { type: 'color', color: '#05060a' },
+          components: [{
+            id: 'clock-main', type: 'clock',
+            x: 13, y: 7, w: 42, h: 36, rot: -8, z: 3,
+            props: { format: '24', seconds: true },
+          }],
+        }],
+      },
+      (hub) => {
+        assert.equal(hub.ambientMode.sceneId, 'canvas:night-board',
+          'the active canvas reference was reset while AmbientScene was unavailable');
+        assert.equal(hub.ambientScenes.length, 1, 'the saved scene was dropped at boot');
+        const component = hub.ambientScenes[0].components[0];
+        assert.equal(component.id, 'clock-main');
+        assert.equal(component.x, 13);
+        assert.equal(component.y, 7);
+        assert.equal(component.w, 42);
+        assert.equal(component.h, 36);
+        assert.equal(component.rot, -8);
+        assert.equal(component.z, 3);
+      }],
   ];
 
   for (const [name, stored, check] of cases) {
@@ -316,6 +344,22 @@ test('settings.js loads clean, and what was saved is still there afterwards', ()
       + 'silently replaced by defaults: ' + swallowed);
     assert.ok(hub, 'hubSettings was never assigned with ' + name);
     check(hub);
+  }
+});
+
+test('the pre-AmbientScene fallback rejects invalid outer scene values and references', () => {
+  // Entry-level validation belongs to AmbientScene.normalizeScenes once that
+  // later script is available. At this boot-time boundary the fallback is only
+  // responsible for preserving arrays and refusing values that are not arrays.
+  for (const ambientScenes of [null, 'not-an-array', 42, { id: 'scene-object' }]) {
+    const { swallowed, fatal, hub } = loadWith({
+      ambientMode: { sceneId: 'canvas:../escape' },
+      ambientScenes,
+    });
+    assert.equal(fatal, null);
+    assert.equal(swallowed, null);
+    assert.deepEqual([...hub.ambientScenes], [], 'a non-array scene collection must be rejected');
+    assert.equal(hub.ambientMode.sceneId, 'builtin', 'an invalid canvas reference must fall back safely');
   }
 });
 

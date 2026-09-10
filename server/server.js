@@ -17,6 +17,8 @@ const https = require('https');
 const os = require('os');
 const crypto = require('crypto');
 const path = require('path');
+const { decodeSoundVolumeCsv } = require('./soundvolume-csv');
+const audioControl = require('./audio-control').createAudioControl();
 // Non-Windows native collectors (GPU/disk/CPU-temp/network/windows/audio).
 // Windows keeps the PowerShell path; elsewhere those spawns fail
 // (powershell.exe ENOENT) so the system tiles fall back to these. Each module
@@ -2779,15 +2781,19 @@ function makeCsvPath() {
   return path.join(os.tmpdir(), `xenonedge-svv-${stamp}.csv`);
 }
 
-function readSoundVolumeRows() {
+async function readSoundVolumeRows() {
   if (nativeCollectors) return nativeCollectors.audioRows();
+  try {
+    const rows = await audioControl.rows();
+    if (rows) return rows;
+  } catch { /* read-only recovery through the legacy collector */ }
   return new Promise((resolve, reject) => {
     const csv = makeCsvPath();
     execFile(SVV, ['/scomma', csv, '/AvoidPrompts'], { timeout: 6000 }, err => {
       if (err) return reject(err);
       setTimeout(async () => {
         try {
-          const raw = await fs.promises.readFile(csv, 'latin1');
+          const raw = decodeSoundVolumeCsv(await fs.promises.readFile(csv));
           const rows = raw
             .split('\n')
             .map(l => l.trim())
@@ -4651,7 +4657,12 @@ async function _getAudioInfoRaw() {
   const defMic = mics.find(f => f[F.DEFAULT] === 'Capture')    || mics[0];
 
   if (defSpk) { cachedSpeakerId = defSpk[F.CLI_ID]; cachedSpeakerName = defSpk[F.NAME]; _lastSpeakerVolume = parseInt(defSpk[F.VOL_PCT]) || _lastSpeakerVolume; }
-  if (defMic) { cachedMicId = defMic[F.CLI_ID]; cachedMicLabel = defMic[F.NAME]; _maybeRebindSttDevice(); }
+  if (defMic) {
+    cachedMicId = defMic[F.CLI_ID];
+    cachedMicLabel = defMic[F.NAME];
+    isMuted = defMic[F.MUTED] === 'Yes';
+    _maybeRebindSttDevice();
+  }
 
   const toDevice = (f, isDefault) => ({
     name:      f[F.DEVICE_NAME],
@@ -4741,24 +4752,51 @@ async function getAudioInfo() {
   try { return await p; } finally { if (audioPending === p) audioPending = null; }
 }
 
-function setMicMute(mute) {
-  const action = mute ? '/Mute' : '/Unmute';
-  // Use the cached mic CLI ID (resolved from SoundVolumeView output) so the call works
-  // regardless of the Windows display language. Falls back silently if the cache is empty.
-  if (cachedMicId) {
-    svvExec([action, cachedMicId]).catch(e => console.error(e.message));
-  } else if (cachedSpeakerName) {
-    // Last-resort: try the generic 'DefaultCaptureDevice' selector understood by SVV
-    svvExec([action, 'DefaultCaptureDevice']).catch(e => console.error(e.message));
+async function setMicMute(mute) {
+  const wanted = !!mute;
+  const action = wanted ? '/Mute' : '/Unmute';
+  // The button controls whichever capture endpoint Windows considers default at
+  // click time. This selector avoids a race with Voicemod or a hot-plug changing
+  // the default after the last /audio poll, and is supported by every backend.
+  await svvExec([action, 'DefaultCaptureDevice']);
+
+  // SoundVolumeView exits successfully even when a supplied item matched
+  // nothing. Read the device back so neither the API nor the UI can claim a mute
+  // that Windows did not apply. A second read covers slower endpoint drivers;
+  // this work runs only on an explicit mute action, never in the idle poll loop.
+  let actual = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (attempt) await new Promise(resolve => setTimeout(resolve, 120));
+    const info = await _getAudioInfoRaw();
+    actual = info && info.mic && typeof info.mic.muted === 'boolean' ? info.mic.muted : null;
+    if (actual === wanted) return actual;
   }
+  if (actual === null) throw new Error('Default microphone is unavailable');
+  throw new Error(`Microphone ${action.slice(1).toLowerCase()} was not applied`);
+}
+
+async function setDefaultMic(id) {
+  const wanted = String(id || '').trim();
+  const before = await getAudioInfo();
+  const match = before && Array.isArray(before.mics) ? before.mics.find(mic => mic.id === wanted) : null;
+  if (!match) throw new Error('Unknown microphone');
+  const preserveMute = !!(before.mic && before.mic.muted);
+
+  await svvExec(['/SetDefault', wanted, 'all']);
+  await new Promise(resolve => setTimeout(resolve, 120));
+  const after = await _getAudioInfoRaw();
+  if (!after.mic || after.mic.id !== wanted) throw new Error('Default microphone change was not applied');
+  if (preserveMute && !after.mic.muted) await setMicMute(true);
+  return after.mic;
 }
 
 // Promise wrapper around a single SoundVolumeView call, and the ONE place that
 // knows SoundVolumeView is Windows-only: on Linux the same argv is translated to
 // wpctl. Every SVV call site goes through here, so there is no execFile shadow
 // and no platform check scattered through the audio code.
-function svvExec(args) {
+async function svvExec(args) {
   if (nativeCollectors) return nativeCollectors.audioCommand(args);
+  if (await audioControl.command(args)) return;
   return new Promise((resolve, reject) => execFile(SVV, args, e => (e ? reject(e) : resolve())));
 }
 
@@ -5612,11 +5650,10 @@ const deckRegistryDeps = {
   mediaAction: (cmd) => mediaAction(cmd),
   mediaSeek: (position) => mediaSeek(position),
   micMute: async (mode) => {
-    if (mode === 'mute') isMuted = true;
-    else if (mode === 'unmute') isMuted = false;
-    else isMuted = !isMuted;          // 'toggle'
-    setMicMute(isMuted);
-    return { muted: isMuted };
+    const info = await getAudioInfo();
+    const current = info && info.mic && typeof info.mic.muted === 'boolean' ? info.mic.muted : isMuted;
+    const wanted = mode === 'mute' ? true : mode === 'unmute' ? false : !current;
+    return { muted: await setMicMute(wanted) };
   },
   volume: async (mode, value) => {
     if (!cachedSpeakerId) throw new Error('Cache not ready');
@@ -6657,14 +6694,13 @@ async function executeAiTool(fnName, fnArgs, deps) {
     } else if (fnName === 'forget_fact') {
       fnResult = await aiMemory.remove(fnArgs.fact || fnArgs.text || fnArgs.query || '');
     } else if (fnName === 'toggle_mic') {
-      isMuted = !isMuted; setMicMute(isMuted);
-      fnResult = { ok: true, muted: isMuted };
+      const info = await getAudioInfo();
+      const current = info && info.mic && typeof info.mic.muted === 'boolean' ? info.mic.muted : isMuted;
+      fnResult = { ok: true, muted: await setMicMute(!current) };
     } else if (fnName === 'mute_mic') {
-      isMuted = true; setMicMute(true);
-      fnResult = { ok: true, muted: true };
+      fnResult = { ok: true, muted: await setMicMute(true) };
     } else if (fnName === 'unmute_mic') {
-      isMuted = false; setMicMute(false);
-      fnResult = { ok: true, muted: false };
+      fnResult = { ok: true, muted: await setMicMute(false) };
     } else if (fnName === 'media_playpause') {
       fnResult = await mediaAction('playpause');
     } else if (fnName === 'media_next') {
@@ -7369,9 +7405,9 @@ async function executeAiTool(fnName, fnArgs, deps) {
           if (!match || !match.id) {
             fnResult = { error: 'not_found', available: list.map(d => d.label || d.name).slice(0, 24) };
           } else {
-            await svvExec(['/SetDefault', match.id, 'all']);
+            if (kind === 'speaker') await svvExec(['/SetDefault', match.id, 'all']);
+            else await setDefaultMic(match.id);
             if (kind === 'speaker') cachedSpeakerId = match.id;
-            else { cachedMicId = match.id; if (isMuted) setMicMute(true); }
             fnResult = { ok: true, kind: kind === 'speaker' ? 'speaker' : 'microphone', device: match.label || match.name };
           }
         }
@@ -13278,9 +13314,11 @@ const handleRequest = async (req, res) => {
     } catch (e) { json({ ok: false, error: (e && e.message) || 'popup_failed' }); }
 
   } else if (reqPath === '/toggle' && (req.method === 'POST' || req.method === 'GET')) {
-    isMuted = !isMuted;
-    setMicMute(isMuted);
-    json({ muted: isMuted });
+    try {
+      const info = await getAudioInfo();
+      const current = info && info.mic && typeof info.mic.muted === 'boolean' ? info.mic.muted : isMuted;
+      json({ muted: await setMicMute(!current) });
+    } catch (e) { err500(e.message); }
 
   } else if (reqPath === '/ping' && req.method === 'GET') {
     // 1×1 transparent GIF — used by the iCUE widget to probe connectivity via
@@ -14089,11 +14127,8 @@ const handleRequest = async (req, res) => {
   } else if (reqPath === '/mic/set' && req.method === 'POST') {
     try {
       const { id } = JSON.parse(await readBody(req));
-      svvExec(['/SetDefault', id, 'all']).then(() => {
-        cachedMicId = id;
-        if (isMuted) setMicMute(true);
-        json({ ok: true });
-      }, e => err500(e.message));
+      const mic = await setDefaultMic(id);
+      json({ ok: true, mic });
     } catch (e) { err500(e.message); }
 
   } else if (reqPath === '/actions/run' && req.method === 'POST') {
@@ -20975,8 +21010,30 @@ function audioPollWanted() {
   return Date.now() - _audioWatchedAt < AUDIO_WATCH_WINDOW_MS;
 }
 let _lastAudioJson = '';
-setInterval(async () => {
+let _audioEventTimer = null;
+let _audioEventBusy = false;
+let _audioEventAgain = false;
+audioControl.onChange(() => {
   if (sseClients.size === 0) return;
+  _audioEventAgain = true;
+  if (_audioEventTimer || _audioEventBusy) return;
+  _audioEventTimer = setTimeout(async () => {
+    _audioEventTimer = null;
+    _audioEventBusy = true;
+    try {
+      do {
+        _audioEventAgain = false;
+        const a = await getAudioInfo();
+        const j = JSON.stringify(a);
+        if (j !== _lastAudioJson) { _lastAudioJson = j; broadcastSSE('audio', a); }
+      } while (_audioEventAgain && sseClients.size > 0 && audioControl.running());
+    } catch { /* legacy poll reports unavailable if both backends fail */ }
+    finally { _audioEventBusy = false; }
+  }, 20);
+});
+setInterval(async () => {
+  if (sseClients.size === 0) { audioControl.stop(); return; }
+  if (audioControl.running()) return;
   if (!audioPollWanted()) return;
   try {
     const a = await getAudioInfo();
@@ -21078,6 +21135,8 @@ function _gracefulShutdown() {
   try { phone.stop(); } catch {}
   try { wakeWord.stop(); } catch {}
   try { audioLevels.stop(); } catch {}
+  try { audioControl.stop(); } catch {}
+  if (_audioEventTimer) clearTimeout(_audioEventTimer);
   try { guardian.stop(); } catch {}
   // Settle every pending Claude Code permission request. These are HTTP requests
   // the `claude` process is actively blocked on — exiting without answering would

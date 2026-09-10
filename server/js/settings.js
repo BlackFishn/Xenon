@@ -7928,9 +7928,7 @@ function updateAmbientSetting(key, value) {
 }
 
 // ── Native canvas scene manager (Settings → Ambient) ─────────────────────────
-// Lists the canvas scenes installed via Import (authored as 'ambient-layout'
-// codes — the xenon-creator flow / the gallery) with a remove action. There is
-// no in-app editor; scenes are created by code and imported.
+// Lists canvas scenes created in Ambient mode or installed through Import.
 function renderAmbientSceneManager() {
   const list = $('settings-ambient-scene-list');
   if (!list) return;
@@ -7968,14 +7966,48 @@ function renderAmbientSceneManager() {
       b.addEventListener('click', fn);
       return b;
     };
-    // Scenes are authored as import codes (the xenon-creator flow / the gallery)
-    // and installed through Import — the manager only lists and removes them.
     acts.append(mk(t('ambient_scene_delete'), 'danger', () => deleteAmbientScene(sc.id)));
     row.append(info, acts);
     return row;
   });
   list.replaceChildren(...rows);
 }
+
+// Commit one user-owned scene from the fullscreen Ambient editor. Editor-only
+// state never enters settings; normalize at this boundary, clear import
+// provenance, upsert immutably, and make the committed scene active.
+function saveAmbientCanvasScene(scene) {
+  if (!(window.AmbientScene && AmbientScene.normalizeScene)) return null;
+  const normalized = AmbientScene.normalizeScene(scene);
+  if (!normalized) return null;
+  const owned = { ...normalized };
+  delete owned.imported;
+  delete owned.installId;
+  const scenes = Array.isArray(hubSettings.ambientScenes) ? hubSettings.ambientScenes : [];
+  const cur = normalizeAmbientMode(hubSettings.ambientMode);
+  const commit = window.AmbientEditorModel && AmbientEditorModel.commitScene
+    ? AmbientEditorModel.commitScene(scenes, owned, cur)
+    : null;
+  if (!commit || !commit.ok) {
+    if (window.XenonToast) XenonToast.show({
+      type: 'error',
+      title: commit && commit.reason === 'limit' ? 'Ambient scene limit reached' : 'Could not save Ambient layout',
+      message: commit && commit.reason === 'limit'
+        ? 'Remove an older Ambient scene before saving this layout.'
+        : 'The layout data was invalid. Your draft is still open.',
+    });
+    return null;
+  }
+  hubSettings = normalizeSettings({
+    ...hubSettings,
+    ambientScenes: commit.scenes,
+    ambientMode: commit.ambientMode,
+  });
+  saveHubSettings();
+  onAmbientScenesChanged();
+  return commit.scene;
+}
+window.saveAmbientCanvasScene = saveAmbientCanvasScene;
 
 function deleteAmbientScene(id) {
   const scenes = Array.isArray(hubSettings.ambientScenes) ? hubSettings.ambientScenes : [];

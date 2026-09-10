@@ -405,18 +405,174 @@ function formatBandwidth(bps) {
   return { value: String(Math.round(bits)), unit: 'bps' };
 }
 
-function setFill(el, value) {
+function setFill(el, value, detail) {
   const safe = Math.max(0, Math.min(100, Number(value) || 0));
   el.style.width = safe + '%';
-  renderStatSpark(el, safe);
+  renderStatSpark(el, safe, detail);
 }
 
 // ── Live sparkline for stat cards ────────────────────────────────
 // Replaces the static fill bar with a small animated history graph that
 // rises/falls with the metric. The path morph is animated via `transition: d`
-// (Chromium). History is kept per fill element id.
+// (Chromium). History is kept per fill element id. Samples are folded into
+// eight-second buckets: that gives every chart a real five-minute window while
+// preserving the old hard ceiling of 40 SVG curve points.
 const _statSparkHist = {};
-const STAT_SPARK_POINTS = 40;
+const STAT_SPARK_WINDOW_MS = 5 * 60 * 1000;
+const STAT_SPARK_BUCKET_MS = 8 * 1000;
+const STAT_SPARK_MAX_POINTS = Math.ceil(STAT_SPARK_WINDOW_MS / STAT_SPARK_BUCKET_MS) + 2;
+
+function _statSparkSample(plotValue, detail) {
+  const hasDisplay = detail && Object.prototype.hasOwnProperty.call(detail, 'value');
+  const rawDisplay = hasDisplay ? detail.value : plotValue;
+  const displayValue = rawDisplay === null || rawDisplay === undefined || rawDisplay === ''
+    ? null : Number(rawDisplay);
+  const rawAt = detail && detail.at;
+  const at = rawAt instanceof Date ? rawAt.getTime() : Number(rawAt);
+  return {
+    plotValue,
+    displayValue: Number.isFinite(displayValue) ? displayValue : null,
+    unit: detail && detail.unit ? String(detail.unit) : '',
+    at: Number.isFinite(at) ? at : Date.now(),
+  };
+}
+
+function _recordStatSparkSample(hist, sample) {
+  // One point per wall-clock bucket caps both memory and SVG path complexity.
+  // Replacing the active bucket keeps the right edge live without adding nodes.
+  sample.bucket = Math.floor(sample.at / STAT_SPARK_BUCKET_MS) * STAT_SPARK_BUCKET_MS;
+  const last = hist[hist.length - 1];
+  if (last && sample.at < last.at) return hist; // a clock correction must not reorder the line
+  if (last && sample.bucket === last.bucket) hist[hist.length - 1] = sample;
+  else hist.push(sample);
+
+  const cutoff = sample.at - STAT_SPARK_WINDOW_MS;
+  while (hist.length > 1 && hist[0].at < cutoff) hist.shift();
+  if (hist.length > STAT_SPARK_MAX_POINTS) hist.splice(0, hist.length - STAT_SPARK_MAX_POINTS);
+  return hist;
+}
+
+function _statSparkNearestIndex(count, ratio) {
+  if (!count) return -1;
+  const safeRatio = Math.max(0, Math.min(1, Number(ratio) || 0));
+  return Math.round(safeRatio * (count - 1));
+}
+
+function _statSparkValueText(sample) {
+  if (!sample || !Number.isFinite(sample.displayValue)) return '';
+  const value = sample.displayValue.toLocaleString(undefined, { maximumFractionDigits: 1 });
+  if (!sample.unit) return value;
+  return value + (sample.unit === '%' || sample.unit.startsWith('\u00b0') ? '' : ' ') + sample.unit;
+}
+
+function _statSparkTimeText(at) {
+  const date = new Date(at);
+  if (!Number.isFinite(date.getTime())) return '';
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function _hideStatSparkDetail(track) {
+  if (!track) return;
+  track.classList.remove('show-spark-detail');
+  const tooltip = track.querySelector('.stat-spark-tooltip');
+  if (tooltip) tooltip.setAttribute('aria-hidden', 'true');
+}
+
+function _showStatSparkDetail(track, index) {
+  const hist = track && track._statSparkSamples;
+  const pts = track && track._statSparkPoints;
+  const sample = hist && hist[index];
+  const point = pts && pts[index];
+  const valueText = _statSparkValueText(sample);
+  const timeText = sample && _statSparkTimeText(sample.at);
+  if (!sample || !point || !valueText || !timeText) {
+    _hideStatSparkDetail(track);
+    return;
+  }
+
+  const cursor = track.querySelector('.stat-spark-cursor');
+  const tooltip = track.querySelector('.stat-spark-tooltip');
+  if (!cursor || !tooltip) return;
+  const x = point[0];
+  const y = point[1] / 30 * 100;
+  cursor.style.left = x + '%';
+  cursor.style.setProperty('--spark-point-y', y + '%');
+  tooltip.style.left = x + '%';
+  tooltip.classList.toggle('at-left', x < 18);
+  tooltip.classList.toggle('at-right', x > 82);
+  tooltip.classList.toggle('below', y < 42);
+  tooltip.textContent = `${valueText} \u00b7 ${timeText}`;
+  tooltip.setAttribute('aria-hidden', 'false');
+  track.classList.add('show-spark-detail');
+  track._statSparkSelectedBucket = sample.bucket;
+}
+
+function _statSparkIndexFromPointer(track, event) {
+  const rect = track.getBoundingClientRect();
+  const ratio = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0;
+  return _statSparkNearestIndex((track._statSparkSamples || []).length, ratio);
+}
+
+function _wireStatSparkDetail(track) {
+  if (track._statSparkDetailWired) return;
+  track._statSparkDetailWired = true;
+  track.tabIndex = 0;
+
+  const cursor = document.createElement('span');
+  cursor.className = 'stat-spark-cursor';
+  cursor.setAttribute('aria-hidden', 'true');
+  const tooltip = document.createElement('span');
+  tooltip.className = 'stat-spark-tooltip';
+  tooltip.setAttribute('role', 'status');
+  tooltip.setAttribute('aria-live', 'polite');
+  tooltip.setAttribute('aria-hidden', 'true');
+  track.append(cursor, tooltip);
+
+  track.addEventListener('pointerdown', (event) => {
+    if (event.button != null && event.button !== 0) return;
+    track._statSparkPointerId = event.pointerId;
+    if (track.setPointerCapture) track.setPointerCapture(event.pointerId);
+    _showStatSparkDetail(track, _statSparkIndexFromPointer(track, event));
+  });
+  track.addEventListener('pointermove', (event) => {
+    if (track._statSparkPointerId !== event.pointerId) return;
+    _showStatSparkDetail(track, _statSparkIndexFromPointer(track, event));
+  });
+  const release = (event) => {
+    if (track._statSparkPointerId !== event.pointerId) return;
+    track._statSparkPointerId = null;
+    _hideStatSparkDetail(track);
+  };
+  track.addEventListener('pointerup', release);
+  track.addEventListener('pointercancel', release);
+  track.addEventListener('lostpointercapture', release);
+  track.addEventListener('blur', () => _hideStatSparkDetail(track));
+  track.addEventListener('keydown', (event) => {
+    const hist = track._statSparkSamples || [];
+    if (!hist.length) return;
+    let index = hist.findIndex(sample => sample.bucket === track._statSparkSelectedBucket);
+    if (index < 0) index = hist.length - 1;
+    if (event.key === 'ArrowLeft') index = Math.max(0, index - 1);
+    else if (event.key === 'ArrowRight') index = Math.min(hist.length - 1, index + 1);
+    else if (event.key === 'Home') index = 0;
+    else if (event.key === 'End') index = hist.length - 1;
+    else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      _showStatSparkDetail(track, index);
+      return;
+    } else if (event.key === 'Escape') {
+      _hideStatSparkDetail(track);
+      return;
+    } else return;
+    event.preventDefault();
+    _showStatSparkDetail(track, index);
+  });
+  track.addEventListener('keyup', (event) => {
+    if (['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter', ' '].includes(event.key)) {
+      _hideStatSparkDetail(track);
+    }
+  });
+}
 
 function _statSparkColor(fillEl) {
   const c = ' ' + (fillEl.className || '') + ' ';
@@ -438,9 +594,15 @@ function resetStatSparkFor(fillEl) {
   const track = fillEl.parentElement;
   const key = fillEl.id || (track && track.dataset ? track.dataset.sparkKey : null);
   if (key && _statSparkHist[key]) delete _statSparkHist[key];
+  if (track) {
+    track._statSparkSamples = [];
+    track._statSparkPoints = [];
+    track._statSparkSelectedBucket = null;
+    _hideStatSparkDetail(track);
+  }
 }
 
-function renderStatSpark(fillEl, value) {
+function renderStatSpark(fillEl, value, detail) {
   if (!fillEl) return;
   const track = fillEl.parentElement;
   if (!track || !track.classList || !track.classList.contains('stat-track')) return;
@@ -465,24 +627,29 @@ function renderStatSpark(fillEl, value) {
     const line = document.createElementNS(NS, 'path');
     line.setAttribute('class', 'stat-spark-line');
     svg.append(glow, line);
-    svg.style.color = _statSparkColor(fillEl);
+    const sparkColor = _statSparkColor(fillEl);
+    svg.style.color = sparkColor;
+    track.style.setProperty('--stat-spark-color', sparkColor);
     track.appendChild(svg);
+    _wireStatSparkDetail(track);
   }
 
   const hist = _statSparkHist[key] || (_statSparkHist[key] = []);
-  hist.push(value);
-  if (hist.length > STAT_SPARK_POINTS) hist.shift();
+  _recordStatSparkSample(hist, _statSparkSample(value, detail));
 
   const n = hist.length;
   const stepX = n > 1 ? 100 / (n - 1) : 100;
   // Auto-scale the Y axis to the recent min/max so even small fluctuations
   // fill the chart with visible peaks/valleys (a flat value stays centred).
   let min = Infinity, max = -Infinity;
-  for (const val of hist) { if (val < min) min = val; if (val > max) max = val; }
+  for (const sample of hist) {
+    if (sample.plotValue < min) min = sample.plotValue;
+    if (sample.plotValue > max) max = sample.plotValue;
+  }
   const range = (max - min) || 1;
   const pts = [];
   for (let i = 0; i < n; i++) {
-    const norm = max === min ? 0.5 : (hist[i] - min) / range;
+    const norm = max === min ? 0.5 : (hist[i].plotValue - min) / range;
     pts.push([i * stepX, 3 + (1 - norm) * 24]);
   }
   // Monotone cubic, not a polyline: the series is spiky by nature (a ping that
@@ -492,4 +659,15 @@ function renderStatSpark(fillEl, value) {
   // did, which is what `transition: d` needs to keep interpolating.
   const path = SparkPath.smoothLineD(pts, 2);
   svg.querySelectorAll('.stat-spark-line, .stat-spark-glow').forEach(p => p.setAttribute('d', path));
+  track._statSparkSamples = hist;
+  track._statSparkPoints = pts;
+
+  // Keep a selected historical sample attached to the same reading as new
+  // readings arrive and the line shifts left. Once that sample ages out, close
+  // the detail instead of silently pointing at a different value.
+  if (track.classList.contains('show-spark-detail')) {
+    const selected = hist.findIndex(sample => sample.bucket === track._statSparkSelectedBucket);
+    if (selected >= 0) _showStatSparkDetail(track, selected);
+    else _hideStatSparkDetail(track);
+  }
 }

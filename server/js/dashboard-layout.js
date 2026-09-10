@@ -40,6 +40,7 @@ let dashboardLayoutEditing = false;
 function stripSystemClone(clone) {
   const cap = clone.querySelector('#gpu-caption');
   if (cap) cap.remove();
+  stripSpeakerMixerClone(clone);
   wireSystemCloneTabs(clone);
 }
 
@@ -91,11 +92,16 @@ function stripMicClone(clone) {
   const m = clone.querySelector('#mic-apps');
   if (m) m.remove();
 }
-// An Audio clone drops the per-app mixer (singleton, wired by id).
-function stripAudioClone(clone) {
-  const m = clone.querySelector('#speaker-apps');
-  if (m) m.remove();
+// Speaker app controls are a singleton wired by id. Remove their whole card
+// from Audio and System copies so a live count header cannot surround a stale
+// snapshot after the id-bound list is stripped.
+function stripSpeakerMixerClone(clone) {
+  const list = clone.querySelector('#speaker-apps');
+  const mixer = clone.querySelector('.speaker-mixer');
+  if (mixer) mixer.remove();
+  else if (list) list.remove();
 }
+function stripAudioClone(clone) { stripSpeakerMixerClone(clone); }
 // A Tasks clone drops the add-row and controls-row (singleton inputs wired by id).
 // Copies are display + per-item-action mirrors; adding tasks happens on the primary.
 function stripTasksClone(clone) {

@@ -1,0 +1,442 @@
+/* Ambient Canvas layout editor chrome.
+   Runtime behavior lives with the canvas editor; this file only adds scoped,
+   host-owned controls and edit affordances to the fullscreen scene. */
+
+.ambient-edit-launch[hidden],
+.ambient-editor-dock[hidden] {
+  display: none !important;
+}
+
+.ambient-edit-launch {
+  position: fixed;
+  top: 17px;
+  right: 62px;
+  z-index: 268;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(var(--accent-rgb, 49, 194, 255), 0.34);
+  border-radius: 11px;
+  background: rgba(7, 13, 18, 0.76);
+  color: rgb(var(--accent-rgb, 49, 194, 255));
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.42), 0 0 18px rgba(var(--accent-rgb, 49, 194, 255), 0.08);
+  -webkit-backdrop-filter: blur(14px) saturate(135%);
+  backdrop-filter: blur(14px) saturate(135%);
+  cursor: pointer;
+  transition: transform 0.12s ease, color 0.16s ease, background 0.16s ease, border-color 0.16s ease;
+}
+
+.ambient-edit-launch:hover {
+  color: #fff;
+  border-color: rgba(var(--accent-rgb, 49, 194, 255), 0.68);
+  background: rgba(var(--accent-rgb, 49, 194, 255), 0.2);
+  transform: translateY(-1px);
+}
+
+.ambient-edit-launch:active { transform: scale(0.94); }
+.ambient-edit-launch svg { width: 17px; height: 17px; fill: currentColor; }
+
+.ambient-edit-launch:focus-visible,
+.ambient-editor-chip:focus-visible,
+.ambient-editor-add-chip:focus-visible,
+.ambient-editor-grip:focus-visible,
+.ambient-editor-remove:focus-visible,
+.ambient-editor-resize:focus-visible {
+  outline: 2px solid rgb(var(--accent-rgb, 49, 194, 255));
+  outline-offset: 2px;
+}
+
+.ambient-editor-dock {
+  display: none;
+}
+
+body.ambient-layout-editing .ambient-edit-launch {
+  display: none;
+}
+
+body.ambient-layout-editing .ambient-canvas-exit {
+  display: none;
+}
+
+body.ambient-layout-editing .ambient-editor-dock {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  z-index: 270;
+  width: min(920px, calc(100vw - 136px));
+  min-height: 44px;
+  max-height: min(44vh, 320px);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 7px;
+  overflow: hidden auto;
+  border: 1px solid rgba(var(--accent-rgb, 49, 194, 255), 0.28);
+  border-radius: 14px;
+  background: rgba(7, 12, 17, 0.92);
+  color: var(--text, #e8ecf4);
+  box-shadow: 0 14px 42px rgba(0, 0, 0, 0.54), 0 0 30px rgba(var(--accent-rgb, 49, 194, 255), 0.08);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  backdrop-filter: blur(18px) saturate(140%);
+  transform: translateX(-50%);
+  animation: ambient-editor-dock-in 0.2s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes ambient-editor-dock-in {
+  from { opacity: 0; transform: translate(-50%, -7px) scale(0.985); }
+  to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+
+.ambient-editor-dock-title {
+  min-width: 0;
+  padding: 0 8px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 10.5px;
+  font-weight: 900;
+  letter-spacing: 0.085em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: move;
+  touch-action: none;
+}
+
+.ambient-editor-dock-title::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  display: inline-block;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: rgb(var(--accent-rgb, 49, 194, 255));
+  box-shadow: 0 0 12px rgba(var(--accent-rgb, 49, 194, 255), 0.72);
+}
+
+.ambient-editor-actions {
+  min-width: 0;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.ambient-editor-chip,
+.ambient-editor-add-chip {
+  min-width: 36px;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 11px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--text, #e8ecf4);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 850;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform 0.1s ease, color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.ambient-editor-chip svg,
+.ambient-editor-add-chip svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  fill: currentColor;
+}
+
+.ambient-editor-chip:hover,
+.ambient-editor-add-chip:hover {
+  color: rgb(var(--accent-rgb, 49, 194, 255));
+  border-color: rgba(var(--accent-rgb, 49, 194, 255), 0.38);
+  background: rgba(var(--accent-rgb, 49, 194, 255), 0.13);
+}
+
+.ambient-editor-chip:active,
+.ambient-editor-add-chip:active { transform: scale(0.95); }
+
+.ambient-editor-chip.primary {
+  border-color: transparent;
+  background: rgb(var(--accent-rgb, 49, 194, 255));
+  color: var(--on-accent, #061015);
+  box-shadow: 0 5px 16px rgba(var(--accent-rgb, 49, 194, 255), 0.24);
+}
+
+.ambient-editor-chip.primary:hover {
+  color: var(--on-accent, #061015);
+  filter: brightness(1.08);
+}
+
+.ambient-editor-chip.danger { color: var(--color-danger, #ff6b6b); }
+.ambient-editor-chip.danger:hover {
+  border-color: rgba(var(--danger-rgb, 255, 107, 107), 0.35);
+  background: rgba(var(--danger-rgb, 255, 107, 107), 0.13);
+}
+
+.ambient-editor-chip[disabled],
+.ambient-editor-add-chip[disabled] {
+  opacity: 0.34;
+  pointer-events: none;
+  filter: grayscale(0.25);
+}
+
+.ambient-editor-add-row {
+  width: 100%;
+  display: none;
+  grid-template-columns: repeat(4, minmax(112px, 1fr));
+  gap: 6px;
+  padding: 8px 2px 1px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ambient-editor-add-row.is-open {
+  display: grid;
+  animation: ambient-editor-row-in 0.16s ease both;
+}
+
+@keyframes ambient-editor-row-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.ambient-editor-add-chip {
+  width: 100%;
+  justify-content: flex-start;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+/* The scene backdrop owns the grid so it stays behind every widget and never
+   changes hit testing. Twenty-four columns retain horizontal precision on the
+   Xeneon Edge; twelve rows keep vertical snapping legible on its short canvas. */
+.ambient-canvas-stage.is-editing > .ac-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, rgba(var(--accent-rgb, 49, 194, 255), 0.105) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(var(--accent-rgb, 49, 194, 255), 0.105) 1px, transparent 1px);
+  background-size: calc(100% / 24) calc(100% / 12);
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb, 49, 194, 255), 0.14);
+}
+
+.ambient-canvas-stage.is-editing .ac-item.is-editable {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.ambient-canvas-stage.is-editing .ac-item.is-editable:active { cursor: grabbing; }
+
+.ambient-canvas-stage.is-editing .ac-item.is-editable > .grid-stack-item-content {
+  outline: 1px dashed rgba(var(--accent-rgb, 49, 194, 255), 0.52);
+  outline-offset: -3px;
+  border-radius: 12px;
+  transition: outline-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.ambient-canvas-stage.is-editing .ac-item.is-editable:hover > .grid-stack-item-content {
+  outline-color: rgba(var(--accent-rgb, 49, 194, 255), 0.78);
+  background: rgba(var(--accent-rgb, 49, 194, 255), 0.025);
+}
+
+.ambient-canvas-stage.is-editing .ac-item.is-selected > .grid-stack-item-content {
+  outline: 2px solid rgb(var(--accent-rgb, 49, 194, 255));
+  outline-offset: -3px;
+  background: rgba(var(--accent-rgb, 49, 194, 255), 0.045);
+  box-shadow: inset 0 0 0 9999px rgba(var(--accent-rgb, 49, 194, 255), 0.018),
+    0 0 0 1px rgba(0, 0, 0, 0.52),
+    0 0 24px rgba(var(--accent-rgb, 49, 194, 255), 0.16);
+}
+
+.ambient-canvas-stage.is-editing .ac-item.is-selected {
+  z-index: 50 !important;
+}
+
+/* Live controls are display-only while arranging; host editor chrome remains
+   above the shield and owns all pointer gestures. */
+.ambient-canvas-stage.is-editing .ac-item.is-editable .ac-body,
+.ambient-canvas-stage.is-editing .ac-item.is-editable .ac-sdk-frame {
+  pointer-events: none;
+}
+
+.ambient-editor-grip,
+.ambient-editor-remove,
+.ambient-editor-resize,
+.ambient-editor-size {
+  position: absolute;
+  z-index: 24;
+  color: var(--text, #e8ecf4);
+  background: rgba(5, 10, 14, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.44);
+  -webkit-backdrop-filter: blur(10px) saturate(130%);
+  backdrop-filter: blur(10px) saturate(130%);
+}
+
+.ambient-canvas-stage:not(.is-editing) .ambient-editor-grip,
+.ambient-canvas-stage:not(.is-editing) .ambient-editor-remove,
+.ambient-canvas-stage:not(.is-editing) .ambient-editor-resize,
+.ambient-canvas-stage:not(.is-editing) .ambient-editor-size {
+  display: none !important;
+}
+
+.ambient-canvas-stage.is-editing .ac-item.is-editable:not(.is-selected) .ambient-editor-grip,
+.ambient-canvas-stage.is-editing .ac-item.is-editable:not(.is-selected) .ambient-editor-remove,
+.ambient-canvas-stage.is-editing .ac-item.is-editable:not(.is-selected) .ambient-editor-resize,
+.ambient-canvas-stage.is-editing .ac-item.is-editable:not(.is-selected) .ambient-editor-size {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ambient-editor-grip {
+  top: 6px;
+  left: 50%;
+  min-width: 36px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 9px;
+  border-color: rgba(var(--accent-rgb, 49, 194, 255), 0.42);
+  border-radius: 999px;
+  color: rgb(var(--accent-rgb, 49, 194, 255));
+  cursor: grab;
+  touch-action: none;
+  transform: translateX(-50%);
+}
+
+.ambient-editor-grip:active { cursor: grabbing; }
+.ambient-editor-grip svg { width: 14px; height: 14px; fill: currentColor; flex: 0 0 auto; }
+
+.ambient-editor-item-label {
+  max-width: min(190px, 60vw);
+  overflow: hidden;
+  color: var(--text, #e8ecf4);
+  font-size: 10.5px;
+  font-weight: 850;
+  letter-spacing: 0.035em;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ambient-editor-remove,
+.ambient-editor-resize {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 10px;
+  font: inherit;
+  cursor: pointer;
+  transition: transform 0.1s ease, color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.ambient-editor-remove {
+  top: 6px;
+  right: 6px;
+  color: var(--color-danger, #ff6b6b);
+  border-color: rgba(var(--danger-rgb, 255, 107, 107), 0.38);
+  background: rgba(var(--danger-rgb, 255, 107, 107), 0.14);
+}
+
+.ambient-editor-remove:hover { background: rgba(var(--danger-rgb, 255, 107, 107), 0.27); }
+
+.ambient-editor-resize {
+  right: 6px;
+  bottom: 6px;
+  color: rgb(var(--accent-rgb, 49, 194, 255));
+  border-color: rgba(var(--accent-rgb, 49, 194, 255), 0.46);
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.ambient-editor-resize:hover { background: rgba(var(--accent-rgb, 49, 194, 255), 0.2); }
+.ambient-editor-remove:active,
+.ambient-editor-resize:active { transform: scale(0.92); }
+.ambient-editor-remove svg,
+.ambient-editor-resize svg { width: 16px; height: 16px; fill: currentColor; }
+
+.ambient-editor-size {
+  left: 6px;
+  bottom: 6px;
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 10px;
+  font-family: inherit;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.ambient-canvas-stage.is-editing .ac-item.is-compact-editor .ambient-editor-resize {
+  display: none;
+}
+
+@media (max-width: 720px), (orientation: portrait) {
+  body.ambient-layout-editing .ambient-editor-dock {
+    top: auto;
+    right: 10px;
+    bottom: 10px;
+    left: 10px;
+    width: auto;
+    max-height: min(44vh, 360px);
+    transform: none;
+    border-radius: 16px;
+  }
+
+  .ambient-editor-dock-title { flex: 1 1 auto; }
+  .ambient-editor-actions { flex: 1 1 100%; justify-content: flex-start; overflow-x: auto; padding-bottom: 1px; }
+  .ambient-editor-add-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  @keyframes ambient-editor-dock-in {
+    from { opacity: 0; transform: translateY(7px) scale(0.985); }
+    to { opacity: 1; transform: none; }
+  }
+}
+
+@media (pointer: coarse) {
+  .ambient-edit-launch,
+  .ambient-editor-chip,
+  .ambient-editor-add-chip,
+  .ambient-editor-remove,
+  .ambient-editor-resize {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .ambient-editor-grip { min-width: 44px; height: 44px; padding-inline: 12px; }
+  .ambient-editor-size { min-width: 44px; min-height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambient-edit-launch,
+  .ambient-editor-dock,
+  .ambient-editor-chip,
+  .ambient-editor-add-chip,
+  .ambient-editor-add-row,
+  .ambient-editor-remove,
+  .ambient-editor-resize,
+  .ambient-canvas-stage.is-editing .ac-item.is-editable > .grid-stack-item-content {
+    animation: none !important;
+    transition: none !important;
+  }
+}

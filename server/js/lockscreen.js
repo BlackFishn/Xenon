@@ -48,6 +48,9 @@ function closeWidgetLockScreen() {
   const overlay = $('lockscreen-overlay');
   if (overlay) overlay.hidden = true;
   document.body.classList.remove('lock-screen-active');
+  document.body.classList.remove('ambient-builtin-open');
+  const ambientEdit = $('ambient-builtin-edit');
+  if (ambientEdit) ambientEdit.hidden = true;
   if (lockScreenTimer) cancelAnimationFrame(lockScreenTimer);
   lockScreenTimer = null;
 }

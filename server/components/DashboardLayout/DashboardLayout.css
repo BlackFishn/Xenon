@@ -194,8 +194,8 @@
 
 .dashboard-widget[data-dashboard-size="normal"].side-panel .volume-wrap,
 .dashboard-widget[data-dashboard-size="tall"].side-panel .volume-wrap {
-  gap: 6px;
-  padding: 7px 9px;
+  gap: 8px;
+  padding: 0;
 }
 
 .dashboard-widget[data-dashboard-size="normal"].side-panel .vol-header,
@@ -205,18 +205,18 @@
 
 .dashboard-widget[data-dashboard-size="normal"].side-panel .vol-title,
 .dashboard-widget[data-dashboard-size="tall"].side-panel .vol-title {
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .dashboard-widget[data-dashboard-size="normal"].side-panel .vol-value,
 .dashboard-widget[data-dashboard-size="tall"].side-panel .vol-value {
-  font-size: 12.5px;
+  font-size: 18px;
 }
 
 .dashboard-widget[data-dashboard-size="normal"].side-panel .vol-mute-btn,
 .dashboard-widget[data-dashboard-size="tall"].side-panel .vol-mute-btn {
-  width: 28px;
-  height: 28px;
+  width: 46px;
+  height: 46px;
 }
 
 .dashboard-widget[data-dashboard-size="normal"].side-panel .vol-slider,
@@ -231,13 +231,13 @@
 
 .dashboard-widget[data-dashboard-size="normal"].side-panel .device-icon,
 .dashboard-widget[data-dashboard-size="tall"].side-panel .device-icon {
-  width: 22px;
-  height: 22px;
+  width: 30px;
+  height: 30px;
 }
 
 .dashboard-widget[data-dashboard-size="normal"].side-panel .device-name,
 .dashboard-widget[data-dashboard-size="tall"].side-panel .device-name {
-  font-size: 11px;
+  font-size: 12px;
 }
 
 [data-system-card] {
@@ -273,8 +273,8 @@
 }
 
 .volume-wrap[data-system-card-size="compact"] {
-  gap: 6px;
-  padding: 8px 9px;
+  gap: 7px;
+  padding: 0;
 }
 
 .volume-wrap[data-system-card-size="compact"] .vol-header {
@@ -282,16 +282,16 @@
 }
 
 .volume-wrap[data-system-card-size="compact"] .vol-title {
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 
 .volume-wrap[data-system-card-size="compact"] .vol-value {
-  font-size: 12px;
+  font-size: 16px;
 }
 
 .volume-wrap[data-system-card-size="compact"] .vol-mute-btn {
-  width: 28px;
-  height: 28px;
+  width: 42px;
+  height: 42px;
 }
 
 .volume-wrap[data-system-card-size="compact"] .vol-slider {

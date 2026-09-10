@@ -7,7 +7,11 @@ function cycleDisk() {
   if (!systemDisks || systemDisks.length < 2) return;
   diskIndex = (diskIndex + 1) % systemDisks.length;
   if (window.DashboardGrid && window.DashboardGrid.forEachInstance) {
-    window.DashboardGrid.forEachInstance('system', root => renderDiskInto(root, systemDisks[diskIndex]));
+    window.DashboardGrid.forEachInstance('system', root => {
+      const fill = sf(root, 'disk-fill');
+      resetStatSparkFor(fill);
+      renderDiskInto(root, systemDisks[diskIndex]);
+    });
   }
 }
 
@@ -22,7 +26,7 @@ function cycleGpuMetric() {
   if (lastSystemData) applySystem(lastSystemData);
 }
 
-function renderDiskInto(root, disk) {
+function renderDiskInto(root, disk, sampleAt = Date.now()) {
   const label = sf(root, 'disk-label'), value = sf(root, 'disk-value'),
         small = sf(root, 'disk-small'), sub = sf(root, 'disk-sub'),
         detail = sf(root, 'disk-detail'), fill = sf(root, 'disk-fill');
@@ -32,7 +36,7 @@ function renderDiskInto(root, disk) {
     if (small) small.textContent = '';
     if (sub) sub.textContent = '--';
     if (detail) detail.textContent = '--';
-    if (fill) setFill(fill, 0);
+    if (fill) setFill(fill, 0, { value: null, unit: '%', at: sampleAt });
     return;
   }
   if (label) label.textContent = `${t('disk_label')} ${disk.drive}`;
@@ -47,7 +51,7 @@ function renderDiskInto(root, disk) {
       .map(p => String(p || '').trim()).filter(Boolean);
     detail.textContent = parts.length ? parts.join(' - ') : t('disk_detail_unavailable');
   }
-  if (fill) setFill(fill, disk.percent);
+  if (fill) setFill(fill, disk.percent, { value: disk.percent, unit: '%', at: sampleAt });
 }
 
 // Back-compat: render the "current" disk into every instance.
@@ -77,13 +81,18 @@ function shortHwName(raw) {
 
 function applySystemInto(root, data) {
   const set = (name, text) => { const el = sf(root, name); if (el) el.textContent = text; };
-  const fillEl = (name, pct) => { const el = sf(root, name); if (el) setFill(el, pct); };
+  const parsedAt = Date.parse(data.now || '');
+  const sampleAt = Number.isFinite(parsedAt) ? parsedAt : Date.now();
+  const fillEl = (name, pct, value, unit) => {
+    const el = sf(root, name);
+    if (el) setFill(el, pct, { value, unit, at: sampleAt });
+  };
 
   set('host-name', data.hostname || 'Local cockpit');
   set('uptime-text', `${t('uptime_prefix')} ${formatUptime(data.uptime)}`);
 
   const cpu = Number.isFinite(data.cpu) ? data.cpu : 0;
-  set('cpu-value', cpu + '%'); fillEl('cpu-fill', cpu); set('cpu-name', data.cpuName || '--');
+  set('cpu-value', cpu + '%'); fillEl('cpu-fill', cpu, cpu, '%'); set('cpu-name', data.cpuName || '--');
   set('cpu-name-head', shortHwName(data.cpuName));
   const cpuTemp = Number(data.cpuTemp);
   set('cpu-head-temp', (Number.isFinite(cpuTemp) && cpuTemp > 0) ? Math.round(cpuTemp) + '°C' : '');
@@ -91,7 +100,7 @@ function applySystemInto(root, data) {
   const ram = data.memory ? data.memory.percent : 0;
   set('ram-value', ram + '%');
   set('ram-small', data.memory ? formatBytes(data.memory.total) : '');
-  fillEl('ram-fill', ram);
+  fillEl('ram-fill', ram, ram, '%');
   set('ram-sub', data.memory ? formatBytes(data.memory.used) + ' / ' + formatBytes(data.memory.total) : '--');
   const ramDetail = data.ramDetail || {};
   set('ram-detail', ramDetail.detail || data.ramName || t('ram_detail_unavailable'));
@@ -108,13 +117,13 @@ function applySystemInto(root, data) {
 
   if (showVram) {
     const vramPct = Math.round((vramUsed / vramTotal) * 100);
-    set('gpu-value', vramPct + '%'); fillEl('gpu-fill', vramPct);
+    set('gpu-value', vramPct + '%'); fillEl('gpu-fill', vramPct, vramPct, '%');
     set('gpu-vram-detail', `${formatBytes(vramUsed)} / ${formatBytes(vramTotal)}`);
   } else if (data.gpu === null || data.gpu === undefined) {
-    set('gpu-value', '--%'); fillEl('gpu-fill', 0);
+    set('gpu-value', '--%'); fillEl('gpu-fill', 0, null, '%');
     set('gpu-vram-detail', '');
   } else {
-    set('gpu-value', data.gpu + '%'); fillEl('gpu-fill', data.gpu);
+    set('gpu-value', data.gpu + '%'); fillEl('gpu-fill', data.gpu, data.gpu, '%');
     set('gpu-vram-detail', '');
   }
   const metricBtn = sf(root, 'gpu-metric-btn');
@@ -128,12 +137,12 @@ function applySystemInto(root, data) {
   if (data.disks && data.disks.length > 0) {
     systemDisks = data.disks;
     if (diskIndex >= systemDisks.length) diskIndex = 0;
-    renderDiskInto(root, systemDisks[diskIndex]);
+    renderDiskInto(root, systemDisks[diskIndex], sampleAt);
     const cycleBtn = sf(root, 'disk-cycle-btn');
     if (cycleBtn) cycleBtn.style.display = systemDisks.length > 1 ? '' : 'none';
   } else {
     systemDisks = null;
-    renderDiskInto(root, null);
+    renderDiskInto(root, null, sampleAt);
     const cycleBtn = sf(root, 'disk-cycle-btn');
     if (cycleBtn) cycleBtn.style.display = 'none';
   }

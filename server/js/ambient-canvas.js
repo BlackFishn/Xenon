@@ -360,6 +360,7 @@
     const def = R[comp.type];
     if (!def) return null;
     const wrap = el('div', 'ac-item ac-item-' + comp.type);
+    wrap.dataset.ambientId = comp.id;
     wrap.style.left = comp.x + '%';
     wrap.style.top = comp.y + '%';
     wrap.style.width = comp.w + '%';
@@ -445,6 +446,26 @@
     startLoop();
   }
 
+  // Editor seam: the layout editor owns only interaction state while this
+  // renderer remains the authority for live component DOM. Replacing a draft
+  // always runs through AmbientScene first, then rebuilds in place so weather,
+  // media, tile styling and SDK safety gates cannot drift from normal playback.
+  function replaceScene(scene) {
+    if (!isOpen() || !current) return false;
+    const norm = (window.AmbientScene && AmbientScene.normalizeScene)
+      ? AmbientScene.normalizeScene(scene)
+      : scene;
+    if (!norm || !Array.isArray(norm.components)) return false;
+    current.scene = norm;
+    refresh();
+    return true;
+  }
+
+  function sceneSnapshot() {
+    if (!current || !current.scene) return null;
+    try { return JSON.parse(JSON.stringify(current.scene)); } catch { return null; }
+  }
+
   // Preview reuse (js/preset-share.js import thumbnail): build a single item / the
   // bg layer with the EXACT same DOM + style pipeline as a live scene, and run one
   // update pass for a dynamic component — so the import preview can never drift from
@@ -456,7 +477,7 @@
   }
 
   window.AmbientCanvas = {
-    mount, unmount, isOpen, refresh,
+    mount, unmount, isOpen, refresh, replaceScene, sceneSnapshot,
     preview: { buildItem, buildBg, update: previewUpdate },
   };
 })();

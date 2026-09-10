@@ -1,6 +1,8 @@
 .device-section { display: contents; }
 
 .device-row {
+  appearance: none;
+  width: 100%;
   position: relative;
   min-height: 0;
   min-width: 0;
@@ -11,6 +13,9 @@
   border-radius: var(--radius);
   background: var(--surface-alt);
   border: 1px solid var(--line);
+  color: inherit;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
   transition: background 0.16s ease, border-color 0.16s ease, transform 0.12s ease;
 }
@@ -44,6 +49,57 @@
 }
 
 .device-chevron { color: var(--dim-text); font-size: 18px; font-weight: 800; flex-shrink: 0; }
+
+/* Device dock under the redesigned Volume workspace. Scope to the movable
+   audio block so the same treatment follows it into a standalone widget. */
+.audio-block .device-section { gap: 10px; }
+
+.audio-block .device-row {
+  min-height: 58px;
+  gap: 10px;
+  padding: 10px 12px;
+  background:
+    linear-gradient(120deg, rgba(var(--accent-rgb), 0.025), transparent 45%),
+    var(--surface-alt);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.025);
+}
+
+.audio-block .device-row:hover {
+  transform: translateY(-1px);
+  border-color: rgba(var(--accent-rgb), 0.24);
+  background-color: rgba(var(--accent-rgb), 0.035);
+}
+
+.audio-block .device-row:active { transform: scale(0.985); }
+
+.audio-block .device-icon {
+  width: 36px;
+  height: 36px;
+  border-color: rgba(var(--accent-rgb), 0.18);
+  color: var(--muted-text);
+}
+
+.audio-block .device-icon svg { width: 16px; height: 16px; }
+.audio-block .device-label { font-size: 9.5px; letter-spacing: 0.45px; text-transform: uppercase; }
+.audio-block .device-name { font-size: 12px; }
+
+.audio-block .device-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 580px) {
+  .audio-block .device-section { grid-template-columns: 1fr; }
+}
+
+@media (max-height: 620px) and (min-width: 700px) {
+  .audio-block .device-row { min-height: 52px; padding: 7px 9px; }
+  .audio-block .device-icon { width: 30px; height: 30px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .audio-block .device-row { transition: none; }
+}
 
 .picker-overlay {
   position: fixed;

@@ -13,6 +13,7 @@ namespace XenonHelper;
 //   screen-serve           — GDI capture host for the Second-screen tile (ScreenHost)
 //   notifications-serve [ms] — Windows notification mirror (NotificationHost)
 //   audio-serve [ms]       — per-app audio peak meters (AudioHost)
+//   audio-control-serve    — event-driven device/session mixer (AudioControlHost)
 //   disk-scan <root> [...] — streaming full-tree size scan (DiskScanHost)
 //   crawl <dir> [...]      — file index for the local search (DiskScanHost)
 //   shell-delete           — recycle-bin delete / empty bin (ShellDelete)
@@ -63,6 +64,8 @@ internal static class Program
                 var audioMs = 80;
                 if (args.Length > 1 && int.TryParse(args[1], out var audioParsed) && audioParsed >= 40) audioMs = audioParsed;
                 return AudioHost.Run(audioMs);
+            case "audio-control-serve":
+                return AudioControlHost.Run();
             case "disk-scan":
                 return DiskScanHost.RunDiskScan(args);
             case "crawl":
@@ -76,7 +79,7 @@ internal static class Program
             case "phone-serve":
                 return await PhoneHost.RunAsync();
             default:
-                Console.Error.WriteLine("usage: xenon-helper media-serve | foreground-serve [intervalMs] | windows list|focus|close [hwnd] | screen-serve | notifications-serve [intervalMs] | audio-serve [intervalMs] | disk-scan <root> [detailRoot ...] | crawl <dir> [dir ...] | shell-delete | hotkey-serve <combo> | index-serve <root> [root ...] | phone-serve");
+                Console.Error.WriteLine("usage: xenon-helper media-serve | foreground-serve [intervalMs] | windows list|focus|close [hwnd] | screen-serve | notifications-serve [intervalMs] | audio-serve [intervalMs] | audio-control-serve | disk-scan <root> [detailRoot ...] | crawl <dir> [dir ...] | shell-delete | hotkey-serve <combo> | index-serve <root> [root ...] | phone-serve");
                 return 2;
         }
     }

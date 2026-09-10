@@ -58,6 +58,7 @@ function setSystemTab(name, options = {}) {
   if (audio) audio.hidden = (name !== 'volume');
   if (micPane) micPane.hidden = (name !== 'mic');
   if (histPane) histPane.hidden = (name !== 'history');
+  if ((name === 'volume' || name === 'mic') && typeof fetchAudio === 'function') fetchAudio();
   if (cap)  cap.style.display = (name === 'main') ? '' : 'none';
 
   // Fetch + render the history charts when its tab opens (one-shot, like the
@@ -84,16 +85,17 @@ function applyNetworkInto(root, data) {
   const ping = data.ping;
   const lat  = data.latency;
   const fps  = data.fps;
+  const sampleAt = Date.now();
 
   const pingVal = sf(root, 'net-ping-value');
   const pingFill = sf(root, 'net-ping-fill');
   if (pingVal) pingVal.textContent = (ping == null ? '--' : ping);
-  if (pingFill) setFill(pingFill, ping == null ? 0 : 100 - (ping / 2));
+  if (pingFill) setFill(pingFill, ping == null ? 0 : 100 - (ping / 2), { value: ping, unit: 'ms', at: sampleAt });
 
   const fpsVal = sf(root, 'net-fps-value');
   const fpsFill = sf(root, 'net-fps-fill');
   if (fpsVal) fpsVal.textContent = (fps == null ? '--' : Math.round(fps));
-  if (fpsFill) setFill(fpsFill, fps == null ? 0 : fps / 2.4);
+  if (fpsFill) setFill(fpsFill, fps == null ? 0 : fps / 2.4, { value: fps == null ? null : Math.round(fps), unit: 'fps', at: sampleAt });
   // Hide the "N/D" badge + the "requires PresentMon" hint once a real FPS reading
   // is available; show them again when no game/FPS source is detected.
   const fpsTag = sf(root, 'net-fps-tag');
@@ -105,7 +107,7 @@ function applyNetworkInto(root, data) {
   const latVal = sf(root, 'net-latency-value');
   const latFill = sf(root, 'net-latency-fill');
   if (latVal) latVal.textContent = (lat == null ? '--' : lat);
-  if (latFill) setFill(latFill, lat == null ? 0 : 100 - (lat * 5));
+  if (latFill) setFill(latFill, lat == null ? 0 : 100 - (lat * 5), { value: lat, unit: 'ms', at: sampleAt });
 
   const dn = formatBandwidth(data.downloadBps);
   const up = formatBandwidth(data.uploadBps);

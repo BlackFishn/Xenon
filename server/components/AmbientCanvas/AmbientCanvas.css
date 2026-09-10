@@ -190,9 +190,8 @@ body.ambient-canvas-open { overflow: hidden; }
 .ambient-canvas-overlay.dismiss-armed .ac-sdk-frame { pointer-events: none; }
 
 /* ── Settings → Ambient: the saved-scene manager ──────────────────────────────
-   Lists the canvas scenes the user installed via Import (js/settings.js
-   renderAmbientSceneManager) with a remove action. Scenes are authored as import
-   codes (the xenon-creator flow / the gallery), not composed in-app. */
+   Lists canvas scenes created in Ambient edit mode or installed via Import
+   (js/settings.js renderAmbientSceneManager), with a remove action. */
 .settings-ambient-scenes { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
 .settings-ambient-scenes-head {
   display: flex;

@@ -1,5 +1,32 @@
 'use strict';
 
+// One request in flight per control, with only the newest unsent value kept.
+// First input is immediate; a drag costs at most 25 writes/sec and always
+// finishes at the last value, even if an earlier request was slow.
+const audioWrites = new Map();
+function queueAudioWrite(key, level, send) {
+  let state = audioWrites.get(key);
+  if (!state) {
+    state = { value: level, send, busy: false, timer: null, sentAt: 0 };
+    audioWrites.set(key, state);
+  }
+  state.value = level;
+  const pump = async () => {
+    state.timer = null;
+    if (state.busy) return;
+    if (state.value === null) { audioWrites.delete(key); return; }
+    const value = state.value;
+    state.value = null; state.busy = true; state.sentAt = Date.now();
+    try { await state.send(value); }
+    catch { setOffline(); }
+    finally {
+      state.busy = false;
+      state.timer = setTimeout(pump, Math.max(0, 40 - (Date.now() - state.sentAt)));
+    }
+  };
+  if (!state.busy && !state.timer) pump();
+}
+
 function refreshSlider(v) {
   const safe = Math.max(0, Math.min(100, Number(v) || 0));
   const bg = `linear-gradient(to right, var(--slider-fill) 0%, var(--slider-fill) ${safe}%, var(--slider-track) ${safe}%, var(--slider-track) 100%)`;
@@ -23,8 +50,7 @@ function onSliderInput(v) {
   const level = parseInt(v, 10);
   document.querySelectorAll('[data-volf="vol-val"]').forEach(el => { el.textContent = level + '%'; });
   refreshSlider(level);
-  clearTimeout(volDebounce);
-  volDebounce = setTimeout(() => sendVolume(level), 120);
+  queueAudioWrite('master', level, sendVolume);
 }
 
 async function sendVolume(level) {
@@ -86,6 +112,9 @@ function applyAudio(data) {
     const mic = data.mic.name || data.mic.label;
     document.querySelectorAll('[data-volf="mic-name"]').forEach(el => { el.textContent = mic; });
     if (micContext) micContext.textContent = mic;
+    // /audio is the hardware truth. Keep the large mute control aligned even
+    // when another app or Windows changes the endpoint outside Xenon.
+    if (typeof applyUI === 'function') applyUI(!!data.mic.muted);
     const mv = Number(data.mic.volume);
     if (Number.isFinite(mv)) {
       document.querySelectorAll('[data-micf="mic-vol-slider"]').forEach(el => {
@@ -184,14 +213,14 @@ function handleAppMixInput(slider) {
   if (volEl) volEl.textContent = level + '%';
   slider.style.background = appMixSliderBg(level);
   row.classList.remove('app-mix-muted');
-  clearTimeout(appVolDebounce[id]);
-  appVolDebounce[id] = setTimeout(() => {
-    fetch(SERVER + '/audio/app/volume', {
+  queueAudioWrite('app:' + id, level, async latest => {
+    const res = await fetch(SERVER + '/audio/app/volume', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, level, proc }),
-    }).catch(() => {});
-  }, 120);
+      body: JSON.stringify({ id, level: latest, proc }),
+    });
+    if (!res.ok) throw new Error('App volume failed');
+  });
 }
 
 async function handleAppMixMute(btn) {
@@ -223,11 +252,22 @@ function appMixKey(apps) {
   return apps.map(a => `${a.id}:${a.volume}:${a.muted ? 1 : 0}:${a.icon ? 1 : 0}`).join('|');
 }
 
+let speakerMixDeferred = null;
 function renderSpeakerApps(apps) {
   const host = document.getElementById('speaker-apps');
   if (!host) return;
+  const mixer = host.closest('.speaker-mixer');
+  const count = mixer && mixer.querySelector('[data-volf="speaker-app-count"]');
+  if (count) count.textContent = String(apps.length);
+  if (mixer) mixer.hidden = apps.length === 0;
   wireAppMixer();
-  if (appMixBusy() && host.querySelector('.app-mix-slider')) return;
+  clearTimeout(speakerMixDeferred);
+  if (appMixBusy() && host.querySelector('.app-mix-slider')) {
+    // Event-driven updates may have no next tick. Replay the latest snapshot
+    // once the gesture ends rather than losing the final OS confirmation.
+    speakerMixDeferred = setTimeout(() => renderSpeakerApps(apps), 1550);
+    return;
+  }
   if (!apps.length) { host.hidden = true; host.innerHTML = ''; host.dataset.mixKey = ''; return; }
   // Skip the full innerHTML rebuild (which recreates every row + icon <img>) when
   // nothing that affects the rows changed since the last render — this runs on
@@ -243,8 +283,7 @@ function onMicVolumeInput(v) {
   const level = parseInt(v, 10);
   document.querySelectorAll('[data-micf="mic-vol-val"]').forEach(el => { el.textContent = level + '%'; });
   refreshMicSlider(level);
-  clearTimeout(micVolDebounce);
-  micVolDebounce = setTimeout(() => sendMicVolume(level), 150);
+  queueAudioWrite('microphone', level, sendMicVolume);
 }
 
 async function sendMicVolume(level) {

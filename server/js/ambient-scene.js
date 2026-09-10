@@ -7,8 +7,8 @@
 // user composes in the in-app editor OR authors by hand as JSON. It is the third
 // kind of Ambient scene, alongside 'builtin' (lockscreen.js) and an installed
 // SDK package (surface:'ambient'). See js/ambient-canvas.js for the renderer.
-// Scenes are authored as importable 'ambient-layout' codes (the xenon-creator
-// flow / the gallery) and installed through Import — there is no in-app editor.
+// Scenes can be composed in Ambient edit mode or imported as 'ambient-layout'
+// codes from the xenon-creator/gallery flow.
 //
 // This module is the ONE source of truth for the scene shape, exactly like
 // js/custom-bg.js is for backgrounds: the client (settings.js) deep-normalizes
@@ -23,6 +23,7 @@
 
 (function (root) {
   const SCENE_SCHEMA = 1;
+  const MAX_SCENES = 64;
   const MAX_COMPONENTS = 48;
   const MAX_NAME = 60;
   const MAX_TEXT = 400;
@@ -242,7 +243,7 @@
     const out = [];
     const ids = new Set();
     for (const raw of list) {
-      if (out.length >= 64) break;
+      if (out.length >= MAX_SCENES) break;
       const scene = normalizeScene(raw);
       if (!scene || ids.has(scene.id)) continue;
       ids.add(scene.id);
@@ -258,7 +259,7 @@
   function canvasIdOf(s) { return isCanvasRef(s) ? s.slice('canvas:'.length) : ''; }
 
   const api = {
-    SCENE_SCHEMA, MAX_COMPONENTS, MAX_NAME, MAX_TEXT,
+    SCENE_SCHEMA, MAX_SCENES, MAX_COMPONENTS, MAX_NAME, MAX_TEXT,
     SCENE_ID_RE, COMPONENT_TYPES,
     normalizeScene, normalizeScenes, normalizeComponent, normalizeBg, normalizeProps,
     isCanvasRef, canvasRef, canvasIdOf, genId,

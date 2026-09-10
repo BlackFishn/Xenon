@@ -38,7 +38,7 @@ renderTabSwitcher();
 // ── Per-panel data needs ──────────────────────────────────────
 const need = {
   status: ['full', 'mic', 'media'].includes(activePanel),
-  audio:  ['full', 'audio', 'mic'].includes(activePanel),
+  audio:  ['full', 'audio', 'mic', 'system'].includes(activePanel),
   media:  ['full', 'media'].includes(activePanel),
   system: ['full', 'system'].includes(activePanel),
   events: ['full', 'agenda'].includes(activePanel),
