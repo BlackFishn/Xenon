@@ -1,24 +1,8 @@
 'use strict';
-// YouTube dashboard widget — watching. A real player (the official YouTube embed)
-// plus a library to browse: liked videos, your playlists, the latest uploads from
-// the channels you follow, and search. Tap a video and it plays in the tile; the
-// rest of the list becomes the queue, so it advances on its own. Two sections
-// (player / library) tagged as dashboard cards, so each hides and reorders like a
-// System card.
-//
-// Broadcasting lives in its own widget now (js/youtubelive-widget.js): going live,
-// the viewer count and the live chat have nothing to do with watching, and half a
-// tile of streaming controls on a viewer's dashboard was the complaint that split
-// them. Both read the same connected account, so nothing extra is set up.
-//
-// PLAYBACK: the embed is driven with its own postMessage protocol rather than by
-// loading YouTube's iframe_api script into the dashboard's origin — the commands
-// are identical and no third-party code runs on our page. Messages are accepted
-// only from the embed origin and only from our own frame.
-//
-// QUOTA: the connection check is free (it reads our own token store); the library
-// lists load on demand and the server caches them, and search runs only when the
-// user presses it.
+// Direct-link YouTube player with a local queue, favorites and recent videos.
+// Connected-account lists keep using the existing server API. Playback controls
+// belong to the embed; fill-widget changes CSS without moving the iframe.
+// Player messages retain the existing source/origin checks and error handling.
 (function () {
   const ICONS = {
     logo: '<svg viewBox="0 0 90 64" fill="none"><rect width="90" height="64" rx="18" fill="#ff0000"/><path d="M36 46V18l24 14z" fill="#0b0d10"/></svg>',
@@ -38,7 +22,7 @@
     subs: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="3"/><path d="M6 3h12"/><path d="M11 11l4 2.5-4 2.5z" fill="currentColor" stroke="none"/></svg>',
     list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h11M4 12h11M4 17h7"/><path d="M18 11v8"/><path d="M18 11l3-1v8" fill="none"/></svg>',
   };
-  const t = (k, fb) => (typeof window.t === 'function' ? window.t(k) : (fb != null ? fb : k));
+  const t = (k, fb) => { const value = typeof window.t === 'function' ? window.t(k) : k; return value === k && fb != null ? fb : value; };
   const el = makeEl; // shared DOM factory from utils.js
   // Only tiles actually placed on a dashboard page count. A hidden / never-added
   // widget sits in the #widget-pool (outside any .pager-page), so it must NOT
@@ -54,15 +38,19 @@
   // ── Library state ─────────────────────────────────────────────────────────
   // One shared model for every tile: what tab is open, what it holds, and which
   // playlist (if any) the user has drilled into.
-  const TABS = ['liked', 'playlists', 'subs', 'search'];
+  const LOCAL_TABS = ['queue', 'favorites', 'recent'];
+  const TABS = ['queue', 'favorites', 'recent', 'liked', 'playlists', 'subs', 'search'];
   const TAB_LABEL = {
+    queue: () => t('youtube_queue', 'Queue'),
+    favorites: () => t('youtube_favorites', 'Favorites'),
+    recent: () => t('youtube_recent', 'Recent'),
     liked: () => t('youtube_liked', 'Liked'),
     playlists: () => t('youtube_playlists', 'Playlists'),
     subs: () => t('youtube_tab_subs', 'Subscriptions'),
     search: () => t('youtube_tab_search', 'Search'),
   };
   const lib = {
-    tab: 'liked',
+    tab: 'queue',
     data: { liked: null, playlists: null, subs: null, search: null },   // null = never loaded
     loading: '',
     error: '',
@@ -74,7 +62,7 @@
   // ── Player state ──────────────────────────────────────────────────────────
   const EMBED_ORIGIN = 'https://www.youtube-nocookie.com';
   const PLAYER_ID = 'xenon-yt';
-  const VIDEO_ID_RE = /^[A-Za-z0-9_-]{6,24}$/;
+  const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
   const player = {
     frame: null, stage: null,
     queue: [], qi: -1,
@@ -86,9 +74,105 @@
     errCode: 0,         // the code YouTube gave, because they do not all mean the same thing
     heard: false,       // the current frame has answered us at least once
     hello: null,
-    idle: false, idleT: null,   // full-screen controls faded out (see armIdle)
   };
   const cur = () => (player.qi >= 0 ? player.queue[player.qi] : null) || null;
+  const SAVED_KEY = 'xenon.youtube.library.v1';
+  const MAX_QUEUE = 100;
+
+  function normalizeVideo(raw) {
+    if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || !VIDEO_ID_RE.test(raw.id)) return null;
+    const text = (value, max) => typeof value === 'string' ? value.slice(0, max) : '';
+    return {
+      id: raw.id, title: text(raw.title, 300), channel: text(raw.channel, 150),
+      seconds: Number.isFinite(raw.seconds) ? Math.max(0, Math.min(raw.seconds, 604800)) : 0,
+      start: Number.isFinite(raw.start) ? Math.max(0, Math.min(Math.floor(raw.start), 604800)) : 0,
+      image: 'https://i.ytimg.com/vi/' + raw.id + '/hqdefault.jpg',
+      ...(raw.embeddable === false ? { embeddable: false } : {}),
+    };
+  }
+
+  function parseVideoLink(raw) {
+    if (typeof raw !== 'string' || raw.length > 2048) return null;
+    const value = raw.trim();
+    if (VIDEO_ID_RE.test(value)) return normalizeVideo({ id: value });
+    try {
+      const url = new URL(/^https?:\/\//i.test(value) ? value : 'https://' + value);
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.port) return null;
+      let id = '';
+      if (url.hostname === 'youtu.be') id = /^\/([^/]+)\/?$/.exec(url.pathname)?.[1] || '';
+      else if (['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com'].includes(url.hostname)) {
+        id = url.pathname === '/watch' ? url.searchParams.get('v') : /^\/(?:shorts|live|embed)\/([^/]+)\/?$/.exec(url.pathname)?.[1];
+      }
+      if (!VIDEO_ID_RE.test(id || '')) return null;
+      const time = url.searchParams.get('t') || url.searchParams.get('start') || new URLSearchParams(url.hash.slice(1)).get('t') || '';
+      const parts = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/.exec(time);
+      const start = /^\d+$/.test(time) ? Number(time) : parts ? Number(parts[1] || 0) * 3600 + Number(parts[2] || 0) * 60 + Number(parts[3] || 0) : 0;
+      return normalizeVideo({ id, start });
+    } catch { return null; }
+  }
+
+  function readSaved() {
+    let raw;
+    try { raw = JSON.parse(localStorage.getItem(SAVED_KEY) || '{}'); } catch { raw = {}; }
+    const list = (name, limit) => {
+      const seen = new Set();
+      return (Array.isArray(raw?.[name]) ? raw[name] : []).slice(0, 100).map(normalizeVideo)
+        .filter(v => v && !seen.has(v.id) && seen.add(v.id)).slice(0, limit);
+    };
+    return { favorites: list('favorites', 100), recent: list('recent', 30), autoplay: raw?.autoplay !== false, loop: raw?.loop === true };
+  }
+  const saved = readSaved();
+  function saveLibrary() {
+    try { localStorage.setItem(SAVED_KEY, JSON.stringify(saved)); }
+    catch { eachMount(mount => feedback(mount, t('youtube_storage_failed', 'Storage is unavailable. Changes last until this page closes.'), true)); }
+  }
+  function rememberVideo(video) {
+    const clean = normalizeVideo(video);
+    if (!clean) return;
+    saved.recent = [clean, ...saved.recent.filter(v => v.id !== clean.id)].slice(0, 30);
+    const index = saved.favorites.findIndex(v => v.id === clean.id);
+    if (index >= 0) saved.favorites[index] = clean;
+    saveLibrary();
+  }
+  function toggleFavorite() {
+    const video = normalizeVideo(cur());
+    if (!video) return;
+    const index = saved.favorites.findIndex(v => v.id === video.id);
+    if (index >= 0) saved.favorites.splice(index, 1);
+    else {
+      if (saved.favorites.length >= 100) { eachMount(mount => feedback(mount, t('youtube_list_full', 'This list is full. Remove a video first.'), true)); return; }
+      saved.favorites.unshift(video);
+    }
+    saveLibrary(); paintPlayer(); paintLibrary();
+  }
+  function feedback(mount, message, error = false) {
+    const note = mount.querySelector('.yt-feedback');
+    if (!note) return;
+    note.textContent = message; note.hidden = !message;
+    note.classList.toggle('is-error', error);
+  }
+  function submitLink(mount, enqueue) {
+    const input = mount.querySelector('.yt-link-input');
+    const video = parseVideoLink(input.value);
+    if (!video) {
+      input.setAttribute('aria-invalid', 'true');
+      feedback(mount, t('youtube_bad_link', 'Paste a valid YouTube video link.'), true); input.focus(); return;
+    }
+    const stage = mount.querySelector('.yt-player-stage');
+    if (enqueue) {
+      if (player.queue.length >= MAX_QUEUE) { feedback(mount, t('youtube_list_full', 'This list is full. Remove a video first.'), true); return; }
+      player.queue.push(video);
+      lib.tab = 'queue'; lib.openPl = null; paintLibrary();
+      feedback(mount, t('youtube_queued', 'Added to queue.'));
+    } else {
+      if (stage?.closest('.yt-card--player')?.dataset.systemCardHidden === 'true') { feedback(mount, t('youtube_player_hidden'), true); return; }
+      // A deliberate paste is a retry; never silently ignore a remembered refusal.
+      refused.delete(video.id);
+      playList([video], 0, stage);
+      feedback(mount, '');
+    }
+    input.value = ''; input.removeAttribute('aria-invalid');
+  }
 
   // Videos this dashboard has SEEN refuse to play, by id. YouTube's own answer to
   // "may this be embedded" is the owner's flag, and the player can still refuse a
@@ -102,25 +186,10 @@
   const refused = new Set();
   const isRefused = (v) => !!v && (v.embeddable === false || refused.has(v.id));
 
-  // Both cards are taken off screen when no account is connected, which used to
-  // leave the tile as a logo on an empty background for as long as that stayed
-  // true — unavailable is meant to be hidden OR explained, and that was neither.
-  // The notice below is what remains, and it is the way in: tapping it lands on
-  // the page where the account is connected.
   function openStreamingSettings() {
     const overlay = document.getElementById('settings-overlay');
     if (overlay && overlay.hidden && typeof window.toggleSettings === 'function') window.toggleSettings();
     if (typeof window.settingsSetCategory === 'function') window.settingsSetCategory('streaming');
-  }
-
-  function showActionErr(btn, reason) {
-    const card = btn.closest('.yt-card');
-    if (!card) return;
-    let n = card.querySelector('.yt-err');
-    if (!n) { n = el('div', 'yt-err'); card.appendChild(n); }
-    n.textContent = t(reason === 'not_connected' ? 'youtube_err_not_connected' : 'youtube_err_generic', 'Action failed');
-    n.style.display = '';
-    clearTimeout(n._tm); n._tm = setTimeout(() => { n.style.display = 'none'; }, 6000);
   }
 
   function fmtTime(sec) {
@@ -215,9 +284,19 @@
       paintPlayer();
     } else if (d.event === 'infoDelivery' || d.event === 'initialDelivery') {
       if (info && typeof info === 'object') {
-        if (typeof info.currentTime === 'number') player.time = info.currentTime;
-        if (typeof info.duration === 'number' && info.duration > 0) player.duration = info.duration;
+        if (Number.isFinite(info.currentTime)) player.time = Math.max(0, info.currentTime);
+        if (Number.isFinite(info.duration) && info.duration > 0) player.duration = info.duration;
         if (typeof info.muted === 'boolean') player.muted = info.muted;
+        const video = cur();
+        const data = info.videoData;
+        if (video && data && data.video_id === video.id) {
+          const title = typeof data.title === 'string' ? data.title.slice(0, 300) : video.title;
+          const channel = typeof data.author === 'string' ? data.author.slice(0, 150) : video.channel;
+          if (title !== video.title || channel !== video.channel || (player.duration > 0 && !video.seconds)) {
+            video.title = title; video.channel = channel; video.seconds = Math.min(player.duration, 604800);
+            rememberVideo(video); paintLibrary(); paintPlayer();
+          }
+        }
         if (typeof info.playerState === 'number') applyState(info.playerState);
         else paintPlayer();
       }
@@ -238,14 +317,15 @@
     if (next === prev) return;
     player.state = next;
     if (next === 1) { player.blocked = false; player.errCode = 0; }
-    // Pausing brings the controls back and keeps them; starting to play begins
-    // the countdown to hiding them again.
-    if (player.expanded) wakeControls();
     if (next === 0) {
       // A video that has just been swapped in can still report the previous one's
       // ended state for a moment; without this the queue would skip a video.
       const now = Date.now();
-      if (now - lastAdvance > 1500) { lastAdvance = now; playNext(); return; }
+      if (now - lastAdvance > 1500) {
+        lastAdvance = now;
+        if (saved.loop && cur()) { cmd('seekTo', [0, true]); cmd('playVideo'); player.state = 3; }
+        else if (saved.autoplay) { playNext(); return; }
+      }
     }
     paintPlayer();
   }
@@ -265,17 +345,17 @@
     const f = document.createElement('iframe');
     f.className = 'yt-frame';
     f.title = 'YouTube';
-    // No fullscreen permission, deliberately. The embed has a fullscreen button of
-    // its own, and on the kiosk the browser's fullscreen is the thing that breaks:
-    // leaving it tears the video down and hands back a window the Windows taskbar
-    // then sits on top of, until Xenon is restarted. Withholding the permission is
-    // what makes YouTube hide that button, so there is one way to enlarge the
-    // player and it is ours — an overlay that never touches the app's window.
-    f.allow = 'autoplay; encrypted-media; picture-in-picture';
+    // Native kiosks already own window fullscreen; browser fullscreen previously
+    // broke their window state. Browsers get YouTube's fullscreen; native gets
+    // the separate viewport expansion button without touching the kiosk window.
+    const native = window.__XENON_NATIVE__ === true || window.isTauri === true;
+    f.allow = 'autoplay; encrypted-media; picture-in-picture' + (native ? '' : '; fullscreen');
+    if (!native) f.allowFullscreen = true;
     f.referrerPolicy = 'strict-origin-when-cross-origin';
     const p = new URLSearchParams({
       enablejsapi: '1', autoplay: '1', rel: '0', playsinline: '1',
-      modestbranding: '1', origin: location.origin, widget_referrer: location.origin,
+      controls: '1', fs: native ? '0' : '1', start: String(cur()?.start || 0),
+      origin: location.origin, widget_referrer: location.origin,
     });
     f.src = EMBED_ORIGIN + '/embed/' + encodeURIComponent(videoId) + '?' + p.toString();
     f.addEventListener('load', sayHello);
@@ -294,7 +374,7 @@
     // Videos known to refuse are kept out of the QUEUE too, so "play this playlist"
     // plays the rest instead of stopping dead on the first one. They are visibly
     // marked in the list, so this skips nothing the user was not already told about.
-    const q = src.filter(v => v && VIDEO_ID_RE.test(String(v.id || '')) && !isRefused(v));
+    const q = src.map(normalizeVideo).filter(v => v && !isRefused(v)).slice(0, MAX_QUEUE);
     if (!q.length) return;
     const found = q.findIndex(v => v.id === wanted);
     const i = found >= 0 ? found : 0;
@@ -305,96 +385,64 @@
     // Same frame, still alive, only a different video: swap it in place — that
     // keeps the playback permission the first tap earned, so the queue advances
     // without the browser blocking a fresh autoplay.
-    if (player.frame && player.stage === target && player.frame.contentWindow) cmd('loadVideoById', [q[i].id]);
+    if (player.frame && player.stage === target && player.frame.contentWindow) cmd('loadVideoById', [q[i].id, q[i].start || 0]);
     else mountFrame(target, q[i].id);
-    paintPlayer();
+    rememberVideo(q[i]); paintPlayer(); paintLibrary();
   }
   function playAt(i) {
     if (i < 0 || i >= player.queue.length) return;
     player.qi = i; player.time = 0; player.duration = player.queue[i].seconds || 0;
     player.blocked = false; player.errCode = 0; player.state = 3;
-    if (player.frame && player.stage) cmd('loadVideoById', [player.queue[i].id]);
-    paintPlayer();
+    if (player.frame && player.stage) cmd('loadVideoById', [player.queue[i].id, player.queue[i].start || 0]);
+    else { const stage = tiles()[0]?.querySelector('.yt-player-stage'); if (stage) mountFrame(stage, player.queue[i].id); }
+    rememberVideo(player.queue[i]); paintPlayer(); paintLibrary();
   }
   function playNext() { if (player.qi + 1 < player.queue.length) playAt(player.qi + 1); else { player.state = 0; paintPlayer(); } }
-  function playPrev() {
-    // Under 5 seconds in, "previous" means the previous video; after that it
-    // means "start this one again", which is what every player does.
-    if (player.time > 5) { cmd('seekTo', [0, true]); player.time = 0; paintPlayer(); return; }
-    if (player.qi > 0) playAt(player.qi - 1);
-  }
-  function togglePlay() {
-    if (player.state === 1) { cmd('pauseVideo'); player.state = 2; }
-    else if (cur()) { cmd('playVideo'); player.state = 3; }
-    paintPlayer();
-  }
   function stopPlayer() {
     destroyFrame();
     player.queue = []; player.qi = -1; player.state = -1;
     player.time = 0; player.duration = 0; player.blocked = false; player.errCode = 0;
-    setExpanded(false);
-    paintPlayer();
+    restorePlayer();
+    paintPlayer(); paintLibrary();
   }
-  // Expanding only re-positions the card (see the CSS): re-parenting the iframe
-  // into an overlay would reload it, which restarts the video the user is
-  // watching. No dashboard tile creates a containing block, so `position: fixed`
-  // lands on the viewport as intended.
+  // Resize in place: moving the iframe would reload it and lose playback.
   function setExpanded(on) {
-    player.expanded = !!on;
-    document.body.classList.toggle('yt-expanded', player.expanded);
-    tiles().forEach(tile => tile.classList.toggle('yt-tile-expanded', player.expanded));
-    // Deliberately NOT the Fullscreen API. Asking the browser for real fullscreen
-    // did solve the paint order in one line, and on the kiosk it cost far more
-    // than it bought: leaving fullscreen tore the video down and handed the
-    // window back in a state where the Windows taskbar sat on top of the
-    // dashboard until Xenon was restarted. The overlay below covers the whole
-    // viewport by itself — the stacking contexts that were painting over it are
-    // lifted in CSS for as long as this class is on the body — and it never takes
-    // the app's own window out of the state the kiosk put it in.
-    if (player.expanded) wakeControls(); else clearIdle();
+    player.expanded = !!on && !!player.frame;
+    eachMount(mount => {
+      const owns = mount.contains(player.frame);
+      const wrap = mount.querySelector('.yt-wrap');
+      wrap.classList.toggle('is-filled', player.expanded && owns);
+      mount.querySelector('.yt-restore').hidden = !(player.expanded && owns);
+      mount.querySelector('.yt-fill').setAttribute('aria-pressed', String(player.expanded && owns));
+      if (owns) (player.expanded ? mount.querySelector('.yt-restore') : mount.querySelector('.yt-fill')).focus({ preventScroll: true });
+    });
     paintPlayer();
   }
-  // Escape leaves the big player without hunting for the button on a touchscreen.
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && player.expanded) setExpanded(false); });
-
-  // ── Idle controls at full screen ──────────────────────────────────────────
-  // The controls fade out while a video plays and come back on the first touch.
-  // The catcher is what makes "the first touch" possible at all: the embed is a
-  // cross-origin iframe, so a finger moving over the picture raises no event this
-  // document can see. It sits over the video ONLY while the controls are hidden —
-  // the tap that wakes them is swallowed, and once they are up it stops taking
-  // input, so YouTube's own captions and quality menus stay reachable.
-  const IDLE_MS = 3500;
-  function clearIdle() {
-    clearTimeout(player.idleT); player.idleT = null;
-    player.idle = false;
-    document.querySelectorAll('.yt-card--player').forEach(c => c.classList.remove('is-idle'));
+  function setViewport(on) {
+    const native = window.__XENON_NATIVE__ === true || window.isTauri === true;
+    if (!native) return;
+    const wrap = player.stage?.closest('.yt-wrap');
+    if (!wrap) return;
+    setExpanded(on);
+    wrap.classList.toggle('is-viewport', !!on);
+    document.body.classList.toggle('yt-expanded', !!on);
+    wrap.closest('[data-dashboard-widget]')?.classList.toggle('yt-tile-expanded', !!on);
   }
-  function armIdle() {
-    clearTimeout(player.idleT);
-    // Only while something is actually playing: hiding the controls over a paused
-    // or stopped picture leaves a screen with nothing on it and no hint that a
-    // touch brings anything back.
-    if (!player.expanded || player.state !== 1) return;
-    player.idleT = setTimeout(() => {
-      player.idleT = null; player.idle = true;
-      document.querySelectorAll('.yt-card--player.is-expanded').forEach(c => c.classList.add('is-idle'));
-    }, IDLE_MS);
+  function restorePlayer() {
+    setViewport(false);
+    document.querySelectorAll('.yt-wrap.is-viewport').forEach(wrap => wrap.classList.remove('is-viewport'));
+    document.querySelectorAll('.yt-tile-expanded').forEach(tile => tile.classList.remove('yt-tile-expanded'));
+    document.body.classList.remove('yt-expanded');
+    setExpanded(false);
   }
-  function wakeControls() {
-    if (player.idle) {
-      player.idle = false;
-      document.querySelectorAll('.yt-card--player').forEach(c => c.classList.remove('is-idle'));
-    }
-    armIdle();
-  }
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && player.expanded && !document.fullscreenElement) restorePlayer(); });
 
   // ── Library loading ───────────────────────────────────────────────────────
   const LIB_PATH = { liked: '/stream/youtube/liked', playlists: '/stream/youtube/playlists', subs: '/stream/youtube/subscriptions' };
 
   async function loadTab(tab, force) {
-    if (!connected) return;
-    if (tab === 'search') return;                       // explicit action only
+    if (!connected || LOCAL_TABS.includes(tab)) return;
+    if (tab === 'search' || !LIB_PATH[tab]) return;                       // explicit action only
     if (!force && lib.data[tab] !== null) return;
     if (lib.loading === tab) return;
     lib.loading = tab; lib.error = ''; paintLibrary();
@@ -416,6 +464,7 @@
   }
 
   async function runSearch(q) {
+    if (!connected) return;
     const query = String(q || '').trim();
     if (query.length < 2) return;
     lib.query = query; lib.loading = 'search'; lib.error = ''; paintLibrary();
@@ -427,30 +476,47 @@
   }
 
   // ── DOM ───────────────────────────────────────────────────────────────────
+  function textEl(tag, cls, key) {
+    const node = el(tag, cls, t(key)); node.dataset.ytText = key; return node;
+  }
+  function actionButton(cls, icon, key, action) {
+    const button = iconBtn(cls, icon, t(key), action);
+    button.dataset.ytLabel = key;
+    button.append(textEl('span', 'yt-button-label', key));
+    return button;
+  }
   function ensure(mount) {
-    // Bumped when the built markup changes: a hidden widget's DOM is kept in the
-    // pool rather than destroyed, so a stale build would never gain the notice.
-    if (mount.dataset.ytBuilt === '3' && mount.firstChild) return;
-    mount.dataset.ytBuilt = '3';
+    if (mount.dataset.ytBuilt === '4' && mount.firstChild) return;
+    mount.dataset.ytBuilt = '4';
     const wrap = el('div', 'yt-wrap');
-
-    const wm = el('div', 'yt-watermark'); wm.innerHTML = ICONS.logo;   // static, trusted SVG
-    wrap.appendChild(wm);
-
     const head = el('div', 'yt-head');
     const brand = el('div', 'yt-brand');
-    brand.append(el('span', 'yt-logo', 'YouTube'));
-    head.append(brand);
-    wrap.appendChild(head);
+    const logo = el('span', 'yt-brand-icon'); logo.innerHTML = ICONS.logo;
+    brand.append(logo, el('span', 'yt-logo', 'YouTube'));
+    head.append(brand, actionButton('yt-fill', ICONS.expand, 'youtube_fill', () => setExpanded(true)));
+    if (window.__XENON_NATIVE__ === true || window.isTauri === true) head.append(actionButton('yt-viewport', ICONS.expand, 'youtube_expand', () => setViewport(true)));
+    const restore = actionButton('yt-restore', ICONS.shrink, 'youtube_restore', restorePlayer); restore.hidden = true;
+    wrap.append(head, restore);
 
-    const notice = el('button', 'yt-setup'); notice.type = 'button'; notice.hidden = true;
-    notice.append(el('span', 'yt-setup-txt', t('youtube_w_setup', 'Connect your YouTube account in Settings → Streaming')));
-    notice.addEventListener('click', openStreamingSettings);
-    wrap.appendChild(notice);
-
-    const cards = el('div', 'yt-cards');
-    cards.append(buildPlayerCard(), buildLibraryCard());
-    wrap.appendChild(cards);
+    const form = el('form', 'yt-link-form');
+    const field = el('div', 'yt-link-field');
+    const input = el('input', 'yt-link-input'); input.type = 'text'; input.inputMode = 'url'; input.maxLength = 2048;
+    input.autocomplete = 'off'; input.spellcheck = false;
+    input.setAttribute('aria-label', t('youtube_link'));
+    input.placeholder = t('youtube_link');
+    input.addEventListener('input', () => { input.removeAttribute('aria-invalid'); feedback(mount, ''); });
+    const paste = actionButton('yt-paste', ICONS.list, 'youtube_paste', async () => {
+      try { input.value = await navigator.clipboard.readText(); input.removeAttribute('aria-invalid'); feedback(mount, ''); }
+      catch { feedback(mount, t('youtube_paste_hint', 'Paste your link here with Ctrl+V or the keyboard paste command.')); }
+      input.focus();
+    });
+    field.append(input, paste);
+    const play = actionButton('yt-play-link', ICONS.play, 'youtube_play_now', () => {}); play.type = 'submit';
+    form.addEventListener('submit', e => { e.preventDefault(); submitLink(mount, false); });
+    form.append(field, play, actionButton('yt-enqueue', ICONS.list, 'youtube_add_queue', () => submitLink(mount, true)));
+    const note = el('div', 'yt-feedback'); note.hidden = true; note.setAttribute('role', 'status');
+    const cards = el('div', 'yt-cards'); cards.append(buildPlayerCard(), buildLibraryCard());
+    wrap.append(form, note, cards);
     mount.replaceChildren(wrap);
   }
 
@@ -465,66 +531,19 @@
   function buildPlayerCard() {
     const card = el('section', 'yt-card yt-card--player');
     card.dataset.systemCard = 'player'; card.dataset.systemCardGroup = 'youtube';
-    // The stage sits inside a wrapper that owns the available height: sizing the
-    // video off the tile's WIDTH alone made a 16:9 box tall enough to push the
-    // library (the only way to pick a video) past the bottom of the tile.
-    const stageWrap = el('div', 'yt-stage-wrap');
-    const fit = el('div', 'yt-stage-fit');
     const stage = el('div', 'yt-player-stage');
-    stage.appendChild(el('div', 'yt-player-empty', t('youtube_player_empty', 'Pick a video from the list below')));
-    // Over the picture, not under the controls. YouTube paints its own error inside
-    // the frame and it fills the whole stage, so an explanation anywhere else is an
-    // explanation nobody reads — the reported symptom was exactly that. Added after
-    // the iframe's slot so it paints above it (mountFrame inserts the frame first).
-    stage.appendChild(buildBlockedOverlay());
-    fit.appendChild(stage); stageWrap.appendChild(fit);
-    card.appendChild(stageWrap);
-    // Above the video, below the controls. Only takes input while the controls
-    // are hidden — see armIdle for why it has to exist at all.
-    const catcher = el('div', 'yt-idlecatch');
-    catcher.addEventListener('pointerdown', (e) => { e.stopPropagation(); wakeControls(); });
-    card.appendChild(catcher);
-    // Anywhere else on the card — the control strip, the bands beside a 16:9
-    // picture — a move or a tap is enough.
-    ['pointermove', 'pointerdown'].forEach(ev => card.addEventListener(ev, () => { if (player.expanded) wakeControls(); }));
-
+    const empty = el('div', 'yt-player-empty');
+    const mark = el('span', 'yt-empty-icon'); mark.innerHTML = ICONS.play;
+    empty.append(mark, textEl('strong', 'yt-empty-title', 'youtube_empty_title'), textEl('span', 'yt-empty-hint', 'youtube_empty_hint'));
+    stage.append(empty, buildBlockedOverlay());
     const now = el('div', 'yt-now');
-    now.append(el('div', 'yt-now-title'), el('div', 'yt-now-sub'));
-    card.appendChild(now);
-
-    const seekRow = el('div', 'yt-seek-row');
-    const seek = document.createElement('input');
-    seek.type = 'range'; seek.className = 'yt-seek'; seek.min = '0'; seek.max = '1000'; seek.value = '0';
-    seek.setAttribute('aria-label', t('youtube_seek', 'Seek'));
-    seek.addEventListener('input', () => { seek.dataset.ytDrag = '1'; });
-    seek.addEventListener('change', () => {
-      seek.dataset.ytDrag = '';
-      if (player.duration > 0) {
-        const to = (Number(seek.value) / 1000) * player.duration;
-        cmd('seekTo', [to, true]); player.time = to; paintPlayer();
-      }
-    });
-    seekRow.append(el('span', 'yt-time yt-time-cur', '0:00'), seek, el('span', 'yt-time yt-time-dur', '0:00'));
-    card.appendChild(seekRow);
-
-    const bar = el('div', 'yt-transport');
-    bar.append(
-      iconBtn('yt-prev', ICONS.prev, t('youtube_prev', 'Previous'), playPrev),
-      iconBtn('yt-playpause', ICONS.play, t('youtube_playpause', 'Play / pause'), togglePlay),
-      iconBtn('yt-next', ICONS.next, t('youtube_next', 'Next'), playNext),
-      el('span', 'yt-transport-gap'),
-      iconBtn('yt-mute', ICONS.sound, t('youtube_mute', 'Mute'), () => {
-        player.muted = !player.muted; cmd(player.muted ? 'mute' : 'unMute'); paintPlayer();
-      }),
-      iconBtn('yt-expand', ICONS.expand, t('youtube_expand', 'Full screen'), () => setExpanded(!player.expanded)),
-      iconBtn('yt-out', ICONS.external, t('youtube_open_browser', 'Open in the browser'), async (e) => {
-        const v = cur(); const url = v && watchUrl(v.id);
-        if (url) await openOut(url); else showActionErr(e.currentTarget, 'generic');
-      }),
-      iconBtn('yt-stop', ICONS.close, t('youtube_close_player', 'Close the player'), stopPlayer),
-    );
-    card.appendChild(bar);
-
+    const meta = el('div', 'yt-now-meta'); meta.append(el('div', 'yt-now-title'), el('div', 'yt-now-sub'));
+    const favorite = iconBtn('yt-favorite', ICONS.heart, t('youtube_save'), toggleFavorite);
+    const out = iconBtn('yt-out', ICONS.external, t('youtube_open_browser'), async () => { const url = cur() && watchUrl(cur().id); if (url) await openOut(url); });
+    out.dataset.ytLabel = 'youtube_open_browser';
+    const close = iconBtn('yt-stop', ICONS.close, t('youtube_close_player'), stopPlayer); close.dataset.ytLabel = 'youtube_close_player';
+    now.append(meta, favorite, out, close);
+    card.append(stage, now);
     return card;
   }
 
@@ -554,9 +573,15 @@
     card.dataset.systemCard = 'library'; card.dataset.systemCardGroup = 'youtube';
 
     const tabsRow = el('div', 'yt-tabs');
-    const TAB_ICON = { liked: ICONS.heart, playlists: ICONS.list, subs: ICONS.subs, search: ICONS.search };
+    tabsRow.setAttribute('role', 'tablist');
+    tabsRow.setAttribute('aria-label', t('youtube_library'));
+    const TAB_ICON = { queue: ICONS.list, favorites: ICONS.heart, recent: ICONS.play, liked: ICONS.heart, playlists: ICONS.list, subs: ICONS.subs, search: ICONS.search };
+    const account = el('select', 'yt-account-tabs'); account.setAttribute('aria-label', t('youtube_account_library'));
+    const option = el('option', '', t('youtube_account_library')); option.value = ''; account.append(option);
+    account.addEventListener('change', () => { if (!account.value) return; lib.tab = account.value; lib.openPl = null; lib.error = ''; paintLibrary(); loadTab(lib.tab); });
     TABS.forEach(id => {
-      const b = el('button', 'yt-tab'); b.type = 'button'; b.dataset.ytTab = id;
+      if (!LOCAL_TABS.includes(id)) { const option = el('option', '', TAB_LABEL[id]()); option.value = id; account.append(option); return; }
+      const b = el('button', 'yt-tab'); b.type = 'button'; b.dataset.ytTab = id; b.setAttribute('role', 'tab');
       const ico = el('span', 'yt-tab-ico'); ico.innerHTML = TAB_ICON[id];   // static, trusted SVG
       b.append(ico, el('span', 'yt-tab-lbl', TAB_LABEL[id]()));
       b.addEventListener('click', () => {
@@ -566,7 +591,16 @@
       });
       tabsRow.appendChild(b);
     });
-    card.appendChild(tabsRow);
+    tabsRow.addEventListener('keydown', e => {
+      const tabs = Array.from(tabsRow.querySelectorAll('.yt-tab')); let index = tabs.indexOf(document.activeElement);
+      if (e.key === 'ArrowRight') index = (index + 1) % tabs.length;
+      else if (e.key === 'ArrowLeft') index = (index + tabs.length - 1) % tabs.length;
+      else return;
+      e.preventDefault(); tabs[index].click(); tabs[index].focus();
+    });
+    card.append(tabsRow, account);
+    const notice = actionButton('yt-setup', ICONS.subs, 'youtube_account_connect', openStreamingSettings);
+    card.append(notice);
 
     const searchRow = el('div', 'yt-search-row');
     const inp = document.createElement('input');
@@ -586,7 +620,15 @@
     crumb.addEventListener('click', () => { lib.openPl = null; lib.plItems = null; paintLibrary(); });
     card.appendChild(crumb);
 
-    card.appendChild(el('div', 'yt-list'));
+    const summary = el('div', 'yt-list-summary');
+    summary.append(textEl('span', '', 'youtube_up_next'), el('span', 'yt-count'));
+    const list = el('div', 'yt-list'); list.setAttribute('role', 'tabpanel'); list.setAttribute('aria-label', t('youtube_queue'));
+    const options = el('div', 'yt-library-options');
+    const autoplay = actionButton('yt-autoplay', ICONS.next, 'youtube_autoplay', () => { saved.autoplay = !saved.autoplay; saveLibrary(); paintLibrary(); });
+    autoplay.setAttribute('role', 'switch');
+    const repeat = actionButton('yt-repeat', ICONS.list, 'youtube_repeat', () => { saved.loop = !saved.loop; saveLibrary(); paintLibrary(); });
+    options.append(autoplay, repeat, actionButton('yt-next', ICONS.next, 'youtube_next', playNext));
+    card.append(summary, list, options);
     return card;
   }
 
@@ -594,10 +636,10 @@
   function videoRow(v, index, list) {
     const b = el('button', 'yt-row'); b.type = 'button';
     const art = el('span', 'yt-row-art');
-    if (v.image) art.style.backgroundImage = 'url("' + encodeURI(v.image) + '")';
-    if (v.seconds != null) art.appendChild(el('span', 'yt-row-dur', fmtTime(v.seconds)));
+    if (VIDEO_ID_RE.test(v.id)) art.style.backgroundImage = 'url("https://i.ytimg.com/vi/' + v.id + '/hqdefault.jpg")';
+    if (v.seconds > 0) art.appendChild(el('span', 'yt-row-dur', fmtTime(v.seconds)));
     const meta = el('div', 'yt-row-meta');
-    meta.append(el('span', 'yt-row-name', v.title || '—'));
+    meta.append(el('span', 'yt-row-name', v.title || t('youtube_video') + ' · ' + v.id));
     // YouTube tells us in the same request that carries the duration whether a
     // video may play anywhere but youtube.com. Saying it here turns a tap that
     // ends in an error into a row that never promised to play in the first place.
@@ -616,16 +658,33 @@
       // The player card can be switched off in layout edit mode. Someone who did
       // that still expects a tap to play something, so fall back to the browser
       // rather than doing nothing.
-      if (stage) playList(list, index, stage);
+      const card = stage?.closest('.yt-card--player');
+      if (stage && card?.dataset.systemCardHidden !== 'true') {
+        if (lib.tab === 'queue') {
+          const at = player.qi + 1 + index;
+          if (!player.frame || player.stage !== stage) playList(player.queue, at, stage);
+          else playAt(at);
+        } else playList(list, index, stage);
+      }
       else { const url = watchUrl(v.id); if (url) await openOut(url); }
     });
+    if (LOCAL_TABS.includes(lib.tab)) {
+      const row = el('div', 'yt-local-row'); row.append(b);
+      const remove = iconBtn('yt-remove', ICONS.close, t('youtube_remove'), () => {
+        if (lib.tab === 'queue') player.queue.splice(player.qi + 1 + index, 1);
+        else saved[lib.tab] = saved[lib.tab].filter(item => item.id !== v.id);
+        saveLibrary(); paintLibrary(); paintPlayer();
+      });
+      remove.setAttribute('aria-label', t('youtube_remove') + ': ' + (v.title || v.id));
+      row.append(remove); return row;
+    }
     return b;
   }
 
   function playlistRow(p) {
     const b = el('button', 'yt-row yt-row--pl'); b.type = 'button';
     const art = el('span', 'yt-row-art');
-    if (p.image) art.style.backgroundImage = 'url("' + encodeURI(p.image) + '")';
+    if (typeof p.image === 'string' && /^https:\/\/(?:i|i[1-4])\.ytimg\.com\/[A-Za-z0-9_./?=&%-]+$/.test(p.image)) art.style.backgroundImage = 'url("' + p.image + '")';
     const meta = el('div', 'yt-row-meta');
     meta.append(el('span', 'yt-row-name', p.title || '—'));
     if (p.count != null) meta.append(el('span', 'yt-row-sub', p.count + ' ' + t('youtube_videos', 'videos')));
@@ -645,64 +704,36 @@
     });
   }
 
-  // The embed reports its position several times a second, so paintPlayer runs on
-  // a hot path. Re-parsing an identical SVG is the expensive part of a repaint;
-  // this skips it unless the icon really changed.
-  function setIcon(node, key, svg) {
-    if (node.dataset.ytIcon === key) return;
-    node.dataset.ytIcon = key;
-    node.innerHTML = svg;                 // static, trusted SVG
-  }
-
   function paintPlayer() {
     const v = cur();
-    const playing = player.state === 1 || player.state === 3;
     eachMount(mount => {
       const card = mount.querySelector('.yt-card--player');
-      if (!card) return;
-      const editing = document.body.classList.contains('layout-editing');
-      // Unknown is not the same as disconnected: hiding on both is what made the
-      // tile render as an empty box before the first answer came back. Only a
-      // definite "no account" takes the player away.
-      card.style.display = (connected !== false || editing) ? '' : 'none';
       const stage = card.querySelector('.yt-player-stage');
       const owns = !!(player.frame && player.stage === stage);
       const empty = stage.querySelector('.yt-player-empty');
-      if (empty) empty.style.display = owns ? 'none' : '';
+      empty.hidden = owns;
       card.classList.toggle('is-playing', owns && !!v);
-      card.classList.toggle('is-expanded', player.expanded && owns);
-
-      const title = card.querySelector('.yt-now-title');
-      const sub = card.querySelector('.yt-now-sub');
-      title.textContent = v ? (v.title || '') : '';
-      sub.textContent = v ? [v.channel || '', player.queue.length > 1 ? (player.qi + 1) + '/' + player.queue.length : ''].filter(Boolean).join(' · ') : '';
-
-      const pp = card.querySelector('.yt-playpause');
-      setIcon(pp, playing ? 'pause' : 'play', playing ? ICONS.pause : ICONS.play);
-      const mute = card.querySelector('.yt-mute');
-      setIcon(mute, player.muted ? 'muted' : 'sound', player.muted ? ICONS.muted : ICONS.sound);
-      mute.classList.toggle('is-on', player.muted);
-      const exp = card.querySelector('.yt-expand');
-      setIcon(exp, player.expanded ? 'shrink' : 'expand', player.expanded ? ICONS.shrink : ICONS.expand);
-      card.querySelector('.yt-prev').disabled = !v;
-      card.querySelector('.yt-next').disabled = !v || player.qi + 1 >= player.queue.length;
-      pp.disabled = !v;
-      card.querySelector('.yt-out').disabled = !v;
-      card.querySelector('.yt-stop').disabled = !v;
-
-      const seek = card.querySelector('.yt-seek');
-      const dur = player.duration > 0 ? player.duration : (v && v.seconds) || 0;
-      seek.disabled = !(dur > 0);
-      if (seek.dataset.ytDrag !== '1') seek.value = String(dur > 0 ? Math.round((player.time / dur) * 1000) : 0);
-      card.querySelector('.yt-time-cur').textContent = fmtTime(player.time);
-      card.querySelector('.yt-time-dur').textContent = fmtTime(dur);
-
-      // The overlay is built once and only shown/hidden here, so its text has to be
-      // refreshed on every paint: which sentence is right depends on the error we
-      // are holding right now, and on the language, both of which change under it.
+      const wrap = mount.querySelector('.yt-wrap');
+      wrap.classList.toggle('is-filled', player.expanded && owns);
+      mount.querySelector('.yt-restore').hidden = !(player.expanded && owns);
+      mount.querySelector('.yt-fill').disabled = !owns || card.dataset.systemCardHidden === 'true';
+      const viewport = mount.querySelector('.yt-viewport'); if (viewport) viewport.disabled = !owns;
+      card.querySelector('.yt-now').hidden = !owns;
+      card.querySelector('.yt-now-title').textContent = v ? (v.title || t('youtube_video') + ' · ' + v.id) : '';
+      card.querySelector('.yt-now-sub').textContent = v ? (v.channel || t('youtube_video')) : '';
+      const favorite = card.querySelector('.yt-favorite');
+      const isSaved = !!v && saved.favorites.some(item => item.id === v.id);
+      favorite.setAttribute('aria-pressed', String(isSaved));
+      favorite.classList.toggle('is-on', isSaved);
+      favorite.setAttribute('aria-label', t(isSaved ? 'youtube_unsave' : 'youtube_save'));
+      favorite.title = favorite.getAttribute('aria-label');
+      favorite.disabled = !owns;
       const blocked = card.querySelector('.yt-blocked');
       blocked.style.display = (owns && player.blocked) ? '' : 'none';
       blocked.querySelector('.yt-blocked-txt').textContent = blockedText();
+      // Error UI replaces the failed embed, rather than intercepting a working
+      // player's controls. The frame remains mounted for retry/recovery.
+      if (owns) player.frame.style.visibility = player.blocked ? 'hidden' : '';
     });
   }
 
@@ -710,9 +741,18 @@
     eachMount(mount => {
       const card = mount.querySelector('.yt-card--library');
       if (!card) return;
-      const editing = document.body.classList.contains('layout-editing');
-      card.style.display = (connected !== false || editing) ? '' : 'none';
-      card.querySelectorAll('.yt-tab').forEach(b => b.classList.toggle('is-on', b.dataset.ytTab === lib.tab));
+      const local = LOCAL_TABS.includes(lib.tab);
+      card.querySelectorAll('.yt-tab').forEach(b => {
+        const selected = b.dataset.ytTab === lib.tab;
+        b.classList.toggle('is-on', selected); b.setAttribute('aria-selected', String(selected)); b.tabIndex = selected || (!local && b.dataset.ytTab === 'queue') ? 0 : -1;
+      });
+      card.querySelector('.yt-account-tabs').value = local ? '' : lib.tab;
+      card.querySelector('.yt-setup').hidden = local || connected === true;
+      card.querySelector('.yt-list-summary').hidden = !local;
+      card.querySelector('.yt-autoplay').setAttribute('aria-checked', String(saved.autoplay));
+      card.querySelector('.yt-repeat').setAttribute('aria-pressed', String(saved.loop));
+      card.querySelector('.yt-next').disabled = player.qi + 1 >= player.queue.length;
+      card.querySelector('.yt-list').setAttribute('aria-label', TAB_LABEL[lib.tab]());
       card.querySelector('.yt-search-row').style.display = (lib.tab === 'search' && !lib.openPl) ? '' : 'none';
       const crumb = card.querySelector('.yt-crumb');
       crumb.style.display = lib.openPl ? '' : 'none';
@@ -721,19 +761,27 @@
       const list = card.querySelector('.yt-list');
       // Rebuilding an unchanged list on every status poll would throw away the
       // user's scroll position every 30 seconds, so only rebuild on a real change.
-      const rows = lib.openPl ? lib.plItems : lib.data[lib.tab];
+      const rows = local ? (lib.tab === 'queue' ? player.queue.slice(player.qi + 1) : saved[lib.tab]) : lib.openPl ? lib.plItems : lib.data[lib.tab];
+      card.querySelector('.yt-count').textContent = local ? String(rows.length) : '';
+      card.querySelector('.yt-list-summary > span').textContent = lib.tab === 'queue' ? t('youtube_up_next') : TAB_LABEL[lib.tab]();
       // `refused.size` is in the signature because a refusal changes how an ALREADY
       // rendered row must look, and nothing else in here would have changed: without
       // it the mark only appeared on the next tab switch, which is the one moment the
       // user is no longer looking at the video that just failed.
       const sig = [connected, document.documentElement.lang, lib.tab, lib.openPl && lib.openPl.id, lib.loading, lib.error, refused.size,
-        rows === null || rows === undefined ? 'n' : rows.map(r => r.id).join(',')].join('|');
+        rows === null || rows === undefined ? 'n' : rows.map(r => [r.id, r.title, r.channel, r.seconds, r.embeddable]).join(';')].join('|');
       if (list.dataset.ytSig === sig) return;
       list.dataset.ytSig = sig;
       // Still waiting on the connection check: say so instead of leaving a blank
       // panel that reads as a broken widget. A definite "no account" is NOT that
       // and must not borrow the same line: it never resolves, so "Loading…" there
       // is a spinner that spins forever over an answer we already have.
+      if (local) {
+        const frag = document.createDocumentFragment();
+        if (!rows.length) frag.append(el('div', 'yt-list-note', t(lib.tab === 'queue' ? 'youtube_queue_empty' : lib.tab === 'favorites' ? 'youtube_favorites_empty' : 'youtube_recent_empty')));
+        rows.forEach((video, index) => frag.append(videoRow(video, index, rows)));
+        list.replaceChildren(frag); return;
+      }
       if (connected === false) { list.replaceChildren(el('div', 'yt-list-note', t('youtube_not_connected', 'Connect in Settings'))); return; }
       if (connected !== true) { list.replaceChildren(el('div', 'yt-list-note', t('browser_loading', 'Loading…'))); return; }
       if (lib.loading) { list.replaceChildren(el('div', 'yt-list-note', t('browser_loading', 'Loading…'))); return; }
@@ -773,14 +821,12 @@
     });
     const inp = mount.querySelector('.yt-search-input');
     if (inp) inp.placeholder = t('youtube_search_ph', 'Search on YouTube');
-    const stx = mount.querySelector('.yt-setup-txt');
-    if (stx) stx.textContent = t('youtube_w_setup', 'Connect your YouTube account in Settings → Streaming');
-    const setup = mount.querySelector('.yt-setup');
-    // Only a definite "no account" shows it: while the check is still out
-    // (connected === null) the cards are on screen and saying "connect" would be
-    // a guess. Shown in layout editing too, where the cards are forced visible —
-    // it is the one place the empty player and list have an explanation next to them.
-    if (setup) setup.hidden = connected !== false;
+    const input = mount.querySelector('.yt-link-input');
+    input.placeholder = t('youtube_link'); input.setAttribute('aria-label', t('youtube_link'));
+    mount.querySelectorAll('[data-yt-text]').forEach(node => { node.textContent = t(node.dataset.ytText); });
+    mount.querySelectorAll('[data-yt-label]').forEach(node => { node.title = t(node.dataset.ytLabel); node.setAttribute('aria-label', node.title); });
+    mount.querySelectorAll('.yt-account-tabs option').forEach(option => { option.textContent = option.value ? TAB_LABEL[option.value]() : t('youtube_account_library'); });
+    mount.querySelector('.yt-account-tabs').setAttribute('aria-label', t('youtube_account_library'));
   }
 
   function paint() {
@@ -800,19 +846,18 @@
     const s = await api('/stream/youtube/status');
     const was = connected;
     if (s) connected = !!s.connected;
-    const seen = !document.hidden && tiles().some(onVisiblePage);
     if (connected) {
       // The open list loads ONCE and is what the tile is for, so it does not wait
       // for the page to be judged visible. Keyed on the list being empty rather
       // than on the connection having just come up, so a tab opened later fills
       // too — and on `loading` so a slow read is not fired twice.
-      if (lib.tab !== 'search' && lib.data[lib.tab] === null && !lib.loading) loadTab(lib.tab);
+      if (!LOCAL_TABS.includes(lib.tab) && lib.tab !== 'search' && lib.data[lib.tab] === null && !lib.loading) loadTab(lib.tab);
     } else if (connected === false && was !== false) {
       // Signed out (possibly to sign a different account in): drop everything the
       // previous account put on screen.
       lib.data = { liked: null, playlists: null, subs: null, search: null };
       lib.openPl = null; lib.plItems = null; lib.error = '';
-      stopPlayer();
+      // Direct links and this browser's saved lists do not depend on OAuth.
     }
     paint();
   }
@@ -840,8 +885,8 @@
     const id = String(raw == null ? '' : raw).trim();
     if (!VIDEO_ID_RE.test(id)) return { ok: false, error: 'bad_video' };
     if (!tiles().length) return { ok: false, error: 'unavailable' };
-    const stage = document.querySelector('.yt-player-stage');
-    if (!stage) return { ok: false, error: 'unavailable' };
+    const stage = tiles()[0]?.querySelector('.yt-player-stage');
+    if (!stage || stage.closest('.yt-card--player')?.dataset.systemCardHidden === 'true') return { ok: false, error: 'unavailable' };
     // Title left empty on purpose: nothing here knows it, and asking YouTube
     // would spend quota on a caption the embed itself already draws.
     playList([{ id, title: '', channel: '', seconds: 0 }], 0, stage);

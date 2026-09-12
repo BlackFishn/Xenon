@@ -6,6 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **YouTube now plays pasted links without an account connection.** Play immediately or build a queue, keep favorites and recent videos on this browser, and choose autoplay or repeat. Playback uses YouTube’s own controls; Fill widget hides the surrounding UI without restarting the video. Browser fullscreen and the native kiosk’s existing safe fullscreen path remain separate. See the [YouTube player guide](docs/youtube-player.md).
 - **Windows audio controls now update from Core Audio events.** A single sleeping native host reports device, session, mute, and volume changes as they happen and applies slider writes directly, replacing repeated SoundVolumeView launches while preserving the legacy fallback for older helpers and other platforms.
 - **Ambient layouts can now be composed directly on the fullscreen canvas.** Enter Edit Layout to add clock, date, weather, and media widgets, then drag, resize, remove, undo, reset, cancel, or save the responsive percentage-based arrangement. Imported layouts are forked before editing so the installed original remains untouched.
 - **The Volume workspace is now built for quick touch control.** Master output, active apps, and device routing have a clear visual order; app rows use larger sliders and mute targets, the live app count stays visible, and the old empty mixer space is replaced by dense responsive cards without adding any audio polling.

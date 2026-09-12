@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>YouTube player · Xenon design preview</title>
+  <link rel="icon" href="../images/favicon.png">
+  <link rel="stylesheet" href="youtube-player.css">
+  <script src="youtube-player.js" defer></script>
+</head>
+<body>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m9 5 11 7-11 7Z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14" stroke-width="4"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="m10 13 4-4M8 15l-1 1a4 4 0 0 1-6-6l5-5a4 4 0 0 1 6 0m0 4 1-1a4 4 0 0 1 6 6l-5 5a4 4 0 0 1-6 0" transform="translate(2 1) scale(.9)"/></symbol>
+    <symbol id="i-clipboard" viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="4" rx="1.5"/><path d="M7 5H5v16h14V5h-2"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9Zm13-1a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></symbol>
+    <symbol id="i-muted" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9Zm13 0 5 6m0-6-5 6"/></symbol>
+    <symbol id="i-loop" viewBox="0 0 24 24"><path d="m16 2 4 4-4 4M4 11V9a3 3 0 0 1 3-3h13M8 22l-4-4 4-4m12-1v2a3 3 0 0 1-3 3H4"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M8 3H3v5m13-5h5v5m0 8v5h-5M3 16v5h5"/></symbol>
+    <symbol id="i-heart" viewBox="0 0 24 24"><path d="M20 5a5 5 0 0 0-8 1 5 5 0 0 0-8-1c-5 5 3 11 8 15 5-4 13-10 8-15Z"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path d="m5 5 10 7-10 7Z" fill="currentColor" stroke="none"/><path d="M19 5v14"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 3h7v7m0-7L10 14M10 5H4v15h15v-6"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 21h8m-4-5v5"/></symbol>
+    <symbol id="i-compact" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M16 6v12"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M10 18h4"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M5 6h14M5 12h14M5 18h8m5-3 4 3-4 3Z"/></symbol>
+  </svg>
+
+  <main class="review">
+    <header class="review-top">
+      <a class="xenon-brand" href="youtube-player.html"><img src="../images/logo-mark.png" alt="" width="25" height="25"> XENON <span>/</span> <span class="lab">WIDGET LAB</span></a>
+      <span class="preview-badge"><i></i> Design preview 02</span>
+    </header>
+    <section class="review-heading" aria-label="Design preview controls">
+      <div><p class="eyebrow">YOUTUBE PLAYER</p><h1>Your video. More room.</h1><p class="intro">YouTube’s player. Your queue. One click to fill the widget.</p></div>
+      <div class="view-switch" role="group" aria-label="Preview layout">
+        <button data-layout="wide" aria-pressed="true"><svg><use href="#i-monitor"/></svg>Wide</button>
+        <button data-layout="compact" aria-pressed="false"><svg><use href="#i-compact"/></svg>Compact</button>
+        <button data-layout="portrait" aria-pressed="false"><svg><use href="#i-phone"/></svg>Portrait</button>
+      </div>
+    </section>
+
+    <div class="canvas" data-layout="wide">
+      <article class="widget" aria-label="YouTube player design mockup">
+        <div class="focus-toolbar" hidden><span>YouTube <span class="focus-caption">/ Video only</span></span><button id="exit-focus"><svg><use href="#i-compact"/></svg>Restore layout <kbd>Esc</kbd></button></div>
+        <header class="widget-header">
+          <div class="youtube-brand"><svg viewBox="0 0 32 24" class="youtube-logo" aria-hidden="true"><rect x="0" y="1" width="32" height="22" rx="7" fill="#ff4545"/><path d="m13 7 9 5-9 5Z" fill="#fff"/></svg><h2>YouTube</h2><span class="header-divider"></span><span class="player-label">Player</span></div>
+          <div class="header-actions"><button class="fill-button" id="expand" aria-label="Fill widget" aria-pressed="false" title="Fill this widget with the video"><svg><use href="#i-compact"/></svg><span>Fill widget</span></button><button class="icon-button" id="empty-preview" aria-label="Preview empty player" title="Preview empty player"><svg><use href="#i-plus"/></svg></button></div>
+        </header>
+
+        <form class="link-bar" id="link-form" novalidate>
+          <div class="link-input"><svg><use href="#i-link"/></svg><label class="sr-only" for="video-link">YouTube video link</label><input id="video-link" type="url" placeholder="Paste a YouTube link here…" autocomplete="off" spellcheck="false" aria-describedby="link-error"><button type="button" class="paste-button" id="paste"><svg><use href="#i-clipboard"/></svg><span>Paste</span></button></div>
+          <button class="primary-button" type="submit"><svg><use href="#i-play"/></svg>Play now</button>
+          <button class="queue-button" id="add-queue" type="button"><svg><use href="#i-plus"/></svg><span>Add to queue</span></button>
+        </form>
+        <p class="link-error" id="link-error" role="alert" hidden></p>
+
+        <div class="widget-body">
+          <section class="player-column" aria-label="Now playing">
+            <div class="video-stage controls-visible" data-scene="sunset" aria-label="YouTube player mockup">
+              <div class="video-picture">
+              <div class="landscape" aria-hidden="true"><div class="sun"></div><div class="mountain far"></div><div class="mountain middle"></div><div class="mountain near"></div><div class="grain"></div></div>
+              <div class="video-topline"><span class="video-session">SLOW DAYS <span>®</span></span><span class="video-quality">4K</span></div>
+              <div class="video-art-title"><span>AN AMBIENT JOURNEY</span><strong>Take the long<br>way home.</strong><span>GOOD MUSIC. &nbsp; NO HURRY.</span></div>
+              <button class="stage-play" aria-label="Pause preview"><svg><use href="#i-pause"/></svg></button>
+              </div>
+              <span id="play-state" class="sr-only">Playing</span>
+              <!-- Design stand-in only. The real embed supplies its own controls. -->
+              <div class="embed-controls" aria-label="Simulated YouTube controls">
+                <label class="sr-only" for="seek">Playback position</label><input class="seek" id="seek" type="range" min="0" max="2538" value="754" style="--progress:29.7%">
+                <div class="transport">
+                  <button class="icon-button" id="play-toggle" aria-label="Pause preview"><svg><use href="#i-pause"/></svg></button>
+                  <div class="volume-controls"><button class="icon-button" id="mute" aria-label="Mute preview" aria-pressed="false" title="Mute"><svg><use href="#i-volume"/></svg></button><label class="sr-only" for="volume">Volume</label><input id="volume" type="range" min="0" max="100" value="65" style="--progress:65%"></div>
+                  <span class="embed-time"><span id="elapsed">12:34</span> / <span id="duration">42:18</span></span>
+                  <div class="transport-extra"><button class="embed-brand" id="open-youtube" title="Open on YouTube">YouTube</button><details class="player-settings"><summary aria-label="Player settings" title="Player settings"><svg viewBox="0 0 24 24"><path d="m9 3-1 3-3 1-2 4 2 3v4l4 2 3-1 3 1 4-2v-4l2-3-2-4-3-1-1-3Z"/><circle cx="12" cy="12" r="3"/></svg></summary><label for="speed">Playback speed<select id="speed"><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1" selected>Normal</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label></details><button class="icon-button" id="fullscreen" aria-label="Fullscreen" title="Fullscreen"><svg><use href="#i-expand"/></svg></button></div>
+                </div>
+              </div>
+              <div class="empty-stage" hidden><svg class="empty-icon"><use href="#i-link"/></svg><h3>What are we watching?</h3><p>Paste a YouTube link above.<br>Your next favorite is one play away.</p><button class="queue-button" id="restore-demo">Try the sample</button></div>
+            </div>
+            <div class="now-playing"><div><p class="eyebrow">NOW PLAYING</p><h3 id="video-title">Take the long way home — a sunset chill mix</h3><p id="video-channel">Slow Days <span>·</span> Ambient / Chill</p></div><button class="icon-button favorite-button" id="favorite" aria-label="Save to favorites" aria-pressed="false" title="Save to favorites"><svg><use href="#i-heart"/></svg></button></div>
+          </section>
+
+          <aside class="library" aria-label="Video library">
+            <div class="library-tabs" role="tablist" aria-label="Video library"><button role="tab" id="tab-queue" aria-controls="library-panel" data-tab="queue" aria-selected="true">Queue <span id="queue-count">4</span></button><button role="tab" id="tab-favorites" aria-controls="library-panel" data-tab="favorites" aria-selected="false" tabindex="-1">Favorites</button><button role="tab" id="tab-recent" aria-controls="library-panel" data-tab="recent" aria-selected="false" tabindex="-1">Recent</button></div>
+            <div class="library-summary"><span id="list-label">UP NEXT</span><span id="list-meta">4 videos · 2h 46m</span></div>
+            <div id="library-panel" role="tabpanel" aria-labelledby="tab-queue"><div class="video-list" id="video-list"></div></div>
+            <button class="add-another" id="add-another"><svg><use href="#i-plus"/></svg>Add another link</button>
+            <div class="autoplay-row"><div><strong>Autoplay next</strong><span>Keep the good stuff going.</span></div><button class="switch" id="autoplay" role="switch" aria-checked="true" aria-label="Autoplay next video"><span></span></button></div>
+            <div class="queue-actions"><button class="queue-option" id="loop" aria-label="Loop video" aria-pressed="false"><svg><use href="#i-loop"/></svg>Repeat video</button><button class="queue-option" id="next" aria-label="Next video"><svg><use href="#i-next"/></svg>Play next</button></div>
+          </aside>
+        </div>
+      </article>
+    </div>
+    <footer class="review-footer"><span><i></i> Interactive mockup <span class="footer-separator">/</span> YouTube controls are illustrated; playback is simulated.</span><span>Made for your second screen.</span></footer>
+  </main>
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

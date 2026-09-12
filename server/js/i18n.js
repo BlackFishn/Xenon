@@ -30205,6 +30205,41 @@ Object.assign(i18n.nl, {
 
 
 
+// Direct-link YouTube player; missing locale entries use the English fallback.
+Object.assign(i18n.en, {
+  "youtube_queue": "Queue",
+  "youtube_favorites": "Favorites",
+  "youtube_recent": "Recent",
+  "youtube_link": "Paste a YouTube link here…",
+  "youtube_paste": "Paste",
+  "youtube_play_now": "Play now",
+  "youtube_add_queue": "Add to queue",
+  "youtube_fill": "Fill widget",
+  "youtube_restore": "Restore layout",
+  "youtube_empty_title": "What are we watching?",
+  "youtube_empty_hint": "Paste a YouTube link above or choose a video from your queue. No account required.",
+  "youtube_bad_link": "Paste a valid YouTube video link.",
+  "youtube_queued": "Added to queue.",
+  "youtube_paste_hint": "Paste your link here with Ctrl+V or the keyboard paste command.",
+  "youtube_list_full": "This list is full. Remove a video first.",
+  "youtube_storage_failed": "Storage is unavailable. Changes last until this page closes.",
+  "youtube_save": "Save to favorites",
+  "youtube_unsave": "Remove from favorites",
+  "youtube_remove": "Remove",
+  "youtube_video": "YouTube video",
+  "youtube_up_next": "Up next",
+  "youtube_autoplay": "Autoplay next",
+  "youtube_repeat": "Repeat video",
+  "youtube_library": "Video library",
+  "youtube_account_library": "YouTube account library",
+  "youtube_account_connect": "Connect your account for liked videos, playlists and search",
+  "youtube_queue_empty": "Your queue is empty. Paste a link and choose Add to queue.",
+  "youtube_favorites_empty": "Tap the heart on a playing video to save it here.",
+  "youtube_recent_empty": "Videos you play will appear here."
+});
+
+Object.assign(i18n.en, { youtube_player_hidden: 'Show the Player section in Edit Layout before playing a link.' });
+
 function t(key) {
   // Fallback: selected language → English → key name (never silently shows Italian to non-Italian users)
   return (i18n[lang] && i18n[lang][key]) ?? (i18n.en && i18n.en[key]) ?? key;
