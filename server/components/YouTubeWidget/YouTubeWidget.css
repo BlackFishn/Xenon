@@ -43,7 +43,7 @@
 .yt-cards { display: flex; flex-direction: column; gap: 12px; flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .youtube-panel .yt-wrap .yt-card { border-radius: 10px; border: 1px solid var(--line); background: var(--surface); box-sizing: border-box; }
 .yt-card--player { flex: 1 0 280px; min-height: 280px; display: flex; flex-direction: column; overflow: hidden; }
-.yt-player-stage { flex: 1 1 auto; position: relative; width: 100%; min-height: 200px; background: #000; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.yt-player-stage { margin: 0; padding: 0; border: 0; max-width: none; max-height: none; color: inherit; box-sizing: border-box; flex: 1 1 auto; position: relative; width: 100%; min-height: 200px; background: #000; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .yt-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
 .yt-player-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 11px; width: 100%; height: 100%; min-height: 200px; padding: 24px; text-align: center; background: radial-gradient(ellipse at 50% 15%, #382026, #111517 70%); color: #f1f3f4; }
 .yt-empty-icon { display: inline-flex; align-items: center; justify-content: center; width: 47px; height: 47px; border: 1px solid #ff50554d; border-radius: 13px; color: #ff767c; background: #ff50551a; }
@@ -116,16 +116,30 @@
   .yt-row-art { width: 72px; height: 43px; }
   .yt-now { gap: 3px; padding: 8px; }
   .yt-now .yt-ib { width: 28px; min-width: 28px; padding: 5px; }
-  .yt-head .yt-viewport .yt-button-label { display: none; }
+  .yt-head :is(.yt-focus, .yt-viewport) .yt-button-label { display: none; }
 }
 .yt-wrap.is-filled { padding: 0; gap: 0; }
 .yt-wrap.is-filled > .yt-head, .yt-wrap.is-filled > .yt-link-form, .yt-wrap.is-filled > .yt-feedback { display: none; }
-.yt-wrap .yt-restore { width: 100%; flex: 0 0 38px; min-height: 38px; border-radius: 0; border: 0; border-bottom: 1px solid var(--line); justify-content: flex-end; padding: 7px 14px; }
+.yt-filled-actions { display: flex; justify-content: flex-end; flex: 0 0 38px; min-height: 38px; border-bottom: 1px solid var(--line); background: var(--control-bg); }
+.yt-wrap .yt-filled-actions .yt-ib { min-height: 38px; border-radius: 0; border: 0; padding: 7px 14px; background: transparent; }
 .yt-wrap.is-filled .yt-cards { display: flex; flex: 1; min-height: 0; overflow: hidden; }
 .yt-wrap.is-filled .yt-card--library { display: none !important; }
 .youtube-panel .yt-wrap.is-filled .yt-card--player { flex: 1; min-height: 0; padding: 0; border: 0; border-radius: 0; }
 .yt-wrap.is-filled .yt-now { display: none; }
 .yt-wrap.is-filled .yt-player-stage { min-height: 0; }
+/* The same iframe enters the top layer; the surrounding dashboard stays put. */
+body.yt-focused { overflow: hidden; }
+.yt-wrap .yt-player-stage.is-focused {
+  position: fixed; inset: 0; margin: auto; flex: none; min-height: 0;
+  /* Keep a backdrop target even when the window itself is 16:9. */
+  width: min(calc(100vw - 32px), 177.777778vh); height: min(100vh, calc(56.25vw - 18px));
+  width: min(calc(100vw - 32px), 177.777778dvh); height: min(100dvh, calc(56.25vw - 18px));
+  max-width: none; max-height: none; border-radius: 0; box-shadow: 0 0 60px #0008;
+}
+.yt-player-stage.is-focused::backdrop {
+  background: rgba(4, 7, 12, .58); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  touch-action: none;
+}
 /* Native fullscreen preserves the kiosk's window state and iframe identity. */
 .yt-wrap.is-viewport { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 5000; container-type: normal; border-radius: 0; }
 body.yt-expanded .shell { z-index: 60; }

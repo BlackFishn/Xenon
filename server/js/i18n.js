@@ -30218,6 +30218,7 @@ Object.assign(i18n.en, {
   "youtube_paste": "Paste",
   "youtube_play_now": "Play now",
   "youtube_add_queue": "Add to queue",
+  "youtube_focus": "Focus",
   "youtube_fill": "Fill widget",
   "youtube_restore": "Restore layout",
   "youtube_empty_title": "What are we watching?",

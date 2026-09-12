@@ -16,6 +16,13 @@ below it and no overlay intercepting touches on a working embed.
   same iframe mounted. **Restore layout** returns without restarting playback.
   Escape also returns when keyboard focus is on the dashboard; events inside the
   cross-origin YouTube player belong to YouTube, so the restore button remains visible.
+- **Focus** centers the video over the dashboard and fits its 16:9 frame to the
+  available window height (or width on narrow screens). The surrounding dashboard
+  is blurred. Click or tap the blurred area, or press Escape while keyboard focus
+  is on the dashboard to return. No exit button covers the video; a slim blurred
+  margin remains on each side even in a 16:9 window. Focus is also available
+  after **Fill widget** and restores that previous layout on exit. The same iframe
+  stays mounted, so entering and leaving Focus does not restart the video.
 - In a browser, YouTube’s fullscreen button opens the video fullscreen.
 - In the native app, the separate **Full screen** button fills the dashboard
   window while preserving its kiosk/window state. Browser fullscreen remains

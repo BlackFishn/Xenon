@@ -331,6 +331,7 @@
   }
 
   function destroyFrame() {
+    setFocus(false);
     clearInterval(player.hello); player.hello = null;
     if (player.frame && player.frame.parentNode) player.frame.parentNode.removeChild(player.frame);
     player.frame = null; player.stage = null;
@@ -405,6 +406,46 @@
     restorePlayer();
     paintPlayer(); paintLibrary();
   }
+  let focusState = null;
+  // A modal promotes the existing stage to the top layer without reparenting its
+  // iframe. This escapes tile clipping and transforms while playback continues.
+  function setFocus(on, trigger) {
+    if (!on) {
+      if (!focusState) return false;
+      const { stage, trigger: previous } = focusState;
+      focusState = null;
+      if (stage.open) stage.close();
+      stage.classList.remove('is-focused');
+      stage.setAttribute('role', 'group');
+      stage.removeAttribute('aria-modal');
+      document.body.classList.remove('yt-focused');
+      if (previous?.isConnected) previous.focus({ preventScroll: true });
+      paintPlayer();
+      return true;
+    }
+    const stage = player.stage;
+    if (focusState || !player.frame || !stage || typeof stage.showModal !== 'function') return false;
+    focusState = { stage, trigger: trigger || document.activeElement };
+    stage.classList.add('is-focused');
+    stage.setAttribute('role', 'dialog');
+    stage.setAttribute('aria-modal', 'true');
+    document.body.classList.add('yt-focused');
+    try { stage.showModal(); }
+    catch { setFocus(false); return false; }
+    stage.focus({ preventScroll: true });
+    paintPlayer();
+    return true;
+  }
+  function focusBackdropClick(e) {
+    const stage = e.currentTarget;
+    if (focusState?.stage !== stage) return;
+    e.stopPropagation();
+    const rect = stage.getBoundingClientRect();
+    if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) return;
+    // Consume the closing click so the dashboard beneath it cannot activate.
+    e.preventDefault();
+    setFocus(false);
+  }
   // Resize in place: moving the iframe would reload it and lose playback.
   function setExpanded(on) {
     player.expanded = !!on && !!player.frame;
@@ -413,6 +454,7 @@
       const wrap = mount.querySelector('.yt-wrap');
       wrap.classList.toggle('is-filled', player.expanded && owns);
       mount.querySelector('.yt-restore').hidden = !(player.expanded && owns);
+      mount.querySelector('.yt-filled-actions').hidden = !(player.expanded && owns);
       mount.querySelector('.yt-fill').setAttribute('aria-pressed', String(player.expanded && owns));
       if (owns) (player.expanded ? mount.querySelector('.yt-restore') : mount.querySelector('.yt-fill')).focus({ preventScroll: true });
     });
@@ -429,13 +471,18 @@
     wrap.closest('[data-dashboard-widget]')?.classList.toggle('yt-tile-expanded', !!on);
   }
   function restorePlayer() {
+    setFocus(false);
     setViewport(false);
     document.querySelectorAll('.yt-wrap.is-viewport').forEach(wrap => wrap.classList.remove('is-viewport'));
     document.querySelectorAll('.yt-tile-expanded').forEach(tile => tile.classList.remove('yt-tile-expanded'));
     document.body.classList.remove('yt-expanded');
     setExpanded(false);
   }
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && player.expanded && !document.fullscreenElement) restorePlayer(); });
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape' || document.fullscreenElement) return;
+    if (focusState) { e.preventDefault(); e.stopPropagation(); setFocus(false); }
+    else if (player.expanded) restorePlayer();
+  }, true);
 
   // ── Library loading ───────────────────────────────────────────────────────
   const LIB_PATH = { liked: '/stream/youtube/liked', playlists: '/stream/youtube/playlists', subs: '/stream/youtube/subscriptions' };
@@ -493,10 +540,13 @@
     const brand = el('div', 'yt-brand');
     const logo = el('span', 'yt-brand-icon'); logo.innerHTML = ICONS.logo;
     brand.append(logo, el('span', 'yt-logo', 'YouTube'));
-    head.append(brand, actionButton('yt-fill', ICONS.expand, 'youtube_fill', () => setExpanded(true)));
+    const focusButton = () => actionButton('yt-focus', ICONS.expand, 'youtube_focus', e => setFocus(true, e.currentTarget));
+    head.append(brand, focusButton(), actionButton('yt-fill', ICONS.expand, 'youtube_fill', () => setExpanded(true)));
     if (window.__XENON_NATIVE__ === true || window.isTauri === true) head.append(actionButton('yt-viewport', ICONS.expand, 'youtube_expand', () => setViewport(true)));
     const restore = actionButton('yt-restore', ICONS.shrink, 'youtube_restore', restorePlayer); restore.hidden = true;
-    wrap.append(head, restore);
+    const filledActions = el('div', 'yt-filled-actions'); filledActions.hidden = true;
+    filledActions.append(focusButton(), restore);
+    wrap.append(head, filledActions);
 
     const form = el('form', 'yt-link-form');
     const field = el('div', 'yt-link-field');
@@ -531,7 +581,13 @@
   function buildPlayerCard() {
     const card = el('section', 'yt-card yt-card--player');
     card.dataset.systemCard = 'player'; card.dataset.systemCardGroup = 'youtube';
-    const stage = el('div', 'yt-player-stage');
+    const stage = el('dialog', 'yt-player-stage');
+    stage.setAttribute('role', 'group'); stage.setAttribute('aria-label', 'YouTube');
+    stage.tabIndex = -1;
+    stage.addEventListener('click', focusBackdropClick);
+    stage.addEventListener('pointerdown', e => { if (focusState?.stage === stage) e.stopPropagation(); });
+    stage.addEventListener('cancel', e => { e.preventDefault(); setFocus(false); });
+    stage.addEventListener('close', () => { if (focusState?.stage === stage && !stage.open) setFocus(false); });
     const empty = el('div', 'yt-player-empty');
     const mark = el('span', 'yt-empty-icon'); mark.innerHTML = ICONS.play;
     empty.append(mark, textEl('strong', 'yt-empty-title', 'youtube_empty_title'), textEl('span', 'yt-empty-hint', 'youtube_empty_hint'));
@@ -716,6 +772,11 @@
       const wrap = mount.querySelector('.yt-wrap');
       wrap.classList.toggle('is-filled', player.expanded && owns);
       mount.querySelector('.yt-restore').hidden = !(player.expanded && owns);
+      mount.querySelector('.yt-filled-actions').hidden = !(player.expanded && owns);
+      mount.querySelectorAll('.yt-focus').forEach(button => {
+        button.disabled = !owns || card.dataset.systemCardHidden === 'true' || typeof stage.showModal !== 'function';
+        button.setAttribute('aria-pressed', String(focusState?.stage === stage));
+      });
       mount.querySelector('.yt-fill').disabled = !owns || card.dataset.systemCardHidden === 'true';
       const viewport = mount.querySelector('.yt-viewport'); if (viewport) viewport.disabled = !owns;
       card.querySelector('.yt-now').hidden = !owns;
