@@ -14,6 +14,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Smart Home cards can be arranged instead of forced into device bundles.** Settings now offers a Custom card layout that shows every selected Home Assistant entity separately. In Dashboard edit mode, cards can be reordered by mouse or touch, resized independently, and split into named sections and one level of subsections. The existing room-and-device grouping remains the default.
 
 ### Fixed
+- **YouTube login failures now explain why the code disappeared.** Rejected app credentials show how to correct the OAuth client type and matching Client ID/Secret; expired codes, denied access and failed requests leave a visible message and a usable Connect button.
 - **Microphone mute now reflects the real Windows device state.** SoundVolumeView exports are decoded as UTF-8 so non-ASCII microphones such as RØDE retain a usable device ID, mute targets the current default capture device even if Voicemod changes it between polls, and Xenon verifies the hardware result before updating the control.
 
 ## [v4.11.7] - 05-09-2026

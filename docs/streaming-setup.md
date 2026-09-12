@@ -156,6 +156,7 @@ never sent to the browser.
 
 | Symptom | Fix |
 |---------|-----|
+| YouTube code disappears after a few seconds / **`invalid_client`** | Google rejected the OAuth app credentials; the code has not necessarily expired. Open **Edit credentials** and paste the **Client ID and Client Secret from the same OAuth client**, with application type **TVs and Limited Input devices**, then **Save → Connect**. Enter the new code at <https://www.google.com/device> and approve access. Xenon now keeps an explanation visible when login fails. |
 | Google: **"Access blocked: … has not completed verification … Error 403: access_denied"** | Add your Google account under **OAuth consent screen → Test users**, then retry. |
 | Card says **"… app not set up"** | Paste the credentials in Settings → Streaming and tap Save (or set the `TWITCH_CLIENT_ID` / `YOUTUBE_CLIENT_ID` / `YOUTUBE_CLIENT_SECRET` env vars before starting the server). |
 | YouTube disconnects after a few days | Expected in Testing mode (7-day refresh-token expiry) — just tap **Connect** again. |

@@ -270,9 +270,9 @@
       return;
     }
     const r = await api(cfg.base + '/login', { method: 'POST' });
-    if (!r || !r.ok) { btn.disabled = false; setNote(card, t('streaming_error', 'Could not start login. Try again.')); return; }
+    if (!r || !r.ok) { showDeviceLoginError(cfg, card, btn, r); return; }
     showCode(card, r);
-    pollLogin(cfg, r.deviceCode, r.interval || 5);
+    pollLogin(cfg, r.deviceCode, r.interval || 5, card, btn);
   }
 
   // Map a discord-rpc login() result to a specific, actionable note. Most RPC
@@ -345,18 +345,34 @@
     card.appendChild(box);
   }
 
-  function pollLogin(cfg, deviceCode, interval) {
+  function showDeviceLoginError(cfg, card, btn, result) {
+    card.querySelectorAll('.streaming-login').forEach(n => n.remove());
+    btn.disabled = false;
+    const error = result && result.error;
+    let message = t('streaming_device_failed', 'Login failed. Check your connection and app credentials, then press Connect again.');
+    if (cfg.key === 'youtube' && error === 'invalid_client') {
+      message = t('streaming_youtube_invalid_client', 'Google rejected the app credentials (invalid_client). Open Edit credentials and paste the Client ID and Client Secret from the same OAuth client of type "TVs and Limited Input devices", then Save and Connect again.');
+    } else if (error === 'expired') {
+      message = t('streaming_device_expired', 'The code expired. Press Connect for a new code.');
+    } else if (error === 'denied') {
+      message = t('streaming_device_denied', 'Authorization was denied. Press Connect again and approve access with the intended account.');
+    }
+    setNote(card, message);
+  }
+
+  function pollLogin(cfg, deviceCode, interval, card, btn) {
     stopPoll();
     pollTimer = setTimeout(async () => {
-      if (!sectionVisible()) { stopPoll(); return; }
+      if (!sectionVisible() || !card.isConnected) { stopPoll(); return; }
       const r = await api(cfg.base + '/login/poll', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deviceCode }),
       });
-      if (!sectionVisible()) { stopPoll(); return; }
+      if (!sectionVisible() || !card.isConnected) { stopPoll(); return; }
       if (r && r.ok) { stopPoll(); render(); return; }
-      if (r && r.pending) { pollLogin(cfg, deviceCode, r.slowDown ? interval + 5 : interval); return; }
+      if (r && r.pending) { pollLogin(cfg, deviceCode, r.slowDown ? interval + 5 : interval, card, btn); return; }
       stopPoll();
-      render();   // expired / denied → back to the Connect button
+      // Keep the failure on the card: rebuilding silently discarded the reason.
+      showDeviceLoginError(cfg, card, btn, r);
     }, Math.max(1, interval) * 1000);
   }
 
