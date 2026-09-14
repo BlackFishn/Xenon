@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -72,6 +73,16 @@ public sealed unsafe class AudioControlHost : IDisposable
         wake.Set();
     }
 
+    // Called by COM rather than managed code: trimming these methods produces
+    // a broken CCW vtable (the process fails fast on the first notification).
+    [DynamicDependency(DynamicallyAccessedMemberTypes.All, typeof(ICreatedEvents))]
+    [DynamicDependency(DynamicallyAccessedMemberTypes.All, typeof(CreatedEvents))]
+    [DynamicDependency(DynamicallyAccessedMemberTypes.All, typeof(IEndpointEvents))]
+    [DynamicDependency(DynamicallyAccessedMemberTypes.All, typeof(EndpointEvents))]
+    [DynamicDependency(DynamicallyAccessedMemberTypes.All, typeof(ISessionEvents))]
+    [DynamicDependency(DynamicallyAccessedMemberTypes.All, typeof(SessionEvents))]
+    [DynamicDependency(DynamicallyAccessedMemberTypes.All, typeof(IDeviceEvents))]
+    [DynamicDependency(DynamicallyAccessedMemberTypes.All, typeof(DeviceEvents))]
     public static int Run()
     {
         Check(CoInitializeEx(IntPtr.Zero, 0)); // COINIT_MULTITHREADED

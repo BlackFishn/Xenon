@@ -76,6 +76,23 @@ test('oversized or malformed snapshots cannot become audio state', async () => {
   assert.equal(control.running(), false);
 });
 
+test('a timed-out dispatched toggle wakes fallback without replaying the write', async () => {
+  let writes = 0, failures = 0, launches = 0;
+  const control = createAudioControl({ supported: true, timeoutMs: 30, spawn: () => {
+    launches++;
+    const proc = fakeHost(() => { writes++; });
+    queueMicrotask(() => proc.send({ event: 'audio', rows }));
+    return proc;
+  } });
+  control.onChange(failure => { if (failure?.unavailable) failures++; });
+  await assert.rejects(control.command(['/Switch', 'test.exe']), /disconnected/);
+  assert.equal(writes, 1);
+  assert.equal(failures, 1);
+  assert.equal(control.running(), false);
+  assert.equal(await control.rows(), null);
+  assert.equal(launches, 1);
+});
+
 test('slider sends immediately, coalesces slow writes, and delivers the final value', async () => {
   const context = vm.createContext({ setTimeout, clearTimeout, Date, setOffline: () => {} });
   vm.runInContext(readFileSync(new URL('../js/volume.js', import.meta.url), 'utf8'), context);
@@ -94,4 +111,23 @@ test('slider sends immediately, coalesces slow writes, and delivers the final va
   context.queueAudioWrite('test', 25, send);
   assert.deepEqual(sent, [10, 90, 25]);
   finish();
+});
+
+test('an older OS confirmation cannot pull the master thumb back during a write', async () => {
+  const slider = { value: 70, style: {}, classList: { toggle() {} } };
+  const label = { textContent: '70%' };
+  const context = vm.createContext({
+    setTimeout, clearTimeout, Date, setOffline() {}, audioData: null, speakerMuted: false, window: {},
+    document: { querySelectorAll: selector => selector === '[data-volf="vol-slider"]' ? [slider] : selector === '[data-volf="vol-val"]' ? [label] : [] },
+  });
+  vm.runInContext(readFileSync(new URL('../js/volume.js', import.meta.url), 'utf8'), context);
+  let finish;
+  context.queueAudioWrite('master', 70, () => new Promise(resolve => { finish = resolve; }));
+  context.applyAudio({ speaker: { name: 'Test output', volume: 40, muted: false } });
+  assert.equal(slider.value, 70);
+  context.applyAudio({ speaker: { name: 'Test output', volume: 70, muted: false } });
+  finish();
+  await new Promise(resolve => setTimeout(resolve, 150));
+  assert.equal(slider.value, 70);
+  assert.equal(label.textContent, '70%');
 });

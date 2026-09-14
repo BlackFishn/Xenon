@@ -55,7 +55,7 @@ function onSliderInput(v) {
 
 async function sendVolume(level) {
   try {
-    const res = await fetch(SERVER + '/volume/set', {
+    const res = await fetchWithDeadline(SERVER + '/volume/set', 8000, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ level }),
@@ -88,6 +88,7 @@ function applySpeakerMute(m) {
   if (window.Deck && typeof window.Deck.refreshStates === 'function') window.Deck.refreshStates({ speakerMuted: !!m });
 }
 
+let audioRenderDeferred = null;
 function applyAudio(data) {
   // The server sends { unavailable: true } when SoundVolumeView can't be read
   // (most often it's been quarantined by the user's antivirus). Surface an
@@ -99,6 +100,13 @@ function applyAudio(data) {
   document.querySelectorAll('[data-volf="audio-body"]').forEach(el => { el.hidden = unavailable; });
   if (unavailable) return;
   audioData = data;
+  clearTimeout(audioRenderDeferred);
+  if (audioWrites.size) {
+    // A fast OS event can acknowledge an older in-flight value while the thumb
+    // is already ahead. Apply the newest confirmation after the write drains.
+    audioRenderDeferred = setTimeout(() => applyAudio(audioData), 60);
+    return;
+  }
   if (data.speaker) {
     const speaker = data.speaker.name || data.speaker.label;
     document.querySelectorAll('[data-volf="spk-name"]').forEach(el => { el.textContent = speaker; });
@@ -214,7 +222,7 @@ function handleAppMixInput(slider) {
   slider.style.background = appMixSliderBg(level);
   row.classList.remove('app-mix-muted');
   queueAudioWrite('app:' + id, level, async latest => {
-    const res = await fetch(SERVER + '/audio/app/volume', {
+    const res = await fetchWithDeadline(SERVER + '/audio/app/volume', 8000, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id, level: latest, proc }),
@@ -288,7 +296,7 @@ function onMicVolumeInput(v) {
 
 async function sendMicVolume(level) {
   try {
-    const res = await fetch(SERVER + '/mic/volume', {
+    const res = await fetchWithDeadline(SERVER + '/mic/volume', 8000, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ level }),
@@ -296,6 +304,19 @@ async function sendMicVolume(level) {
     if (!res.ok) throw new Error('Mic volume failed');
     setOnline();
   } catch { setOffline(); }
+}
+
+// Keep the server's two-minute fallback watch alive while controls are visible.
+// SSE being connected does not guarantee that the native audio helper is present.
+function startVisibleAudioRefresh() {
+  const refresh = () => {
+    if (document.hidden) return;
+    const controls = document.querySelectorAll('[data-volf="audio-body"], [data-volf="vol-error"], [data-micf="mic-vol-slider"]');
+    if (Array.from(controls).some(el => el.getClientRects().length && onVisiblePage(el))) fetchAudio();
+  };
+  setInterval(refresh, 30000);
+  document.addEventListener('visibilitychange', refresh);
+  window.addEventListener('xenon:page-change', refresh);
 }
 
 async function fetchAudio() {

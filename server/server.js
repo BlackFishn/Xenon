@@ -21012,7 +21012,9 @@ setInterval(async () => {
   } catch {}
 }, 90000).unref();
 
-// The 'audio' tick spawns SoundVolumeView.exe (native, can't move to pwsh-worker),
+// Native audio-control-serve pushes changes and sleeps between callbacks; the
+// timer below is only the compatibility fallback for an unavailable/old helper.
+// The legacy 'audio' tick spawns SoundVolumeView.exe (can't move to pwsh-worker),
 // so each fire is a process + temp-CSV cycle. External volume/mute changes are rare
 // and this is a glance display, so an 8s cadence roughly halves the daily spawn
 // count vs 5s while staying responsive; a dirty-check then skips the SSE broadcast
@@ -21028,12 +21030,10 @@ setInterval(async () => {
 // and idleProbeWanted():
 //   - a widget granted the `audio` stream is fed straight off this tick, so it
 //     keeps the poll alive for as long as it is installed and un-suspended;
-//   - otherwise the poll runs only while someone is plausibly looking at the
-//     Volume UI. fetchAudio() runs when that panel opens, so a recent GET /audio
-//     is the signal, and the window is generous because it is refreshed by any
-//     interaction. The trade is that a mixer left open and untouched past the
-//     window stops noticing volume changes made OUTSIDE Xenon until it is touched
-//     again; changes made through Xenon apply locally and are unaffected.
+//   - visible audio controls renew the watch with GET /audio every 30 seconds,
+//     including while SSE is connected. Hidden tabs/pages stop renewing it, so
+//     the fallback goes idle after the watch expires without freezing an open
+//     mixer or losing apps that start/stop while the controls are untouched.
 const AUDIO_WATCH_WINDOW_MS = 120000;
 let _audioWatchedAt = 0;
 function _noteAudioWatched() { _audioWatchedAt = Date.now(); }
@@ -21051,8 +21051,9 @@ let _lastAudioJson = '';
 let _audioEventTimer = null;
 let _audioEventBusy = false;
 let _audioEventAgain = false;
-audioControl.onChange(() => {
+audioControl.onChange(failure => {
   if (sseClients.size === 0) return;
+  if (failure) _noteAudioWatched(); // resume legacy reads if the native host dies
   _audioEventAgain = true;
   if (_audioEventTimer || _audioEventBusy) return;
   _audioEventTimer = setTimeout(async () => {

@@ -99,6 +99,7 @@ if (['full', 'agenda'].includes(activePanel)) { if (typeof loadTimers === 'funct
 // Real-time data (status, media, system, audio) uses Server-Sent Events.
 // Falls back to conventional polling if EventSource is unavailable or the
 // connection fails (e.g. older server build without /sse support).
+if (need.audio) startVisibleAudioRefresh();
 (function initDataStream() {
   if (typeof EventSource === 'undefined') {
     startPollingFallback();

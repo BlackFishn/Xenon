@@ -20,6 +20,7 @@ function createAudioControl(options = {}) {
     pending.clear();
   }
   function stop(disable = false) {
+    const notifyFailure = disable && ready;
     disabled ||= disable;
     const old = child;
     child = null; ready = false; starting = null; lastRows = null; buffer = '';
@@ -30,6 +31,7 @@ function createAudioControl(options = {}) {
       timer.unref();
       old.once('exit', () => clearTimeout(timer));
     }
+    if (notifyFailure && onChange) onChange({ unavailable: true });
   }
   function validRows(rows) {
     return Array.isArray(rows) && rows.length <= 4096 && rows.every(row =>
@@ -52,7 +54,9 @@ function createAudioControl(options = {}) {
       proc.stderr.on('data', () => {});
       const failed = () => {
         finish(false);
-        if (child === proc) stop(true);
+        if (child === proc) {
+          stop(true);
+        }
       };
       proc.on('error', failed);
       proc.on('exit', failed);
