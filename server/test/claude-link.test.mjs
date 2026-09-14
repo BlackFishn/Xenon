@@ -183,3 +183,35 @@ test('a foreign http hook to another local service is left alone', () => {
   const out = link.stripOurHooks(hooks, PORT);
   assert.equal(out.Stop.length, 1);
 });
+
+
+test('usage-only link preserves hooks and status line, and can be upgraded or undone', async () => {
+  const s = sandbox();
+  try {
+    const original = { model: 'opus', statusLine: { type: 'command', command: 'my-status.sh', padding: 2 }, hooks: { Stop: [{ hooks: [{ type: 'command', command: 'notify.sh' }] }] } };
+    s.write(original);
+    const st = await link.link(s.data, PORT, { usageOnly: true });
+    assert.equal(st.usageLinked, true);
+    assert.equal(st.linked, false);
+    assert.equal(st.chained, 'my-status.sh');
+    assert.deepEqual(s.read().hooks, original.hooks);
+    await link.link(s.data, PORT, { usageOnly: true });
+    assert.deepEqual(s.read().hooks, original.hooks);
+    await link.unlink(s.data, PORT);
+    assert.deepEqual(s.read(), original);
+    await link.link(s.data, PORT, { usageOnly: true });
+    assert.equal((await link.link(s.data, PORT)).linked, true);
+  } finally { s.cleanup(); }
+});
+
+test('usage-only linking does not add hooks or overwrite invalid settings', async () => {
+  const s = sandbox();
+  try {
+    s.write({ model: 'opus' });
+    await link.link(s.data, PORT, { usageOnly: true });
+    assert.equal(s.read().hooks, undefined);
+    fs.writeFileSync(s.settingsFile, '{broken-json');
+    await assert.rejects(link.link(s.data, PORT, { usageOnly: true }), /refusing to overwrite/);
+    assert.equal(fs.readFileSync(s.settingsFile, 'utf8'), '{broken-json');
+  } finally { s.cleanup(); }
+});

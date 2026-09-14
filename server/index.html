@@ -102,6 +102,7 @@
 <link rel="stylesheet" href="components/StockWidget/StockWidget.css">
 <link rel="stylesheet" href="components/FootballWidget/FootballWidget.css">
 <link rel="stylesheet" href="components/ClaudeWidget/ClaudeWidget.css">
+<link rel="stylesheet" href="components/AIUsageWidget/AIUsageWidget.css">
 <link rel="stylesheet" href="components/NewsWidget/NewsWidget.css">
 <link rel="stylesheet" href="components/FansWidget/FansWidget.css">
 <link rel="stylesheet" href="components/PowerWidget/PowerWidget.css">
@@ -556,8 +557,12 @@
         <div class="football-widget-mount"></div>
       </section>
 
-      <!-- Claude Code usage ("Xenon Pulse") — local ~/.claude token reactor.
-           Fed over SSE ('claude'); hidden by default, added from the "+" palette. -->
+      <!-- Combined local Claude/Codex usage, available from the "+" palette. -->
+      <section class="panel aiusage-panel dashboard-widget" data-dashboard-widget="aiusage" data-dashboard-size="normal" data-dashboard-order="39" data-dashboard-hidden="true">
+        <div class="ai-usage-widget-mount"></div>
+      </section>
+
+      <!-- Claude Code usage and session controls. Fed over SSE ('claude'). -->
       <section class="panel claude-panel dashboard-widget" data-dashboard-widget="claude" data-dashboard-size="normal" data-dashboard-order="27" data-dashboard-hidden="true">
         <div class="claude-widget-mount"></div>
       </section>
@@ -4009,6 +4014,7 @@
 <script src="js/stock-widget.js"></script>
 <script src="js/football-widget.js"></script>
 <script src="js/claude-widget.js"></script>
+<script src="js/ai-usage-widget.js"></script>
 <script src="js/news-widget.js"></script>
 <script src="js/sensor-access.js"></script>
 <script src="js/fans-widget.js"></script>

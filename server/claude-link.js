@@ -175,6 +175,7 @@ async function status(dataDir, port) {
   return {
     // "linked" means the pieces that make the widget work are actually present.
     linked: ourHookCount > 0 && ours,
+    usageLinked: ours && String(sl.command).includes(STATUSLINE_SCRIPT) && state.port === port && typeof state.token === 'string' && state.token.length >= 32,
     settingsPath: file,
     settingsExists: !!settings,
     hookCount: ourHookCount,
@@ -191,13 +192,14 @@ async function status(dataDir, port) {
 }
 
 // ── link ─────────────────────────────────────────────────────────────────────
-async function link(dataDir, port) {
+async function link(dataDir, port, { usageOnly = false } = {}) {
   const file = settingsPath();
   await fs.promises.mkdir(configDir(), { recursive: true });
 
   const token = await ensureToken(dataDir);
   const state = await readState(dataDir);
   const existing = await readJson(file);
+  if (!existing && fs.existsSync(file)) throw new Error('Claude settings are invalid; refusing to overwrite them.');
 
   // Back the untouched original up exactly once, so unlink always has a floor to
   // fall back to even if our own bookkeeping is lost.
@@ -207,32 +209,34 @@ async function link(dataDir, port) {
   }
 
   const settings = existing ? { ...existing } : {};
-  const base = `http://127.0.0.1:${port}/api/claude`;
+  if (!usageOnly) {
+    const base = `http://127.0.0.1:${port}/api/claude`;
 
-  // Hooks: drop any previous copy of ours first so relinking never duplicates.
-  const hooks = stripOurHooks(settings.hooks, port);
-  for (const event of EVENT_HOOKS) {
-    const groups = Array.isArray(hooks[event]) ? hooks[event].slice() : [];
-    // No matcher → fires on every occurrence of the event.
-    groups.push({ hooks: [ourHandler(`${base}/event`, EVENT_TIMEOUT_SEC, token)] });
-    hooks[event] = groups;
+    // Hooks: drop any previous copy of ours first so relinking never duplicates.
+    const hooks = stripOurHooks(settings.hooks, port);
+    for (const event of EVENT_HOOKS) {
+      const groups = Array.isArray(hooks[event]) ? hooks[event].slice() : [];
+      // No matcher → fires on every occurrence of the event.
+      groups.push({ hooks: [ourHandler(`${base}/event`, EVENT_TIMEOUT_SEC, token)] });
+      hooks[event] = groups;
+    }
+    const permGroups = Array.isArray(hooks[PERMISSION_EVENT]) ? hooks[PERMISSION_EVENT].slice() : [];
+    permGroups.push({ hooks: [ourHandler(`${base}/permission`, PERMISSION_TIMEOUT_SEC, token)] });
+    hooks[PERMISSION_EVENT] = permGroups;
+    // Stop: its own endpoint, because this is the one that may answer with a
+    // decision (it delivers a follow-up typed on the dashboard).
+    const stopGroups = Array.isArray(hooks[TURN_END_EVENT]) ? hooks[TURN_END_EVENT].slice() : [];
+    stopGroups.push({ hooks: [ourHandler(`${base}/turn-end`, TURN_END_TIMEOUT_SEC, token)] });
+    hooks[TURN_END_EVENT] = stopGroups;
+    // A SECOND PreToolUse group, matched to AskUserQuestion alone. Both groups
+    // fire for that tool — the unmatched one records it in 5 seconds like any
+    // other, this one is allowed to block while the user picks an option — and no
+    // other tool call ever touches the slow path.
+    const qGroups = Array.isArray(hooks[QUESTION_EVENT]) ? hooks[QUESTION_EVENT].slice() : [];
+    qGroups.push({ matcher: QUESTION_MATCHER, hooks: [ourHandler(`${base}/question`, QUESTION_TIMEOUT_SEC, token)] });
+    hooks[QUESTION_EVENT] = qGroups;
+    settings.hooks = hooks;
   }
-  const permGroups = Array.isArray(hooks[PERMISSION_EVENT]) ? hooks[PERMISSION_EVENT].slice() : [];
-  permGroups.push({ hooks: [ourHandler(`${base}/permission`, PERMISSION_TIMEOUT_SEC, token)] });
-  hooks[PERMISSION_EVENT] = permGroups;
-  // Stop: its own endpoint, because this is the one that may answer with a
-  // decision (it delivers a follow-up typed on the dashboard).
-  const stopGroups = Array.isArray(hooks[TURN_END_EVENT]) ? hooks[TURN_END_EVENT].slice() : [];
-  stopGroups.push({ hooks: [ourHandler(`${base}/turn-end`, TURN_END_TIMEOUT_SEC, token)] });
-  hooks[TURN_END_EVENT] = stopGroups;
-  // A SECOND PreToolUse group, matched to AskUserQuestion alone. Both groups
-  // fire for that tool — the unmatched one records it in 5 seconds like any
-  // other, this one is allowed to block while the user picks an option — and no
-  // other tool call ever touches the slow path.
-  const qGroups = Array.isArray(hooks[QUESTION_EVENT]) ? hooks[QUESTION_EVENT].slice() : [];
-  qGroups.push({ matcher: QUESTION_MATCHER, hooks: [ourHandler(`${base}/question`, QUESTION_TIMEOUT_SEC, token)] });
-  hooks[QUESTION_EVENT] = qGroups;
-  settings.hooks = hooks;
 
   // Statusline: preserve whatever the user had. Only capture it when it isn't
   // already ours, otherwise relinking would chain our own script to itself.

@@ -108,6 +108,7 @@ const { preserveFootballCreds, redactFootballCreds } = require('./football-creds
 const news = require('./news');
 const { preserveNewsCreds, redactNewsCreds } = require('./news-creds');
 const claudeUsage = require('./claude-usage');
+const aiUsage = require('./ai-usage');
 const claudeBridge = require('./claude-bridge');
 const claudeSessions = require('./claude-sessions');
 const claudeLink = require('./claude-link');
@@ -7562,7 +7563,7 @@ async function transcodeMp4BackgroundToWebm(sourcePath, targetPath) {
 
 const DashboardInstances = require('./js/dashboard-instances.js');
 
-const DASHBOARD_WIDGET_IDS = Object.freeze(['media', 'agenda', 'mic', 'audio', 'system', 'notes', 'tasks', 'calendar', 'timer', 'chat', 'deck', 'remote', 'twitch', 'twitchwatch', 'obs', 'youtube', 'youtubelive', 'discord', 'spotify', 'browser', 'secondscreen', 'weather', 'smarthome', 'streamerbot', 'wavelink', 'lighting', 'notifications', 'stocks', 'football', 'news', 'claude', 'vitals', 'unifi', 'slideshow', 'fans', 'power', 'battery', 'search', 'disk', 'transfer', 'phone', 'custom']);
+const DASHBOARD_WIDGET_IDS = Object.freeze(['media', 'agenda', 'mic', 'audio', 'system', 'notes', 'tasks', 'calendar', 'timer', 'chat', 'deck', 'remote', 'twitch', 'twitchwatch', 'obs', 'youtube', 'youtubelive', 'discord', 'spotify', 'browser', 'secondscreen', 'weather', 'smarthome', 'streamerbot', 'wavelink', 'lighting', 'notifications', 'stocks', 'football', 'news', 'claude', 'aiusage', 'vitals', 'unifi', 'slideshow', 'fans', 'power', 'battery', 'search', 'disk', 'transfer', 'phone', 'custom']);
 const DASHBOARD_PAGE_IDS = Object.freeze(['dashboard']);
 const DASHBOARD_TAB_IDS = Object.freeze(['main', 'net']);
 const CALENDAR_TAB_IDS = Object.freeze(['calendar', 'tasks', 'timer']);
@@ -7627,6 +7628,7 @@ const DEFAULT_DASHBOARD_LAYOUT = Object.freeze({
     football: Object.freeze({ x: 8, y: 28, w: 8, h: 10, visible: false, page: 'dashboard' }),
     news:     Object.freeze({ x: 0, y: 38, w: 8, h: 10, visible: false, page: 'dashboard' }),
     claude:   Object.freeze({ x: 16, y: 28, w: 8, h: 10, visible: false, page: 'dashboard' }),
+    aiusage:  Object.freeze({ x: 0, y: 0, w: 8, h: 16, visible: false, page: 'dashboard' }),
     vitals:   Object.freeze({ x: 8, y: 38, w: 8, h: 8, visible: false, page: 'dashboard' }),
     unifi:    Object.freeze({ x: 8, y: 18, w: 8, h: 8, visible: false, page: 'dashboard' }),
     slideshow: Object.freeze({ x: 0, y: 48, w: 8, h: 8, visible: false, page: 'dashboard' }),
@@ -11731,6 +11733,7 @@ let _claudeLastFetch = 0;
 // the two things the filesystem cannot — the real subscription quota, and a
 // blocking permission request the user answers from the touchscreen.
 const _claudeBridge = claudeBridge.createBridge({ onChange: () => _claudeBridgeChanged() });
+const _aiUsage = aiUsage.createService({ claudeReader: _claudeReader, bridge: () => _claudeBridge.snapshot(), connection: () => claudeLink.status(DATA_DIR, PORT), quotaCache: aiUsage.createClaudeQuotaReader() });
 let _claudeBridgeToken = '';        // resolved once at boot from DATA_DIR
 let _claudeBridgePushTimer = null;
 
@@ -12040,6 +12043,7 @@ const CSRF_MUTATION_PATHS = new Set([
   '/api/claude/answer',
   '/api/claude/reply',
   '/api/claude/link',
+  '/api/claude/link-usage',
   '/api/claude/unlink',
   '/api/claude/run',
   '/api/claude/run/stop',
@@ -15274,6 +15278,11 @@ const handleRequest = async (req, res) => {
       });
     } catch (e) { err500(e.message); }
 
+  } else if (reqPath === '/api/ai-usage' && req.method === 'GET') {
+    res.setHeader('Cache-Control', 'no-store');
+    try { json(await _aiUsage.snapshot(Date.now(), { force: urlObj.searchParams.get('refresh') === '1' })); }
+    catch { res.writeHead(503, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Usage is temporarily unavailable' })); }
+
   } else if (reqPath === '/api/claude' && req.method === 'GET') {
     // Local Claude Code usage aggregate + the budget config the reactor renders.
     // No key, no network — reads ~/.claude transcripts. Ensures the cache is warm
@@ -15460,6 +15469,13 @@ const handleRequest = async (req, res) => {
       // surface — the widget tells the user rather than silently doing nothing.
       json({ ok });
     } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/claude/link-usage' && req.method === 'POST') {
+    try {
+      const st = await claudeLink.link(DATA_DIR, PORT, { usageOnly: true });
+      _claudeBridgeToken = await claudeLink.ensureToken(DATA_DIR);
+      json({ ok: true, usageLinked: st.usageLinked });
+    } catch { err500('Could not connect Claude usage. Check that Claude settings are valid and writable.'); }
 
   } else if (reqPath === '/api/claude/link' && req.method === 'GET') {
     try { json(await claudeLink.status(DATA_DIR, PORT)); }

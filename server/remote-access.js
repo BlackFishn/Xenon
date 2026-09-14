@@ -191,7 +191,7 @@ const DEFAULT_GET_MUTATORS = new Set([
   '/api/community/supporter/save',
   '/api/community/rate', '/icon-pack', '/sound-pack', '/api/lighting/sdk-install',
   '/api/claude/event', '/api/claude/permission', '/api/claude/question', '/api/claude/turn-end',
-  '/api/claude/decide', '/api/claude/answer', '/api/claude/reply', '/api/claude/link',
+  '/api/claude/decide', '/api/claude/answer', '/api/claude/reply', '/api/claude/link', '/api/claude/link-usage',
   '/api/claude/unlink', '/api/claude/run', '/api/claude/run/stop', '/api/claude/attach',
   '/search/open', '/search/reveal', '/search/ai',
   '/disk/scan', '/disk/scan/cancel', '/disk/clean', '/disk/clean/cancel', '/api/disk/advisor',

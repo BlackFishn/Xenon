@@ -30209,6 +30209,46 @@ Object.assign(i18n.nl, {
 
 
 
+Object.assign(i18n.en, {
+  layout_widget_aiusage: 'AI Usage',
+  aiu_today: 'Today', aiu_yesterday: 'Yesterday', aiu_month: '30 Days',
+  aiu_period: 'Usage period', aiu_local: 'Local', aiu_refresh: 'Refresh usage',
+  aiu_refresh_short: 'Refresh', aiu_refreshing: 'Refreshing…', aiu_checked: 'Last checked',
+  aiu_refreshing_files: 'Checking usage…', aiu_refresh_new: 'Files checked · usage updated',
+  aiu_refresh_unchanged: 'Files checked · no new usage', aiu_refresh_cached: 'Checked · using recent cached history',
+  aiu_refresh_checked: 'Usage checked', aiu_refresh_error: 'Refresh failed · last reading kept',
+  aiu_copy_image: 'Copy widget as image', aiu_copying: 'Copying image…',
+  aiu_copied: 'Image copied · paste it into your chat',
+  aiu_copy_failed: 'Could not copy the image. Allow clipboard access and try again.',
+  aiu_copy_unavailable: 'Image copying is unavailable here. Open Xenon on localhost or HTTPS in a supported browser.',
+  aiu_claude_cache: 'Claude account cache',
+  aiu_connection_not_linked: 'No Claude quota report yet', aiu_connection_waiting: 'Connected · waiting for Claude',
+  aiu_connection_unavailable: 'Could not check the Claude connection', aiu_connection_retry: 'Press Refresh to check the connection again.',
+  aiu_connect_claude: 'Connect Claude quotas', aiu_connecting: 'Connecting…',
+  aiu_claude_connect_hint: 'Open /usage in Claude Code, then Refresh here to read its saved quota. You can also connect the status line; existing status lines and hooks are preserved.',
+  aiu_claude_waiting: 'Open /usage in Claude Code, then press Refresh here. Xenon reads the account quota saved by Claude. The status line is another source when available.',
+  aiu_connect_failed: 'Connection failed. Check that Claude settings are valid and writable, then retry.',
+  aiu_equivalent: 'API equivalent', aiu_tokens: 'Total tokens', aiu_cache_hit: 'Cache hit rate',
+  aiu_estimate_note: 'Estimated API value of local activity, not your subscription bill. Standard token rates; tool and premium charges excluded.',
+  aiu_session: 'Session · 5h', aiu_weekly: 'Weekly · 7d', aiu_left: 'left', aiu_used: 'used',
+  aiu_resets: 'Resets in', aiu_reset_pending: 'Reset time passed', aiu_wait_update: 'Awaiting new reading',
+  aiu_old_reading: 'Older reading', aiu_no_data: 'No data', aiu_observed: 'Observed', aiu_ago: 'ago',
+  aiu_local_history: 'Local history', aiu_window: 'window', aiu_other_window: 'Other window',
+  aiu_trend: 'Daily token activity', aiu_details: 'Usage details',
+  aiu_input: 'Fresh input', aiu_output: 'Output', aiu_cache_read: 'Cache read', aiu_cache_write: 'Cache write',
+  aiu_credits: 'Extra usage credits', aiu_unlimited: 'Unlimited', aiu_not_reported: 'Not reported',
+  aiu_models: 'Models in selected period', aiu_no_activity: 'No activity in this period.',
+  aiu_unpriced: 'Some models have no verified price. Their tokens are included; their cost is unavailable.',
+  aiu_partial: 'Partial estimate', aiu_incomplete: 'Some local files could not be read. Totals may be incomplete.',
+  aiu_not_found: 'No local sessions found yet. Run a coding session on this computer, then refresh.',
+  aiu_claude_hint: 'Claude quotas come from its saved /usage account reading or status line. Open /usage in Claude Code, then Refresh here. The observed time shows when Claude obtained the reading.',
+  aiu_codex_hint: 'Codex quotas update when your signed-in local Codex app or CLI records usage. API-key sessions may not report subscription limits.',
+  aiu_help: 'About this usage', aiu_help_body: 'History comes from Claude Code and Codex sessions on this computer. Quotas are the latest reported account readings and do not change with the date filter. Missing limits, plans, or credits stay unavailable. Dates use the server’s local time zone.',
+  aiu_updated: 'Updated', aiu_loading: 'Reading local usage…',
+  aiu_load_failed: 'Could not load usage. Check the Xenon server, then tap Refresh.',
+  aiu_refresh_failed: 'Refresh failed. Showing the last successful reading.',
+});
+
 // Direct-link YouTube player; missing locale entries use the English fallback.
 Object.assign(i18n.en, {
   "youtube_queue": "Queue",

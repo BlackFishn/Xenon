@@ -44,12 +44,16 @@ const HOT_FILE_MS = 6 * 60 * 60 * 1000;  // between sweeps, re-stat only files a
 // Subscription users don't pay this — it's the "you burned ≈ $X of API" figure.
 // Input/output $/MTok from the current model catalog; cache-write bills 1.25x
 // input and cache-read ~0.10x input (Anthropic prompt-caching economics).
+// https://platform.claude.com/docs/en/about-claude/pricing (checked 2026-09-11).
 const CACHE_WRITE_MULT = 1.25;
 const CACHE_READ_MULT = 0.10;
+const KNOWN_PRICE = /^claude-(?:(?:fable|mythos)-5(?:-1)?|mythos-preview|opus-(?:4(?:-[15678])?|5)|sonnet-(?:4(?:-[56])?|5)|haiku-4-5)(?:-\d{8})?$/;
 function priceForModel(model) {
   const m = String(model || '');
+  if (/^claude-opus-4-(?:1(?:-|$)|\d{8}$)/.test(m)) return [15, 75];
   if (m.startsWith('claude-opus')) return [5, 25];
   if (m.startsWith('claude-fable') || m.startsWith('claude-mythos')) return [10, 50];
+  if (m.startsWith('claude-sonnet-5')) return [2, 10];
   if (m.startsWith('claude-sonnet')) return [3, 15];
   if (m.startsWith('claude-haiku')) return [1, 5];
   return [5, 25]; // sensible default (Opus-tier) for an unrecognized id
@@ -60,7 +64,7 @@ function recordCost(r) {
     r.in * inRate +
     r.out * outRate +
     r.cc * inRate * CACHE_WRITE_MULT +
-    r.cr * inRate * CACHE_READ_MULT
+    r.cr * inRate * (/^claude-(fable|mythos)-5-1(?:-|$)/.test(r.model) ? 0.025 : CACHE_READ_MULT)
   ) / 1e6;
 }
 
@@ -308,7 +312,9 @@ function addTo(b, r, tokens, cost) {
 function aggregate(fileCache, now) {
   const weekStart = weekStartMs(now);
   const dayStart = startOfLocalDay(now);
-  const historyCutoff = dayStart - (HISTORY_DAYS - 1) * 86400000;
+  const historyStart = new Date(dayStart);
+  historyStart.setDate(historyStart.getDate() - HISTORY_DAYS + 1);
+  const historyCutoff = historyStart.getTime();
 
   const total = newBucket();
   const todayB = newBucket();
@@ -317,6 +323,7 @@ function aggregate(fileCache, now) {
   const byModel = new Map();    // model → bucket
   const byDay = new Map();      // 'YYYY-MM-DD' → tokens (last HISTORY_DAYS window)
   const byDayCr = new Map();    // 'YYYY-MM-DD' → cache-read tokens (for cache-vs-fresh)
+  const dayDetails = new Map(); // AI Usage shares this reader; no second transcript scan.
   let latest = null;            // most recent record (drives "live now")
 
   for (const entry of fileCache.values()) {
@@ -338,6 +345,15 @@ function aggregate(fileCache, now) {
         const k = localDayKey(r.t);
         byDay.set(k, (byDay.get(k) || 0) + tokens);
         byDayCr.set(k, (byDayCr.get(k) || 0) + r.cr);
+        const priced = KNOWN_PRICE.test(modelKey);
+        const detail = dayDetails.get(k) || { ...newBucket(), unpriced: 0, models: new Map() };
+        addTo(detail, r, tokens, priced ? cost : 0);
+        detail.unpriced += priced ? 0 : 1;
+        const model = detail.models.get(modelKey) || { ...newBucket(), unpriced: 0 };
+        addTo(model, r, tokens, priced ? cost : 0);
+        model.unpriced += priced ? 0 : 1;
+        detail.models.set(modelKey, model);
+        dayDetails.set(k, detail);
       }
       if (!latest || r.t > latest.t) latest = r;
     }
@@ -347,9 +363,14 @@ function aggregate(fileCache, now) {
   // widget can draw a fixed-length bar chart with gaps as zero.
   const daily = [];
   for (let i = HISTORY_DAYS - 1; i >= 0; i--) {
-    const key = localDayKey(dayStart - i * 86400000);
+    const date = new Date(dayStart);
+    date.setDate(date.getDate() - i);
+    const key = localDayKey(date.getTime());
     const tokens = byDay.get(key) || 0;
-    daily.push({ day: key, tokens, cacheRead: byDayCr.get(key) || 0 });
+    const detail = dayDetails.get(key) || { ...newBucket(), models: new Map() };
+    daily.push({ day: key, tokens, cost: detail.cost, reqs: detail.reqs, unpriced: detail.unpriced || 0,
+      input: detail.in, output: detail.out, cacheWrite: detail.cc, cacheRead: byDayCr.get(key) || 0,
+      models: Array.from(detail.models, ([model, b]) => ({ model, tokens: b.tokens, cost: b.cost, reqs: b.reqs, unpriced: b.unpriced })) });
   }
 
   const topProjects = Array.from(byProject.entries())
@@ -442,14 +463,14 @@ function createReader(options) {
   let cacheDirty = true;       // a file was (re)parsed or forgotten since the last aggregate
   let lastAgg = null;          // { agg, dayStart } — reusable while nothing moves
 
-  async function loadRecords(now) {
+  async function loadRecords(now, force) {
     // A heavy Claude user can have hundreds of transcripts: a readdir of every
     // project dir plus a stat per file each refresh is the dominant recurring
     // cost. Full sweeps are therefore throttled to FULL_SCAN_MS; between them
     // only "hot" files (recently appended — in practice the live session) get
     // re-stat'd. New sessions are picked up by the next sweep, ≤1 min late.
     let files;
-    if (knownFiles.length === 0 || (now - lastScanAt) >= FULL_SCAN_MS) {
+    if (force || knownFiles.length === 0 || (now - lastScanAt) >= FULL_SCAN_MS) {
       files = await listSessionFiles(baseDir);
       knownFiles = files;
       lastScanAt = now;
@@ -490,9 +511,10 @@ function createReader(options) {
     }, READ_CONCURRENCY);
   }
 
-  async function getUsage(now) {
+  async function getUsage(now, { force = false } = {}) {
     // Coalesce concurrent callers onto one filesystem pass.
-    if (!loading) loading = loadRecords(now).finally(() => { loading = null; });
+    if (force && loading) await loading;
+    if (!loading) loading = loadRecords(now, force).finally(() => { loading = null; });
     await loading;
     // Re-summing the whole history is pure CPU waste when no file changed, the
     // local day is the same and no session is live (a live session can only

@@ -33,7 +33,7 @@ test('effectiveWeeklyBudget: custom budget wins, else plan preset, else 0', () =
 
 test('priceForModel maps families with an Opus-tier default', () => {
   assert.deepEqual(cu.priceForModel('claude-opus-4-8'), [5, 25]);
-  assert.deepEqual(cu.priceForModel('claude-sonnet-5'), [3, 15]);
+  assert.deepEqual(cu.priceForModel('claude-sonnet-5'), [2, 10]);
   assert.deepEqual(cu.priceForModel('claude-haiku-4-5-20251001'), [1, 5]);
   assert.deepEqual(cu.priceForModel('claude-fable-5'), [10, 50]);
   assert.deepEqual(cu.priceForModel('mystery-model'), [5, 25]);
@@ -177,4 +177,20 @@ test('incremental append: new records fold in via the tail-read path', async () 
   assert.equal(agg2.total.tokens, 165);
 
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+
+test('forced Claude scan discovers a newly created session before the scan interval expires', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xenon-claude-force-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const proj = path.join(dir, 'C--test');
+  fs.mkdirSync(proj);
+  const now = Date.now();
+  const row = id => assistant({ ts: now, model: 'claude-opus-5', id, reqId: id, cwd: 'C:/test', branch: 'main', usage: { input_tokens: 10, output_tokens: 5 } }) + '\n';
+  fs.writeFileSync(path.join(proj, 'first.jsonl'), row('one'));
+  const reader = cu.createReader({ dir });
+  assert.equal((await reader.getUsage(now)).total.tokens, 15);
+  fs.writeFileSync(path.join(proj, 'second.jsonl'), row('two'));
+  assert.equal((await reader.getUsage(now + 1)).total.tokens, 15);
+  assert.equal((await reader.getUsage(now + 2, { force: true })).total.tokens, 30);
 });
