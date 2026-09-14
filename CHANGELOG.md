@@ -6,6 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **AJAZZ StreamDock can sleep and wake the XENEON EDGE display.** A standalone Sleep / Wake plugin targets the EDGE hardware ID, confirms the resulting power state, and keeps the other displays running. See [installation and recovery](tools/streamdock-xeneon-edge/README.md).
 - **YouTube has a Focus mode.** Center the video at its largest proportional size in the window, with the surrounding dashboard blurred. Click or tap the blurred area, or press Escape while keyboard focus is on the dashboard, to restore the previous layout without restarting playback. No exit button covers the video; a slim blurred side margin remains available in 16:9 windows.
 - **YouTube now plays pasted links without an account connection.** Play immediately or build a queue, keep favorites and recent videos on this browser, and choose autoplay or repeat. Playback uses YouTube’s own controls; Fill widget hides the surrounding UI without restarting the video. Browser fullscreen and the native kiosk’s existing safe fullscreen path remain separate. See the [YouTube player guide](docs/youtube-player.md).
 - **Xenon AI can connect to a ChatGPT subscription through Codex.** Choose API key or ChatGPT subscription, sign in from Settings, and select an account model. Chat, images, and Xenon commands use the subscription allowance; voice uses local Whisper and Edge TTS. Credentials remain in a separate server-only Codex profile. See [setup and requirements](docs/chatgpt-subscription.md).

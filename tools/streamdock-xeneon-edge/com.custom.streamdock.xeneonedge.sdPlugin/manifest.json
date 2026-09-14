@@ -1,0 +1,30 @@
+{
+	"SDKVersion": 2,
+	"Name": "XENEON EDGE",
+	"Author": "Custom",
+	"Version": "1.0.0",
+	"Description": "Sleep and wake only the CORSAIR XENEON EDGE display.",
+	"Category": "XENEON EDGE",
+	"CategoryIcon": "static/category.svg",
+	"Icon": "static/on.svg",
+	"CodePath": "plugin/index.mjs",
+	"CodePathWin": "plugin/index.mjs",
+	"Nodejs": { "Version": "20" },
+	"OS": [{ "Platform": "windows", "MinimumVersion": "10" }],
+	"Software": { "MinimumVersion": "3.10.188.226" },
+	"Actions": [{
+		"UUID": "com.custom.streamdock.xeneonedge.toggle",
+		"Name": "Sleep / Wake",
+		"Tooltip": "Turn the XENEON EDGE display off or back on. Other monitors stay on.",
+		"Icon": "static/on.svg",
+		"DisableAutomaticStates": true,
+		"UserTitleEnabled": false,
+		"SupportedInMultiActions": false,
+		"Controllers": ["Keypad"],
+		"States": [
+			{ "Image": "static/on.svg" },
+			{ "Image": "static/off.svg" },
+			{ "Image": "static/unavailable.svg" }
+		]
+	}]
+}
