@@ -85,6 +85,9 @@ server/helper/
 # without this a local `swift build` leaves the whole toolchain's intermediates
 # staged next to the sources.
 helper-mac/.build/
+tools/audio-probe/bin/
+tools/audio-probe/obj/
+.codex/audio-build/
 
 # Xenon backend Windows service (WinSW): the downloaded host exe, the per-machine
 # generated config and the rolling logs. Only the template + scripts are versioned.
@@ -129,3 +132,9 @@ packages/design-system
 # user's install root, more than doubling a ~6 MB release. Its sources are
 # tracked, in tools/demo/.
 docs/demo/
+
+# Fork workspace, diagnostics, and release backups — local only
+.codex/
+.tmp/
+.worktrees/
+.local-releases/
