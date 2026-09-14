@@ -454,6 +454,8 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   // ChatGPT (OpenAI) + Claude (Anthropic). Keys are SERVER-ONLY: the server
   // redacts them on the wire and sends only the *Set booleans, so the browser
   // never holds them. The model tags are user-overridable.
+  openaiAuthMode: 'api',
+  chatgptModel: 'auto',
   openaiApiKey: '',
   openaiApiKeySet: false,
   // 'auto' / 'auto:<family>' = follow the provider's newest model of that family
@@ -1708,6 +1710,8 @@ function normalizeSettings(source) {
     // ChatGPT (OpenAI) + Claude (Anthropic). The keys are redacted to '' on the
     // wire (server-only) and re-supplied only while the user is typing one; the
     // *Set booleans carry "a key is saved" so the UI and the ready-gate know.
+    openaiAuthMode: value.openaiAuthMode === 'chatgpt' ? 'chatgpt' : 'api',
+    chatgptModel: normalizeModelChoice(value.chatgptModel),
     openaiApiKey: String(value.openaiApiKey || '').trim().slice(0, 200),
     openaiApiKeySet: value.openaiApiKeySet === true || !!String(value.openaiApiKey || '').trim(),
     openaiModel: normalizeModelChoice(value.openaiModel),
@@ -10079,6 +10083,12 @@ function _reflectAiProviderRows(provider) {
   show('settings-gemini-key-row', provider === 'gemini');
   show('settings-gemini-models', provider === 'gemini');
   show('settings-openai-panel', provider === 'openai');
+  const subscription = hubSettings.openaiAuthMode === 'chatgpt';
+  show('settings-openai-api', !subscription);
+  show('settings-chatgpt', subscription);
+  const mode = $('settings-openai-auth-mode');
+  if (mode) mode.value = subscription ? 'chatgpt' : 'api';
+  if (provider === 'openai' && subscription) refreshChatgptStatus();
   show('settings-anthropic-panel', provider === 'anthropic');
 }
 
@@ -10468,11 +10478,107 @@ function updateAnthropicModel(value) {
 //
 // "Custom…" stays as the fallback for a model the list does not carry (or when
 // offline), and a saved value is always kept selectable even if the API omits it.
+let _chatgptStatus = null;
+let _chatgptStatusRequest = null;
+let _chatgptPollTimer = null;
+
+function updateOpenaiAuthMode(value) {
+  hubSettings = normalizeSettings({ ...hubSettings, openaiAuthMode: value === 'chatgpt' ? 'chatgpt' : 'api' });
+  saveHubSettings();
+  if (typeof onAiKeyUpdated === 'function') onAiKeyUpdated();
+  if (typeof updateMediaChatKeyState === 'function') updateMediaChatKeyState();
+  _reflectAiProviderRows('openai');
+  _aiLoadProviderModels('openai');
+  if (typeof syncAiSettingsControls === 'function') syncAiSettingsControls();
+}
+
+// A newer settings page can be served while the old backend is still running.
+// Check HTTP errors before parsing so its empty 404 explains how to recover.
+async function _chatgptFetchJson(url, options) {
+  const res = await fetch(url, { cache: 'no-store', ...options });
+  if (!res.ok) {
+    const key = res.status === 404 && url.startsWith('/api/ai/chatgpt/')
+      ? 'settings_chatgpt_restart_backend'
+      : res.status === 403 ? 'settings_chatgpt_local_only' : 'settings_chatgpt_unavailable';
+    throw new Error(t(key));
+  }
+  let data;
+  try { data = await res.json(); }
+  catch { throw new Error(t('settings_chatgpt_bad_response')); }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error(t('settings_chatgpt_bad_response'));
+  }
+  return data;
+}
+
+function refreshChatgptStatus() {
+  if (_chatgptStatusRequest) return _chatgptStatusRequest;
+  clearTimeout(_chatgptPollTimer);
+  _chatgptStatusRequest = (async () => {
+    const status = $('settings-chatgpt-status');
+    try {
+      const data = await _chatgptFetchJson('/api/ai/chatgpt/status');
+      if (typeof data.available !== 'boolean' || typeof data.connected !== 'boolean') {
+        throw new Error(t('settings_chatgpt_bad_response'));
+      }
+      _chatgptStatus = data;
+      if (status) status.textContent = data.connected
+        ? t('settings_chatgpt_connected') + (data.email ? ' · ' + data.email : '') + (data.plan ? ' · ' + data.plan : '')
+        : data.error || t(data.pending ? 'settings_chatgpt_pending' : 'settings_chatgpt_signed_out');
+      const login = $('settings-chatgpt-login');
+      const logout = $('settings-chatgpt-logout');
+      if (login) login.hidden = data.connected;
+      if (logout) logout.hidden = !data.connected && !data.pending;
+      if (data.connected) await _aiLoadProviderModels('chatgpt');
+      else { delete _aiModelCatalog.chatgpt; _aiRenderProviderControls('chatgpt'); }
+      if (data.pending && hubSettings.aiProvider === 'openai' && hubSettings.openaiAuthMode === 'chatgpt'
+          && $('settings-chatgpt')?.getClientRects().length) {
+        _chatgptPollTimer = setTimeout(refreshChatgptStatus, 2000);
+      }
+    } catch (e) {
+      _chatgptStatus = null;
+      if (status) status.textContent = e.message || t('settings_chatgpt_unavailable');
+    }
+  })().finally(() => { _chatgptStatusRequest = null; });
+  return _chatgptStatusRequest;
+}
+
+async function connectChatgpt() {
+  const button = $('settings-chatgpt-login');
+  if (button) button.disabled = true;
+  try {
+    const data = await _chatgptFetchJson('/api/ai/chatgpt/login', { method: 'POST' });
+    if (data.error || typeof data.authUrl !== 'string' || !data.authUrl) throw new Error(data.error || t('settings_chatgpt_bad_response'));
+    // Existing OS browser action works in the native and iCUE surfaces too.
+    const openResult = await _chatgptFetchJson('/actions/run', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'openUrl', url: data.authUrl }) });
+    if (openResult.ok !== true) throw new Error(t('settings_chatgpt_unavailable'));
+    await refreshChatgptStatus();
+  } catch (e) {
+    const status = $('settings-chatgpt-status');
+    if (status) status.textContent = e.message;
+  } finally { if (button) button.disabled = false; }
+}
+
+async function disconnectChatgpt() {
+  const button = $('settings-chatgpt-logout');
+  if (button) button.disabled = true;
+  try {
+    const data = await _chatgptFetchJson('/api/ai/chatgpt/logout', { method: 'POST' });
+    if (data.error || data.ok !== true) throw new Error(data.error || t('settings_chatgpt_bad_response'));
+    await refreshChatgptStatus();
+  } catch (e) {
+    const status = $('settings-chatgpt-status');
+    if (status) status.textContent = e.message;
+  } finally { if (button) button.disabled = false; }
+}
+
 const AI_MODEL_CONTROLS = [
   { provider: 'gemini', role: 'chat', key: 'geminiModel', sel: 'settings-gemini-model' },
   { provider: 'gemini', role: 'chatPro', key: 'geminiModelPro', sel: 'settings-gemini-model-pro' },
   { provider: 'gemini', role: 'tts', key: 'geminiModelTts', sel: 'settings-gemini-model-tts' },
   { provider: 'gemini', role: 'live', key: 'geminiModelLive', sel: 'settings-gemini-model-live' },
+  { provider: 'chatgpt', role: 'chat', key: 'chatgptModel', sel: 'settings-chatgpt-model' },
   { provider: 'openai', role: 'chat', key: 'openaiModel', sel: 'settings-openai-model' },
   { provider: 'openai', role: 'stt', key: 'openaiSttModel', sel: 'settings-openai-stt-model' },
   { provider: 'openai', role: 'tts', key: 'openaiTtsModel', sel: 'settings-openai-tts-model' },
@@ -10556,16 +10662,20 @@ function _aiRenderProviderControls(provider) {
 }
 
 async function _aiLoadProviderModels(provider, opts) {
+  if (provider === 'openai' && hubSettings.openaiAuthMode === 'chatgpt') provider = 'chatgpt';
   if (!_aiControlsFor(provider).some(c => $(c.sel))) return;
   // Render from what we already have (or from nothing) first, so the panel is
   // never empty while the request is in flight.
   _aiRenderProviderControls(provider);
-  const keySet = provider === 'openai' ? hubSettings.openaiApiKeySet
+  const keySet = provider === 'chatgpt' ? _chatgptStatus?.connected
+    : provider === 'openai' ? hubSettings.openaiApiKeySet
     : provider === 'anthropic' ? hubSettings.anthropicApiKeySet
       : hubSettings.geminiApiKeySet;
   if (!keySet) return; // no key yet → nothing to fetch
   try {
-    const r = await fetch('/api/ai/models?provider=' + provider + ((opts && opts.force) ? '&refresh=1' : ''));
+    const url = provider === 'chatgpt' ? '/api/ai/chatgpt/models'
+      : '/api/ai/models?provider=' + provider + ((opts && opts.force) ? '&refresh=1' : '');
+    const r = await fetch(url);
     const d = await r.json();
     if (d && Array.isArray(d.models)) {
       _aiModelCatalog[provider] = d;

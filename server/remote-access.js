@@ -91,6 +91,9 @@ const CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
 // the same reason — it needs a person at the PC, because it raises a dialog
 // there, restarts the server, or downloads and places an executable.
 const REMOTE_DENY = new Set([
+  // ChatGPT OAuth belongs to the PC hosting the browser callback.
+  '/api/ai/chatgpt/status', '/api/ai/chatgpt/login',
+  '/api/ai/chatgpt/logout', '/api/ai/chatgpt/models',
   // Raises a UAC prompt on the PC. Tapping this from another room produces a
   // prompt nobody is standing in front of.
   '/system/enable-sensors',

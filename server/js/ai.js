@@ -21,7 +21,7 @@ function _aiProviderCfg() {
   // model from its own settings (server-only key path), so this is informational
   // there; for ollama it selects the local model.
   let model = 'auto';
-  if (provider === 'openai') model = typeof s.openaiModel === 'string' ? s.openaiModel : 'auto';
+  if (provider === 'openai') model = (s.openaiAuthMode === 'chatgpt' ? s.chatgptModel : s.openaiModel) || 'auto';
   else if (provider === 'anthropic') model = typeof s.anthropicModel === 'string' ? s.anthropicModel : 'auto';
   else if (provider === 'ollama') model = typeof s.ollamaModel === 'string' ? s.ollamaModel : 'auto';
   return {
@@ -37,7 +37,7 @@ function _aiProviderReady() {
   const s = (typeof hubSettings !== 'undefined' && hubSettings) ? hubSettings : {};
   const p = _aiProviderCfg().provider;
   if (p === 'ollama') return true;
-  if (p === 'openai') return !!s.openaiApiKeySet;
+  if (p === 'openai') return s.openaiAuthMode === 'chatgpt' || !!s.openaiApiKeySet;
   if (p === 'anthropic') return !!s.anthropicApiKeySet;
   return geminiKeyReady(s);
 }
@@ -100,6 +100,7 @@ function _aiMaybeSummarize(apiKey) {
 
 function _aiFormatApiError(err) {
   const msg = (err && err.message) || String(err || '');
+  if (/whisper_not_installed|whisper_model_missing/.test(msg)) return t('ai_whisper_required');
   const isKeyError   = /API_KEY|api key|invalid key/i.test(msg);
   const isQuotaError = /quota|rate.?limit|429|free_tier/i.test(msg);
   const retryMatch   = msg.match(/retry in ([\d.]+)s/i);
@@ -967,7 +968,8 @@ async function _aiStartServerRecorder() {
   if (btn) btn.classList.add('active');
   setAiStatus('connecting');
   try {
-    const r = await fetch('/api/stt/start', { method: 'POST' });
+    const r = await fetch('/api/stt/start', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: _aiProviderCfg().provider }) });
     if (r.status === 409) {
       // Another tab already claimed the mic for this wake event — back off silently
       aiListening = false;
@@ -984,6 +986,7 @@ async function _aiStartServerRecorder() {
     _aiServerRecordingId = id;
     // Solo ORA la registrazione è confermata — l'utente può parlare
     setAiStatus('listening');
+    if (_aiVoiceSessionActive) _aiVoiceState('listening');
     _aiLog(`Server STT: registrazione avviata id=${id}`);
   } catch (err) {
     _aiLog(`Server STT: errore avvio: ${err.message}`);
@@ -992,7 +995,9 @@ async function _aiStartServerRecorder() {
     document.body.classList.remove('ai-listening');
     if (btn) btn.classList.remove('active');
     setAiStatus('');
-    _aiAppendBubble('assistant', `Microfono non disponibile: ${err.message}`);
+    if (_aiVoiceSessionActive) _aiEndVoiceSession();
+    if (!aiPanelOpen) openAiPanel();
+    _aiAppendBubble('assistant', _aiFormatApiError(err));
   }
 }
 
@@ -1068,8 +1073,9 @@ async function _aiStopServerRecorder() {
     if (wasVoice && myGen !== _aiVoiceGen) return; // session gone — swallow the error too
     _aiLog(`Server STT: errore stop: ${err.message}`);
     setAiStatus('');
-    _aiAppendBubble('assistant', _aiFormatApiError(err));
     if (_aiVoiceSessionActive) _aiEndVoiceSession();
+    if (!aiPanelOpen) openAiPanel();
+    _aiAppendBubble('assistant', _aiFormatApiError(err));
   }
 }
 
@@ -1093,7 +1099,8 @@ async function runAiMicTest() {
   if (btn) btn.disabled = true;
   let id = null;
   try {
-    const r = await fetch('/api/stt/start', { method: 'POST' });
+    const r = await fetch('/api/stt/start', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'test' }) });
     if (r.status === 409) { _aiSetMicTestResult(t('ai_mictest_busy'), 'warn'); return; }
     const started = await r.json().catch(() => ({}));
     if (started.error || !started.id) throw new Error(started.error || 'no id');
@@ -1173,6 +1180,7 @@ function _aiVoiceState(state) {
   if (!h) return;
   const tap = t('ai_tap_stop');
   h.textContent =
+    state === 'connecting' ? t('ai_connecting') :
     state === 'listening' ? t('ai_state_listening') :
     state === 'thinking'  ? t('ai_state_thinking')  + tap :
     state === 'speaking'  ? t('ai_state_speaking')  + tap : '';
@@ -1228,7 +1236,7 @@ async function _aiVoiceOrbTap() {
   _aiEmptyRetries = 0;
   _aiPendingVoiceReply = '';
   _aiVoiceSetUser('');
-  _aiVoiceState('listening');
+  _aiVoiceState('connecting');
   _aiPlayWakeChime();
   await new Promise(r => setTimeout(r, 450));
   if (!_aiVoiceSessionActive) return;
@@ -1318,7 +1326,7 @@ async function _aiStartFollowupListen() {
   // of Xenon's own voice) itself.
   await new Promise(r => setTimeout(r, 850));
   if (!_aiVoiceSessionActive || aiListening) return; // user tapped to interrupt during the gap
-  _aiVoiceState('listening');
+  _aiVoiceState('connecting');
   await _aiStartServerRecorder();
   const capturedId = _aiServerRecordingId;
   if (!capturedId) { _aiEndVoiceSession(); return; }
@@ -1344,7 +1352,7 @@ async function _aiRetryActiveListen() {
   await new Promise(r => setTimeout(r, 700));
   if (!_aiVoiceSessionActive) return;
   _aiVoiceSetUser('');
-  _aiVoiceState('listening');
+  _aiVoiceState('connecting');
   await _aiStartServerRecorder();
   const capturedId = _aiServerRecordingId;
   if (!capturedId) { _aiEndVoiceSession(); return; }
@@ -1391,7 +1399,7 @@ async function startVoiceSessionTurnBased() {
   _aiPlayWakeChime();
   _aiVoiceModeEnter();
   _aiVoiceSetUser('');
-  _aiVoiceState('listening');
+  _aiVoiceState('connecting');
   await new Promise(r => setTimeout(r, 950));
   if (!_aiVoiceSessionActive) return;
   await _aiStartServerRecorder();
@@ -1444,44 +1452,67 @@ function _aiOnSpeakStart() {
   _aiVoiceState('speaking');
 }
 
+let _aiSpeakRequestId = 0;
+
 function _aiStopSpeaking() {
+  _aiSpeakRequestId++;
   aiSpeaking = false;
   fetch('/api/speak/stop', { method: 'POST' }).catch(() => {});
 }
 
 function _aiSpeak(text, onDone) {
+  const requestId = ++_aiSpeakRequestId;
   let _doneCalled = false;
   let _guard = null;
-  const finish = () => {
+  const finish = (success = true) => {
     if (_doneCalled) return;
     _doneCalled = true;
     if (_guard) { clearTimeout(_guard); _guard = null; }
-    if (typeof onDone === 'function') onDone();
+    if (requestId !== _aiSpeakRequestId) return;
+    aiSpeaking = false;
+    if (success && typeof onDone === 'function') onDone();
   };
-
-  // Stop anything currently playing (barge-in / overlap)
-  fetch('/api/speak/stop', { method: 'POST' }).catch(() => {});
+  const fail = () => {
+    if (_doneCalled) return;
+    if (requestId === _aiSpeakRequestId) {
+      const message = t('ai_tts_failed');
+      _aiAppendBubble('assistant', message);
+      if (_aiVoiceSessionActive) {
+        _aiVoiceSetReply(_aiPendingVoiceReply || text);
+        _aiPendingVoiceReply = '';
+        _aiVoiceState('');
+        const hint = $('ai-voice-hint');
+        if (hint) hint.textContent = message;
+      }
+    }
+    // Keep the mic closed on failure; tapping the voice screen still closes it.
+    finish(false);
+  };
 
   if (!text) { finish(); return; }
   const clean = text.replace(/[*_`#>~|\[\]]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1000);
   if (!clean) { finish(); return; }
 
   aiSpeaking = true;
-  // Safety net: never let the voice screen hang on "speaking" if /api/speak stalls.
-  // MUST stay comfortably ABOVE the server's playback cap (see _playWavFile) so the
-  // server — which alone knows when playback actually ends — is what drives onDone.
-  // If this raced the server cap, it could fire mid-sentence and re-open the mic
-  // while Xenon is still talking.
-  _guard = setTimeout(() => { aiSpeaking = false; finish(); }, 45000);
+  // Above the server's 40s playback cap. Ignore late results after cancellation.
+  _guard = setTimeout(() => {
+    if (requestId === _aiSpeakRequestId) fetch('/api/speak/stop', { method: 'POST' }).catch(() => {});
+    fail();
+  }, 45000);
   const uiLang = (typeof lang !== 'undefined' && lang) || 'en';
   const apiKey = (hubSettings && hubSettings.geminiApiKey) || '';
+  // /api/speak stops previous speech itself. A separate stop request can race it.
   fetch('/api/speak', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text: clean, lang: uiLang, key: apiKey, provider: _aiProviderCfg().provider }),
   })
-    .then(() => { aiSpeaking = false; finish(); })
-    .catch(() => { aiSpeaking = false; finish(); });
+    .then(async res => {
+      const data = await res.json().catch(() => null);
+      if (!res.ok || data?.ok !== true) { fail(); return; }
+      finish();
+    })
+    .catch(fail);
 }
 
 // ── Image / screen-capture attachment ────────────────────────────

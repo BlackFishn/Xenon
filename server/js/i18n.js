@@ -30249,6 +30249,27 @@ Object.assign(i18n.en, {
   aiu_refresh_failed: 'Refresh failed. Showing the last successful reading.',
 });
 
+Object.assign(i18n.en, {
+  ai_whisper_required: 'Voice recognition is not installed. Open Settings → Xenon AI → Local → Components, install Whisper, then try again.',
+  ai_tts_failed: 'Voice playback failed. Tap to close, then try again.',
+  settings_openai_access: 'Connection',
+  settings_openai_api: 'OpenAI API key (separate billing)',
+  settings_chatgpt_subscription: 'ChatGPT subscription (via Codex)',
+  settings_chatgpt_hint: 'Use the Codex allowance included with your ChatGPT plan. Requires Codex CLI on this PC.',
+  settings_chatgpt_login: 'Sign in with ChatGPT',
+  settings_chatgpt_logout: 'Disconnect',
+  settings_chatgpt_refresh: 'Check connection',
+  settings_chatgpt_connected: 'Connected to ChatGPT',
+  settings_chatgpt_pending: 'Finish signing in in your browser. This panel will update automatically.',
+  settings_chatgpt_signed_out: 'Not signed in. Your ChatGPT plan must include Codex access.',
+  settings_chatgpt_unavailable: 'Unable to connect. Open Xenon on this PC and check that Codex CLI is installed.',
+  settings_chatgpt_restart_backend: 'Restart the Xenon backend to enable ChatGPT sign-in, then reload this page. Refreshing the page alone does not restart it.',
+  settings_chatgpt_local_only: 'Open Xenon on the PC running it to manage your ChatGPT connection.',
+  settings_chatgpt_bad_response: 'Xenon returned an incomplete response. Click Check connection to retry; if it continues, restart the Xenon backend.',
+  settings_chatgpt_voice: 'Voice uses local Whisper transcription (install it under Local → Components) and Edge TTS. ChatGPT subscription does not supply OpenAI audio API credits.',
+});
+
+
 // Direct-link YouTube player; missing locale entries use the English fallback.
 Object.assign(i18n.en, {
   "youtube_queue": "Queue",

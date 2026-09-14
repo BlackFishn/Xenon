@@ -2007,6 +2007,10 @@ input[type="range"] { accent-color: var(--green); }
   background: rgba(255,255,255,0.03);
 }
 .settings-subpanel[hidden] { display: none; }
+#settings-openai-api, #settings-chatgpt { margin-top: 12px; }
+.chatgpt-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.chatgpt-actions .settings-btn { white-space: normal; min-height: 40px; }
+#settings-chatgpt-status { overflow-wrap: anywhere; }
 /* The Gemini key row is a flex .settings-row, so [hidden] needs an explicit
    display:none to override the flex display when the local provider is active. */
 #settings-gemini-key-row[hidden] { display: none; }

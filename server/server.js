@@ -68,6 +68,8 @@ const contentInstalls = require('./js/content-installs'); // validated import re
 const themePalette = require('./js/theme-palette.js'); // single owner of the semantic-palette rules (shared with the client + tests)
 const aiLocal = require('./ai-local');
 const aiOpenai = require('./ai-openai');
+const { createClient: createChatgptClient, usesChatgpt } = require('./ai-chatgpt');
+const aiChatgpt = createChatgptClient();
 const aiAnthropic = require('./ai-anthropic');
 const aiGemini = require('./ai-gemini');
 const aiModels = require('./ai-models');
@@ -403,6 +405,7 @@ const PROVIDER_MODEL_KEYS = Object.freeze({
 
 function providerModelFor(provider, role, settings) {
   const s = settings || _serverHubSettings || {};
+  if (provider === 'openai' && role === 'chat' && usesChatgpt(s)) return aiOpenai.sanitizeModel(s.chatgptModel);
   const key = (PROVIDER_MODEL_KEYS[provider] || {})[role];
   if (!key) return '';
   const apiKey = provider === 'openai' ? s.openaiApiKey : s.anthropicApiKey;
@@ -6393,8 +6396,9 @@ function _spawnWavPlayer(wavPath) {
   if (process.platform === 'linux') {
     return spawn('aplay', ['-q', wavPath]);
   }
-  const ps = `(New-Object System.Media.SoundPlayer -ArgumentList '${wavPath}').PlaySync();` +
-             `try { Remove-Item -LiteralPath '${wavPath}' -Force -EA SilentlyContinue } catch {}`;
+  const quotedPath = wavPath.replace(/'/g, "''");
+  const ps = `$ErrorActionPreference = 'Stop'; try { (New-Object System.Media.SoundPlayer -ArgumentList '${quotedPath}').PlaySync() }` +
+             ` catch { exit 1 } finally { Remove-Item -LiteralPath '${quotedPath}' -Force -EA SilentlyContinue }`;
   return spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true });
 }
 
@@ -6404,14 +6408,14 @@ function _spawnWavPlayer(wavPath) {
 // announce speak_start ONCE (first chunk) and restore ONCE (after the last),
 // instead of flapping the volume on every sentence.
 function _playWavFile(wavPath, myToken, { duck = true, broadcast = true, restore = true } = {}) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     if (_speakGenToken !== myToken) { fs.promises.unlink(wavPath).catch(() => {}); return resolve(); }
     if (duck) _duckSpeakerVolume(); // lower music/media volume while Xenon speaks
     if (broadcast) broadcastSSE('speak_start', {}); // tell the UI the voice is actually starting now
     const psProc = _spawnWavPlayer(wavPath);
     _speakProc = psProc;
     let _settled = false;
-    const done = () => {
+    const done = (error) => {
       if (_settled) return;
       _settled = true;
       clearTimeout(_guard);
@@ -6422,112 +6426,94 @@ function _playWavFile(wavPath, myToken, { duck = true, broadcast = true, restore
       // interrupt leaks one temp wav.
       fs.promises.unlink(wavPath).catch(() => {});
       if (restore) _restoreSpeakerVolume(); // bring music back when Xenon finishes speaking
-      resolve();
+      if (error && _speakGenToken === myToken) reject(error);
+      else resolve();
     };
     // Playback cap (safety net against a stuck SoundPlayer). Kept below the
     // client's _aiSpeak guard so the client never races ahead and re-opens the
     // mic before this resolves. Raise both together if you change one.
-    const _guard = setTimeout(() => { try { psProc.kill(); } catch {} done(); }, 40000);
-    psProc.on('exit', done);
+    const _guard = setTimeout(() => { try { psProc.kill(); } catch {} done(new Error('Audio playback timed out')); }, 40000);
+    psProc.on('exit', code => done(code === 0 ? null : new Error('Audio playback failed')));
     psProc.on('error', done);
   });
 }
 
-// Speak text server-side using Gemini neural TTS (voice: Charon).
-// Playback is server-side so it works regardless of window focus or WebView quirks.
-// Resolves when speech finishes (or is stopped). Silently resolves on TTS error.
-function speakOnServer(text, langPrefix, apiKey, provider) {
-  return new Promise(async (resolve) => {
-    stopServerSpeak();
-    const myToken = _speakGenToken;
-    const clean = String(text || '').slice(0, 2000);
-    if (!clean) return resolve();
+// Synthesize and play through the system speakers, independent of window focus.
+// Failures reach /api/speak so the client can explain silence and keep the mic shut.
+async function speakOnServer(text, langPrefix, apiKey, provider) {
+  stopServerSpeak();
+  const myToken = _speakGenToken;
+  const clean = String(text || '').slice(0, 2000);
+  if (!clean) return;
 
-    // Voice output per provider: Ollama and Claude (no speech API) use the free
-    // local Edge neural TTS; ChatGPT uses OpenAI TTS (its server-only key comes
-    // from settings); Gemini uses Gemini TTS with the request's key.
-    const useLocal = provider === 'ollama' || provider === 'anthropic';
-    const useOpenai = provider === 'openai';
-    let openaiKey = '';
-    if (useOpenai) { const s = await readHubSettings().catch(() => null); openaiKey = String((s && s.openaiApiKey) || '').trim(); }
-    const key = String(apiKey || '').trim();
-    if (useOpenai && !openaiKey) return resolve();
-    if (!useLocal && !useOpenai && !key) return resolve();
-    // The Gemini branch degrades to the local Edge voice rather than failing: it
-    // runs on a preview model, and both callers below treat a synth error as
-    // "say nothing", so a retired model would take the assistant's voice away
-    // with the only trace in the log. See the same fallback on /api/tts.
-    const synth = async (t) => {
-      if (useLocal) return aiLocal.localTts(t, langPrefix, getFfmpegPath());
-      if (useOpenai) return aiOpenai.tts({ apiKey: openaiKey, text: t, model: providerModelFor('openai', 'tts') });
-      try {
-        return await _geminiTtsToWav(t, key, 'Charon');
-      } catch (e) {
-        process.stdout.write(`[TTS] Gemini failed (${e.message}) — falling back to the local voice\n`);
-        if (/not found|not supported|NOT_FOUND|404/i.test(String(e.message || ''))) {
-          aiModels.markMissing('gemini', AI_MODELS.tts);
-        }
-        return aiLocal.localTts(t, langPrefix, getFfmpegPath());
-      }
-    };
-
-    const chunks = splitSentences(clean);
-
-    // Single sentence → the original one-shot path (no pipelining overhead).
-    if (chunks.length <= 1) {
-      const gWavPath = path.join(os.tmpdir(), `xenon-gtts-${Date.now()}-${myToken}.wav`);
-      try {
-        const wavBuf = await synth(clean);
-        if (_speakGenToken !== myToken) return resolve();
-        if (!wavBuf || wavBuf.length === 0) return resolve();
-        await fs.promises.writeFile(gWavPath, wavBuf);
-        if (_speakGenToken !== myToken) { fs.promises.unlink(gWavPath).catch(() => {}); return resolve(); }
-        await _playWavFile(gWavPath, myToken);
-      } catch (e) {
-        process.stdout.write(`[TTS] ${useLocal ? 'Edge' : 'Gemini'} failed (${e.message})\n`);
-        fs.promises.unlink(gWavPath).catch(() => {});
-      }
-      return resolve();
-    }
-
-    // Multi-sentence → synth the NEXT sentence while the current one plays, so
-    // the user hears the first sentence after one synth, not after the whole
-    // reply. speak_start + ducking fire on the first played chunk; the media
-    // volume is restored once, after the last (or on a barge-in cancel).
-    const writeChunk = async (t, idx) => {
-      const buf = await synth(t);
-      if (_speakGenToken !== myToken || !buf || !buf.length) return null;
-      const p = path.join(os.tmpdir(), `xenon-gtts-${Date.now()}-${myToken}-${idx}.wav`);
-      await fs.promises.writeFile(p, buf);
-      return p;
-    };
-    let started = false;
-    let nextPath = null;
+  const subscriptionVoice = provider === 'openai' && usesChatgpt(await readHubSettings().catch(() => null));
+  const useLocal = provider === 'ollama' || provider === 'anthropic' || subscriptionVoice;
+  const useOpenai = provider === 'openai' && !subscriptionVoice;
+  let openaiKey = '';
+  if (useOpenai) { const s = await readHubSettings().catch(() => null); openaiKey = String((s && s.openaiApiKey) || '').trim(); }
+  const key = String(apiKey || '').trim();
+  if (useOpenai && !openaiKey) throw new Error('OpenAI API key is missing');
+  if (!useLocal && !useOpenai && !key) throw new Error('Gemini API key is missing');
+  const synth = async (t) => {
+    if (useLocal) return aiLocal.localTts(t, langPrefix, getFfmpegPath());
+    if (useOpenai) return aiOpenai.tts({ apiKey: openaiKey, text: t, model: providerModelFor('openai', 'tts') });
     try {
-      nextPath = await writeChunk(chunks[0], 0).catch(() => null);
-      for (let i = 0; i < chunks.length; i++) {
-        if (_speakGenToken !== myToken) break;
-        const curPath = nextPath;
-        nextPath = null; // consumed below (played wavs are unlinked by _playWavFile)
-        // Kick off the next sentence's synth BEFORE playing the current one.
-        const prefetch = (i + 1 < chunks.length)
-          ? writeChunk(chunks[i + 1], i + 1).catch(() => null)
-          : Promise.resolve(null);
-        if (curPath) {
-          await _playWavFile(curPath, myToken, { duck: !started, broadcast: !started, restore: false });
-          started = true;
-        }
-        nextPath = await prefetch;
-      }
+      return await _geminiTtsToWav(t, key, 'Charon');
     } catch (e) {
-      process.stdout.write(`[TTS] ${useLocal ? 'Edge' : 'Gemini'} chunked failed (${e.message})\n`);
-    } finally {
-      // A prefetched-but-never-played chunk (loop broke on barge-in) would leak.
-      if (nextPath) fs.promises.unlink(nextPath).catch(() => {});
-      if (started) _restoreSpeakerVolume(); // restore once, after the last chunk
+      process.stdout.write(`[TTS] Gemini failed (${e.message}) — falling back to the local voice\n`);
+      if (/not found|not supported|NOT_FOUND|404/i.test(String(e.message || ''))) {
+        aiModels.markMissing('gemini', AI_MODELS.tts);
+      }
+      return aiLocal.localTts(t, langPrefix, getFfmpegPath());
     }
-    resolve();
-  });
+  };
+
+  const chunks = splitSentences(clean);
+  const writeChunk = async (t, idx) => {
+    const buf = await synth(t);
+    if (_speakGenToken !== myToken) return null;
+    if (!buf || !buf.length) throw new Error('Speech synthesis returned no audio');
+    const p = path.join(os.tmpdir(), `xenon-gtts-${Date.now()}-${myToken}-${idx}.wav`);
+    await fs.promises.writeFile(p, buf);
+    if (_speakGenToken !== myToken) { fs.promises.unlink(p).catch(() => {}); return null; }
+    return p;
+  };
+  let started = false;
+  let nextPath = null;
+  let prefetch = null;
+  try {
+    nextPath = await writeChunk(chunks[0], 0);
+    for (let i = 0; i < chunks.length; i++) {
+      if (_speakGenToken !== myToken) break;
+      const curPath = nextPath;
+      nextPath = null;
+      // Handle a prefetched rejection immediately, then report it after playback.
+      prefetch = (i + 1 < chunks.length)
+        ? writeChunk(chunks[i + 1], i + 1).then(p => ({ path: p }), error => ({ error }))
+        : null;
+      if (curPath) {
+        const first = !started;
+        started = true;
+        await _playWavFile(curPath, myToken, { duck: first, broadcast: first, restore: false });
+      }
+      if (prefetch) {
+        const next = await prefetch;
+        prefetch = null;
+        if (next.error) throw next.error;
+        nextPath = next.path;
+      }
+    }
+  } catch (e) {
+    if (_speakGenToken === myToken) throw e;
+  } finally {
+    // A player failure can leave the next sentence still being synthesized.
+    if (prefetch) {
+      const next = await prefetch;
+      if (next.path) fs.promises.unlink(next.path).catch(() => {});
+    }
+    if (nextPath) fs.promises.unlink(nextPath).catch(() => {});
+    if (started && _speakGenToken === myToken) _restoreSpeakerVolume();
+  }
 }
 
 // Provider-agnostic tool dispatch shared by the Gemini and Ollama chat loops.
@@ -7906,6 +7892,8 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   // ChatGPT (OpenAI) + Claude (Anthropic): server-mediated cloud providers. Keys
   // are SERVER-ONLY (redacted on the wire; see ai-provider-creds.js), unlike the
   // browser-shipped geminiApiKey. Models are user-overridable.
+  openaiAuthMode: 'api',
+  chatgptModel: 'auto',
   openaiApiKey: '',
   openaiModel: 'auto',
   openaiSttModel: 'auto',
@@ -9290,6 +9278,8 @@ function normalizeHubSettings(value) {
     // ChatGPT (OpenAI) + Claude (Anthropic). Keys are server-only secrets
     // (preserve-on-save + redact-on-wire, see the secrets chain below); models
     // are validated by each provider module.
+    openaiAuthMode: usesChatgpt(source) ? 'chatgpt' : 'api',
+    chatgptModel: aiOpenai.sanitizeModel(source.chatgptModel),
     openaiApiKey: String(source.openaiApiKey || '').trim().slice(0, 200),
     openaiModel: aiOpenai.sanitizeModel(source.openaiModel),
     // Speech slots are validated against the model KIND, not just the id shape:
@@ -11910,6 +11900,12 @@ function isJsonpAllowed(pathname) {
 // sends no Origin, so the loopback/Origin checks below can't catch it. They are
 // guarded by the Sec-Fetch-Site check in the request handler.
 const CSRF_MUTATION_PATHS = new Set([
+  // OAuth and account reads start a local Codex process; opaque-origin widgets
+  // and cross-site navigations must never operate on this account session.
+  '/api/ai/chatgpt/status',
+  '/api/ai/chatgpt/login',
+  '/api/ai/chatgpt/logout',
+  '/api/ai/chatgpt/models',
   // Raises a UAC prompt and changes the startup task's run level. POST-only, but
   // guarded here too: a cross-site drive-by must not be able to make the local
   // server throw an administrator prompt at the user.
@@ -13073,10 +13069,10 @@ async function _aiPerformancePlan({ activity, appNames, opts, provider, key, mod
     if (provider === 'openai' || provider === 'anthropic') {
       // Server-only key comes from settings, not the request (unlike Gemini).
       const settings = await readHubSettings().catch(() => null);
-      const mod = provider === 'openai' ? aiOpenai : aiAnthropic;
+      const mod = provider === 'openai' ? (usesChatgpt(settings) ? aiChatgpt : aiOpenai) : aiAnthropic;
       const provKey = provider === 'openai' ? (settings && settings.openaiApiKey) : (settings && settings.anthropicApiKey);
       const provModel = providerModelFor(provider, 'chat', settings);
-      if (!provKey) return null;
+      if (!provKey && mod !== aiChatgpt) return null;
       const text = await mod.oneShot({ apiKey: provKey, model: provModel, systemText: 'You output only a single JSON object, never prose or markdown.', userText: prompt, maxTokens: 500 });
       return _normalizePerfPlan(text, names);
     }
@@ -16618,7 +16614,7 @@ const handleRequest = async (req, res) => {
         const provKey = provider === 'openai'
           ? String((settings && settings.openaiApiKey) || '').trim()
           : String((settings && settings.anthropicApiKey) || '').trim();
-        if (!provKey) {
+        if (!provKey && !(provider === 'openai' && usesChatgpt(settings))) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'missing_key' })); return;
         }
@@ -16628,7 +16624,7 @@ const handleRequest = async (req, res) => {
         // like the local path does.
         const SYS_XLATE = (langName ? ` Tool results (especially web_search) may be written in English; ALWAYS translate and write your final answer in ${langName}, never copy the English text verbatim.` : '');
         const systemText = SYS_BASE + ((isVoice || hasAudio) ? SYS_VOICE : SYS_TEXT) + SYS_LANG + SYS_XLATE;
-        const mod = provider === 'openai' ? aiOpenai : aiAnthropic;
+        const mod = provider === 'openai' ? (usesChatgpt(settings) ? aiChatgpt : aiOpenai) : aiAnthropic;
         try {
           const result = await mod.chat({
             apiKey: provKey, model: provModel, geminiTools: AI_FUNCTIONS,
@@ -16771,10 +16767,10 @@ const handleRequest = async (req, res) => {
         if (result && result.text) summary = String(result.text).trim().slice(0, 2000);
       } else if (provider === 'openai' || provider === 'anthropic') {
         const settings = await readHubSettings().catch(() => null);
-        const mod = provider === 'openai' ? aiOpenai : aiAnthropic;
+        const mod = provider === 'openai' ? (usesChatgpt(settings) ? aiChatgpt : aiOpenai) : aiAnthropic;
         const provKey = provider === 'openai' ? (settings && settings.openaiApiKey) : (settings && settings.anthropicApiKey);
         const provModel = providerModelFor(provider, 'chat', settings);
-        if (!provKey) { json({ summary: prev }); return; }
+        if (!provKey && mod !== aiChatgpt) { json({ summary: prev }); return; }
         const out = await mod.oneShot({ apiKey: provKey, model: provModel, systemText: sysText, userText, maxTokens: 400 }).catch(() => '');
         if (out) summary = String(out).trim().slice(0, 2000);
       } else {
@@ -16856,10 +16852,10 @@ const handleRequest = async (req, res) => {
         if (result && result.text) text = String(result.text);
       } else if (provider === 'openai' || provider === 'anthropic') {
         const settings = await readHubSettings().catch(() => null);
-        const mod = provider === 'openai' ? aiOpenai : aiAnthropic;
+        const mod = provider === 'openai' ? (usesChatgpt(settings) ? aiChatgpt : aiOpenai) : aiAnthropic;
         const provKey = provider === 'openai' ? (settings && settings.openaiApiKey) : (settings && settings.anthropicApiKey);
         const provModel = providerModelFor(provider, 'chat', settings);
-        if (provKey) text = await mod.oneShot({ apiKey: provKey, model: provModel, systemText: sysText, userText, maxTokens: 100 }).catch(() => '');
+        if (provKey || mod === aiChatgpt) text = await mod.oneShot({ apiKey: provKey, model: provModel, systemText: sysText, userText, maxTokens: 100 }).catch(() => '');
       } else {
         if (apiKey) text = await _geminiOneShot(apiKey, [{ text: userText }], sysText, 100).catch(() => '');
       }
@@ -16949,7 +16945,16 @@ const handleRequest = async (req, res) => {
 
   } else if (reqPath === '/api/stt/start' && req.method === 'POST') {
     try {
-      await readBody(req);
+      const startBody = JSON.parse(await readBody(req) || '{}');
+      // The mic self-test measures capture without requiring transcription.
+      if (startBody.mode !== 'test') {
+        const settings = await readHubSettings().catch(() => null);
+        const provider = aiLocal.sanitizeProvider(startBody.provider || settings?.aiProvider);
+        if (provider === 'ollama' || provider === 'anthropic' || (provider === 'openai' && usesChatgpt(settings))) {
+          if (!aiLocal.whisperExe(__dirname)) throw new Error('whisper_not_installed');
+          if (!fs.existsSync(aiLocal.whisperPaths(__dirname).model)) throw new Error('whisper_model_missing');
+        }
+      }
       await Promise.race([
         _sttDeviceWhenReady(),
         new Promise((_, rej) => setTimeout(() => rej(new Error('STT device timeout')), 10000)),
@@ -17128,10 +17133,11 @@ const handleRequest = async (req, res) => {
         res.end(JSON.stringify({ audio: wavData.toString('base64'), mimeType: 'audio/wav' })); return;
       }
       let sttText;
-      if (sttProvider === 'ollama') {
+      if (sttProvider === 'ollama' || (sttProvider === 'openai' && usesChatgpt(await readHubSettings().catch(() => null)))) {
         process.stdout.write(`[STT] Local whisper transcribe lang=${sttLang}\n`);
         try {
-          sttText = await aiLocal.localStt(wavData, sttLang, __dirname);
+          // Menu language does not determine the language being spoken.
+          sttText = await aiLocal.localStt(wavData, 'auto', __dirname);
         } catch (e) {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ text: '', error: e.message })); return;
@@ -17150,6 +17156,25 @@ const handleRequest = async (req, res) => {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: e.message }));
     }
+
+  } else if (reqPath === '/api/ai/chatgpt/status' && req.method === 'GET') {
+    if (isRemote) { res.writeHead(403); res.end(); return; }
+    json(await aiChatgpt.status());
+
+  } else if (reqPath === '/api/ai/chatgpt/login' && req.method === 'POST') {
+    if (isRemote) { res.writeHead(403); res.end(); return; }
+    try { json(await aiChatgpt.loginStart()); } catch (e) { json({ error: e.message }); }
+
+  } else if (reqPath === '/api/ai/chatgpt/logout' && req.method === 'POST') {
+    if (isRemote) { res.writeHead(403); res.end(); return; }
+    try { json(await aiChatgpt.logout()); } catch (e) { json({ error: e.message }); }
+
+  } else if (reqPath === '/api/ai/chatgpt/models' && req.method === 'GET') {
+    if (isRemote) { res.writeHead(403); res.end(); return; }
+    try {
+      const settings = await readHubSettings().catch(() => null);
+      json(await aiChatgpt.catalog(settings?.chatgptModel));
+    } catch (e) { json({ models: [], error: e.message }); }
 
   } else if (reqPath === '/api/ai/models' && req.method === 'GET') {
     // Live model list for the picker, fetched from each provider's own models
@@ -17191,7 +17216,8 @@ const handleRequest = async (req, res) => {
       const tRaw = await readBodyBuffer(req, 30 * 1024 * 1024);
       const tBody = JSON.parse(tRaw.toString('utf8') || '{}');
       const apiKey = await geminiKeyFor(tBody.key);
-      const tProvider = aiLocal.sanitizeProvider(tBody.provider);
+      const requestedProvider = aiLocal.sanitizeProvider(tBody.provider);
+      const tProvider = requestedProvider === 'openai' && usesChatgpt(await readHubSettings().catch(() => null)) ? 'ollama' : requestedProvider;
       const audioB64 = typeof tBody.audio === 'string' ? tBody.audio.slice(0, 20 * 1024 * 1024) : '';
       const rawMime = typeof tBody.mimeType === 'string' ? tBody.mimeType : 'audio/webm';
       const ALLOWED_AUDIO = new Set(['audio/webm', 'audio/webm;codecs=opus', 'audio/ogg', 'audio/mp4', 'audio/wav']);
@@ -17300,8 +17326,8 @@ const handleRequest = async (req, res) => {
       if (ttsProvider === 'ollama' || ttsProvider === 'anthropic' || ttsProvider === 'openai') {
         try {
           let wavBuf;
-          if (ttsProvider === 'openai') {
-            const s = await readHubSettings().catch(() => null);
+          const s = ttsProvider === 'openai' ? await readHubSettings().catch(() => null) : null;
+          if (ttsProvider === 'openai' && !usesChatgpt(s)) {
             const oKey = String((s && s.openaiApiKey) || '').trim();
             if (!oKey) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'missing_key' })); return; }
             wavBuf = await aiOpenai.tts({ apiKey: oKey, text: rawText, model: providerModelFor('openai', 'tts', s) });
@@ -18088,10 +18114,10 @@ const handleRequest = async (req, res) => {
         }).catch(() => null);
         text = result && result.text ? String(result.text) : '';
       } else if (provider === 'openai' || provider === 'anthropic') {
-        const mod = provider === 'openai' ? aiOpenai : aiAnthropic;
+        const mod = provider === 'openai' ? (usesChatgpt(settings) ? aiChatgpt : aiOpenai) : aiAnthropic;
         const provKey = provider === 'openai' ? (settings && settings.openaiApiKey) : (settings && settings.anthropicApiKey);
         const provModel = providerModelFor(provider, 'chat', settings);
-        if (!provKey) { json({ ok: false, error: 'no_provider' }); return; }
+        if (!provKey && mod !== aiChatgpt) { json({ ok: false, error: 'no_provider' }); return; }
         text = await mod.oneShot({ apiKey: provKey, model: provModel, systemText: sysText, userText, maxTokens: 300 }).catch(() => '');
       } else {
         const key = settings && settings.geminiApiKey;
@@ -18261,12 +18287,12 @@ const handleRequest = async (req, res) => {
         }).catch(() => null);
         text = result && result.text ? String(result.text).trim() : '';
       } else if (provider === 'openai' || provider === 'anthropic') {
-        const mod = provider === 'openai' ? aiOpenai : aiAnthropic;
+        const mod = provider === 'openai' ? (usesChatgpt(settings) ? aiChatgpt : aiOpenai) : aiAnthropic;
         const key = provider === 'openai'
           ? settings && settings.openaiApiKey
           : settings && settings.anthropicApiKey;
         const model = providerModelFor(provider, 'chat', settings);
-        if (!key) { json({ ok: false, error: 'no_provider' }); return; }
+        if (!key && mod !== aiChatgpt) { json({ ok: false, error: 'no_provider' }); return; }
         text = await mod.oneShot({
           apiKey: key, model, systemText: sysText, userText, maxTokens: 1500,
         }).catch(() => '');
@@ -21137,6 +21163,7 @@ function _gracefulShutdown() {
   // process.exit, so it has to be told.
   try { if (nativeMedia) nativeMedia.stop(); } catch {}
   // Kill the headless embedded-browser Edge instance (if one is running).
+  try { aiChatgpt.stop(); } catch {}
   try { embeddedBrowser.shutdown(); } catch {}
   // Stop the second-screen capture host (if one is running).
   try { screenCapture.shutdown(); } catch {}

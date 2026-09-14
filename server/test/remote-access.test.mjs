@@ -127,6 +127,8 @@ test('the refused surface matches an explicit, reviewed list', () => {
     .sort();
 
   assert.deepEqual(refused, [
+    'GET /api/ai/chatgpt/models',
+    'GET /api/ai/chatgpt/status',
     // Pairing admin — loopback-only so a phone cannot enrol another phone or
     // revoke the device that would kick it off.
     'GET /api/remote-access/status',
@@ -149,6 +151,8 @@ test('the refused surface matches an explicit, reviewed list', () => {
     'GET /stream/youtube/streamkey',
     // Installers: each downloads something and puts it where it will be run.
     'POST /api/ai-local/whisper-install',
+    'POST /api/ai/chatgpt/login',
+    'POST /api/ai/chatgpt/logout',
     // Claude Code's own ingest, posted by the `claude` process against a token
     // minted on the PC. Nothing in the dashboard calls these.
     'POST /api/claude/event',

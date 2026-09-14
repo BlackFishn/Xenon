@@ -578,7 +578,7 @@
     const settings = typeof hubSettings !== 'undefined' && hubSettings ? hubSettings : {};
     const provider = settings.aiProvider || 'gemini';
     if (provider === 'ollama') return true;
-    if (provider === 'openai') return settings.openaiApiKeySet === true;
+    if (provider === 'openai') return settings.openaiAuthMode === 'chatgpt' || settings.openaiApiKeySet === true;
     if (provider === 'anthropic') return settings.anthropicApiKeySet === true;
     return geminiKeyReady(settings);
   }

@@ -3342,6 +3342,30 @@
                back); once saved the field shows a "saved" placeholder. -->
           <div class="settings-subpanel full" id="settings-openai-panel" hidden>
             <label class="settings-row full">
+              <span class="settings-label-line" data-i18n="settings_openai_access">Connection</span>
+              <select class="settings-text-input" id="settings-openai-auth-mode" onchange="updateOpenaiAuthMode(this.value)">
+                <option value="api" data-i18n="settings_openai_api">OpenAI API key (separate billing)</option>
+                <option value="chatgpt" data-i18n="settings_chatgpt_subscription">ChatGPT subscription (via Codex)</option>
+              </select>
+            </label>
+            <div class="settings-row full" id="settings-chatgpt" hidden>
+              <p class="settings-hint" data-i18n="settings_chatgpt_hint">Use the Codex allowance included with your ChatGPT plan. Requires Codex CLI on this PC.</p>
+              <span class="settings-hint" id="settings-chatgpt-status" role="status" aria-live="polite"></span>
+              <div class="chatgpt-actions">
+                <button type="button" class="settings-btn primary" id="settings-chatgpt-login" onclick="connectChatgpt()" data-i18n="settings_chatgpt_login">Sign in with ChatGPT</button>
+                <button type="button" class="settings-btn" id="settings-chatgpt-refresh" onclick="refreshChatgptStatus()" data-i18n="settings_chatgpt_refresh">Check connection</button>
+                <button type="button" class="settings-btn danger" id="settings-chatgpt-logout" onclick="disconnectChatgpt()" data-i18n="settings_chatgpt_logout" hidden>Disconnect</button>
+              </div>
+              <label class="settings-row full">
+                <span class="settings-label-line" data-i18n="settings_openai_model">Model</span>
+                <select class="settings-text-input" id="settings-chatgpt-model" data-custom-select data-cs-fixed onchange="onAiModelSelect('chatgptModel', this.value)"></select>
+                <input class="settings-text-input" id="settings-chatgpt-model-custom" type="text" maxlength="60" spellcheck="false" autocomplete="off" oninput="updateAiModelChoice('chatgptModel', this.value)" aria-label="Custom ChatGPT model" hidden>
+                <span class="settings-hint" id="settings-chatgpt-model-used" hidden></span>
+              </label>
+              <p class="settings-hint" data-i18n="settings_chatgpt_voice">Voice uses local Whisper transcription (install it under Local → Components) and Edge TTS. ChatGPT subscription does not supply OpenAI audio API credits.</p>
+            </div>
+            <div id="settings-openai-api">
+            <label class="settings-row full">
               <span class="settings-label-line"><span data-i18n="settings_openai_key">OpenAI API Key</span><span class="settings-hint" data-i18n="settings_openai_key_hint">da platform.openai.com</span></span>
               <input class="settings-text-input" id="settings-openai-key" type="password" maxlength="200" spellcheck="false" autocomplete="off" placeholder="sk-…" oninput="updateOpenaiKey(this.value)">
               <button type="button" class="settings-btn" id="settings-openai-reset" onclick="resetOpenaiKey()" data-i18n="settings_key_reset" hidden>Rimuovi chiave</button>
@@ -3370,6 +3394,7 @@
                 <span class="settings-hint" id="settings-openai-tts-model-used" hidden></span>
               </label>
             </details>
+            </div>
           </div>
 
           <!-- Claude (Anthropic): key + model. Server-only key, same pattern. -->

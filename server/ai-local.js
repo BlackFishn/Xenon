@@ -35,13 +35,17 @@ const VISION_MODELS = new Set([
 const EDGE_VOICES = Object.freeze({
   it: 'it-IT-ElsaNeural',
   en: 'en-US-AriaNeural',
+  th: 'th-TH-PremwadeeNeural',
   ko: 'ko-KR-SunHiNeural',
   ja: 'ja-JP-NanamiNeural',
   zh: 'zh-CN-XiaoxiaoNeural',
 });
 const EDGE_VOICE_FALLBACK = 'it-IT-ElsaNeural';
 
-function voiceForLang(lang) {
+function voiceForLang(lang, text) {
+  // An English dashboard can receive Thai replies. English/Italian voices
+  // return no audio for Thai, so the reply's script takes precedence.
+  if (/[฀-๿]/u.test(String(text || ''))) return EDGE_VOICES.th;
   const code = String(lang || '').toLowerCase().slice(0, 2);
   return EDGE_VOICES[code] || EDGE_VOICE_FALLBACK;
 }
@@ -676,7 +680,7 @@ async function localTts(text, lang, ffmpegPath) {
 
   const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
   const tts = new MsEdgeTTS();
-  await tts.setMetadata(voiceForLang(lang), OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+  await tts.setMetadata(voiceForLang(lang, clean), OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
   const { audioStream } = tts.toStream(clean);
 
   const mp3 = await new Promise((resolve, reject) => {
@@ -1248,6 +1252,29 @@ function _findWhisperExeRecursive(dir) {
 //     the dir root next to its ggml*.dll siblings.
 //  3. If the ggml-small model is missing: download it (45→100%).
 // Returns { ok } reflecting whether both the exe and model are now present.
+async function whisperWindowsAsset() {
+  const base = 'https://api.github.com/repos/ggml-org/whisper.cpp/releases';
+  const pick = release => {
+    const assets = Array.isArray(release?.assets) ? release.assets : [];
+    return assets.find(a => a?.name === 'whisper-bin-x64.zip' && a.browser_download_url)
+      || assets.find(a => a?.browser_download_url && /x64.*\.zip$/i.test(a.name)
+        && !/win32|cublas|cuda|clblast|hip|vulkan|blas|arm64/i.test(a.name));
+  };
+  let asset = pick(await _httpsJson(base + '/latest'));
+  if (!asset) {
+    // Releases may be published before Windows binaries. Use a completed
+    // stable version, without requiring a GPU runtime or a nightly build.
+    const releases = await _httpsJson(base + '?per_page=30');
+    for (const release of Array.isArray(releases) ? releases : []) {
+      if (release.draft || release.prerelease || !/^v\d+\.\d+\.\d+$/.test(release.tag_name || '')) continue;
+      asset = pick(release);
+      if (asset) break;
+    }
+  }
+  if (!asset) throw new Error('No stable Windows x64 Whisper CPU package is available');
+  return asset;
+}
+
 async function installWhisper(serverDir, onProgress) {
   const report = (status, percent) => {
     if (typeof onProgress === 'function') { try { onProgress({ status, percent }); } catch { /* ignore */ } }
@@ -1274,22 +1301,7 @@ async function installWhisper(serverDir, onProgress) {
     }
   } else if (!whisperExe(serverDir)) {
     report('Download Whisper…', 0);
-    const release = await _httpsJson('https://api.github.com/repos/ggerganov/whisper.cpp/releases/latest');
-    const assets = Array.isArray(release && release.assets) ? release.assets : [];
-    // Prefer the small CPU build (`whisper-bin-x64.zip`, ~4 MB). The accelerated
-    // variants (cuBLAS/CUDA can be ~450 MB) need a matching GPU runtime and are far
-    // slower to download AND extract — that heavyweight zip is exactly what made the
-    // install look frozen. Never auto-pick them; STT on the CPU build is plenty fast.
-    const heavy = /cublas|cuda|clblast|hipblas|hip|vulkan|openblas|blas|arm64/i;
-    const isCpuX64 = (n) => /x64.*\.zip$/i.test(n) && !/win32/i.test(n) && !heavy.test(n);
-    const pick = (pred) => assets.find(a => a && typeof a.name === 'string' && a.browser_download_url && pred(a.name));
-    const asset =
-      pick(n => /^whisper-bin-x64\.zip$/i.test(n)) ||                 // canonical CPU build (smallest)
-      pick(isCpuX64) ||                                              // any plain (non-accelerated) x64 zip
-      pick(n => /x64.*\.zip$/i.test(n) && !/win32/i.test(n));        // last resort: an accelerated x64 build
-    if (!asset) {
-      throw new Error('No Windows x64 whisper.cpp release asset found');
-    }
+    const asset = await whisperWindowsAsset();
     const zipPath = path.join(dir, 'whisper.zip');
     await _downloadToFile(asset.browser_download_url, zipPath, (received, total) => {
       const frac = total > 0 ? received / total : 0;
