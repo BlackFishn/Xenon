@@ -18,12 +18,10 @@
 //!   * `PANIC`     — written by the panic hook, with thread, message and the
 //!                   `file:line:col` of the panic site.
 //!
-//! That third state is what makes the log worth having even when it is empty of
-//! panics: a `launched` with no `exited` and no `PANIC` after it means nothing
-//! inside the app decided to stop — the process was killed from the outside,
-//! which on Windows is almost always antivirus quarantining the executable
-//! mid-session (see the README's Defender section) or the machine going down
-//! hard. Telling those two worlds apart used to take a guess.
+//! A `launched` with no `exited` and no `PANIC` is an unexplained stop. Rust
+//! panic hooks do not catch native faults such as Windows heap corruption,
+//! access violations, or process termination. Use OS crash reports and dumps
+//! to distinguish those cases from an external kill or power loss.
 //!
 //! Everything here is best-effort: a crash diary that can itself fail the app
 //! would be worse than none. Every filesystem error is swallowed.
@@ -189,7 +187,7 @@ pub fn session_start() {
 }
 
 /// Note that this process is stopping on purpose. Anything that ends a session
-/// without this line — and without a `PANIC` — was not the app's own decision.
+/// without this line — and without a `PANIC` — needs OS crash evidence to explain.
 pub fn session_end(reason: &str) {
     append("exited", reason);
 }

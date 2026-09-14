@@ -22,6 +22,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 - **An idle Volume mixer keeps its app list current.** Visible audio controls renew fallback updates even when SSE stays connected, so closed games disappear and newly active apps appear without touching a slider. Hidden tabs and dashboard pages stop renewing the watch; returning refreshes immediately.
+- **Native focus guard no longer re-arms from stale background work.** Window-style updates run on the UI thread and use the latest game, typing, and enabled state. The crash diary documentation now distinguishes missing Rust panic entries from native faults; this is not a confirmed fix for the separately observed heap corruption.
 - **AI Usage has a simpler header.** Removed the help button and refresh status strip; Refresh and image copying remain available.
 - **YouTube login failures now explain why the code disappeared.** Rejected app credentials show how to correct the OAuth client type and matching Client ID/Secret; expired codes, denied access and failed requests leave a visible message and a usable Connect button.
 - **Subscription voice checks Whisper before listening.** Missing speech recognition stays visible with setup instructions, Thai speech is detected independently of the menu language, and Whisper installation skips releases without Windows binaries.

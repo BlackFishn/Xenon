@@ -1913,10 +1913,9 @@ pub fn run() {
         .run(|_app, _event| {
             if matches!(_event, tauri::RunEvent::Exit) {
                 // Close the session in the crash diary. A launch with no exit
-                // line and no panic after it is the signature of a process that
-                // was killed from the outside — antivirus, Task Manager, or the
-                // PC going down hard — and that distinction is the whole point
-                // of keeping the file.
+                // line and no panic after it is unexplained: native faults also
+                // bypass Rust panic hooks. OS crash reports and dumps distinguish
+                // those faults from external termination or power loss.
                 crash_log::session_end("clean shutdown");
                 // Whatever we started, we stop. On macOS the backend is this
                 // app's own child (see spawn_backend_nudge), so quitting must

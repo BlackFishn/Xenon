@@ -22,9 +22,10 @@ browser to open by hand.
   the panic site to `crash.log` in the app config dir (beside `display.json`),
   along with one line per launch and one per deliberate stop — the `RunEvent::Exit`
   arm plus all three `restart()` paths, which exec past it. A `launched` with no
-  `exited` and no `PANIC` after it is therefore itself the diagnosis: the process
-  was ended from outside, which on Windows is nearly always AV quarantining the
-  exe mid-session. The release profile unwinds rather than aborts (see
+  `exited` and no `PANIC` after it is an unexplained stop: native faults such as
+  Windows heap corruption also bypass Rust panic hooks. Check Windows Error
+  Reporting/Event Viewer and crash dumps before attributing it to an external
+  kill or power loss. The release profile unwinds rather than aborts (see
   `Cargo.toml`) so a panic in one of the polling threads no longer ends the
   process, and `crash_log::spawn_supervised` catches it, records it and restarts
   that thread up to three times. Reachable from the tray as **Open crash log**.
@@ -34,6 +35,10 @@ browser to open by hand.
   watchdog returns it there after display reorders, replug or resume from standby.
   If the Edge is absent it degrades to full-screen on the primary display and
   re-places the moment the Edge appears.
+
+- **Game focus guard:** window-style updates run on the UI thread. Background
+  reassertions read the current game/typing/enabled state when executed, so a
+  queued update cannot re-enable no-activate after the guard has been lifted.
 
 - **Touch & gestures:** WebView2 delivers native touch as pointer events, so the
   dashboard's existing tap/pointer handlers work unchanged. Swipe-to-change-page

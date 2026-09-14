@@ -100,7 +100,9 @@ extern "system" fn set_noactivate_child(hwnd: isize, on: isize) -> i32 {
 
 /// Apply/remove `WS_EX_NOACTIVATE` on the kiosk window and every child (the
 /// WebView2 host windows), so a click anywhere in the kiosk never activates it.
-fn apply_guard(on: bool) {
+/// Runs on the UI thread; queued reassertions read the current state here.
+fn apply_guard() {
+    let on = armed();
     let hwnd = KIOSK_HWND.load(Ordering::Relaxed);
     if hwnd == 0 {
         return;
@@ -145,7 +147,9 @@ pub fn start(window: &WebviewWindow) {
                 LAST_FOREGROUND.store(fg, Ordering::Relaxed);
             }
             if armed() && (fg != last_fg || tick % REASSERT_TICKS == 0) {
-                apply_guard(true);
+                // Window styles share the UI thread with mode/typing changes.
+                // Do not capture an armed value that can go stale in the queue.
+                let _ = app.run_on_main_thread(apply_guard);
             }
             last_fg = fg;
         }
@@ -158,7 +162,7 @@ pub fn set_game_mode(on: bool) {
     if !on {
         TYPING.store(false, Ordering::Relaxed);
     }
-    apply_guard(armed());
+    apply_guard();
 }
 
 /// True while the dashboard reports game mode. Read by the display watchdog
@@ -185,7 +189,7 @@ pub fn type_start(window: &WebviewWindow) {
         return; // nothing is guarded — normal focus behavior already applies
     }
     TYPING.store(true, Ordering::Relaxed);
-    apply_guard(false);
+    apply_guard();
     let _ = window.set_focus();
 }
 
@@ -196,7 +200,7 @@ pub fn type_end() {
         return;
     }
     if armed() {
-        apply_guard(true);
+        apply_guard();
         give_back();
     }
 }
@@ -205,5 +209,98 @@ pub fn type_end() {
 pub fn set_enabled(app: &AppHandle, on: bool) {
     ENABLED.store(on, Ordering::Relaxed);
     prefs::update(app, |p| p.focus_guard = on);
-    apply_guard(armed());
+    apply_guard();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn CreateWindowExW(
+            ex_style: u32, class: *const u16, name: *const u16, style: u32,
+            x: i32, y: i32, width: i32, height: i32,
+            parent: isize, menu: isize, instance: isize, param: *mut core::ffi::c_void,
+        ) -> isize;
+        fn DestroyWindow(hwnd: isize) -> i32;
+    }
+
+    struct TestWindow(isize);
+
+    impl TestWindow {
+        fn new(parent: isize) -> Self {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let style = if parent == 0 { 0 } else { 0x4000_0000 }; // WS_CHILD
+            let hwnd = unsafe {
+                CreateWindowExW(
+                    0, class.as_ptr(), class.as_ptr(), style, 0, 0, 10, 10,
+                    parent, 0, 0, std::ptr::null_mut(),
+                )
+            };
+            assert_ne!(hwnd, 0, "create an invisible test window");
+            Self(hwnd)
+        }
+
+        fn style(&self) -> isize {
+            unsafe { GetWindowLongPtrW(self.0, GWL_EXSTYLE) }
+        }
+    }
+
+    impl Drop for TestWindow {
+        fn drop(&mut self) {
+            unsafe { DestroyWindow(self.0) };
+        }
+    }
+
+    struct ResetGuard;
+
+    impl Drop for ResetGuard {
+        fn drop(&mut self) {
+            KIOSK_HWND.store(0, Ordering::Relaxed);
+            ENABLED.store(true, Ordering::Relaxed);
+            GAME_MODE.store(false, Ordering::Relaxed);
+            TYPING.store(false, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn queued_reassertion_respects_game_exit_typing_and_disabled_guard() {
+        let parent = TestWindow::new(0);
+        let child = TestWindow::new(parent.0);
+        let _reset = ResetGuard;
+        KIOSK_HWND.store(parent.0, Ordering::Relaxed);
+        let initial_styles = [parent.style(), child.style()];
+
+        for transition in ["game-exit", "typing", "disabled"] {
+            ENABLED.store(true, Ordering::Relaxed);
+            TYPING.store(false, Ordering::Relaxed);
+            set_game_mode(true);
+            for window in [&parent, &child] {
+                assert_ne!(window.style() & WS_EX_NOACTIVATE, 0);
+            }
+
+            // The watcher queued this exact callback while the guard was armed.
+            // A UI transition happens before the event loop gets to the callback.
+            let queued_reassertion = apply_guard;
+            match transition {
+                "game-exit" => set_game_mode(false),
+                "typing" => {
+                    TYPING.store(true, Ordering::Relaxed);
+                    apply_guard();
+                }
+                "disabled" => {
+                    ENABLED.store(false, Ordering::Relaxed);
+                    apply_guard();
+                }
+                _ => unreachable!(),
+            }
+            assert!(!armed());
+            queued_reassertion();
+
+            for (window, initial) in [&parent, &child].into_iter().zip(initial_styles) {
+                assert_eq!(window.style(), initial, "{transition}: stale work re-armed the window");
+            }
+        }
+    }
 }
