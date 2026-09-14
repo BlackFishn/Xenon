@@ -67,14 +67,10 @@ function setSystemTab(name, options = {}) {
     window.mountSystemHistory();
   }
 
-  // The network stats are shown inside the Sistema view, so poll while it's active.
-  if (name === 'main') {
-    fetchNetwork();
-    if (!netInterval) netInterval = setInterval(fetchNetwork, 3000);
-  } else if (netInterval) {
-    clearInterval(netInterval);
-    netInterval = null;
-  }
+  // Keep the five-minute history sampling across System/Volume/Microphone tabs,
+  // including a saved non-System tab at startup. Returning shows the same series.
+  if (name === 'main') fetchNetwork();
+  if (!netInterval) netInterval = setInterval(fetchNetwork, 3000);
 
   if (!options.silent && typeof persistDashboardSystemTab === 'function') {
     persistDashboardSystemTab(name);
@@ -129,12 +125,9 @@ function applyNetwork(data) {
 
 async function fetchNetwork() {
   if (fetchingNetwork) return;
-  // The 3s /network poll is the only frequent fetcher without a visibility gate.
-  // Skip it while the tab is hidden, or while every System tile sits on a
-  // non-current pager page (mounted but off-screen) — nobody can see the stats.
+  // A parked dashboard page still needs samples: otherwise its old points age
+  // out and the graph looks reset on return. Pause only when the app is hidden.
   if (document.hidden) return;
-  const sys = Array.from(document.querySelectorAll('[data-dashboard-widget="system"]'));
-  if (sys.length && !sys.some(onVisiblePage)) return;
   fetchingNetwork = true;
   try {
     const res = await fetchWithDeadline(SERVER + '/network', POLL_FETCH_TIMEOUT_MS);

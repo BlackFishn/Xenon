@@ -10,12 +10,14 @@
 //
 // We stream PresentMon's CSV to stdout, parse it by *header name* (so it keeps
 // working across CLI versions), keep a short rolling window of frame times per
-// process, and expose the busiest recent process's FPS. If PresentMon is not
-// present (or fails to start, e.g. no admin), getCurrentFps() returns null and
+// swap chain, and expose the foreground/tracked game's displayed FPS. If it is
+// absent (or fails to start, e.g. no admin), getCurrentFps() returns null and
 // the server falls back to the existing methods.
 //
-// Place the classic single-binary PresentMon CLI at one of:
-//   server/presentmon/PresentMon.exe   (recommended)
+// The installer uses the current standalone CLI (no service/MSI required):
+//   server/presentmon/PresentMon-2.5.1-x64.exe   (recommended)
+// Older installations remain readable at:
+//   server/presentmon/PresentMon.exe
 //   server/PresentMon.exe
 // or anywhere on PATH as "PresentMon.exe".
 // ─────────────────────────────────────────────────────────────────────────
@@ -23,9 +25,10 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const gameDetect = require('./gamedetect');
 
 const SAMPLE_WINDOW_MS = 2000;   // a process must have presented this recently
-const MAX_SAMPLES = 240;         // rolling frame-time samples kept per process
+const MAX_SAMPLES = 2400;        // bound memory even with >1000 presents/second
 const RESTART_DELAY_MS = 5000;   // wait before relaunching after an exit
 const FAIL_BACKOFF_MS = 60000;   // back off hard after repeated instant failures
 const GAMING_GRACE_MS = 10000;   // stay "gaming" briefly after frames stop (anti-flicker)
@@ -53,7 +56,8 @@ const IGNORE_PROC_RE = /msedge|chrome|firefox|brave|opera|vivaldi|webview|iexplo
 
 function isIgnoredProc(name) {
   if (!name) return false;
-  return IGNORE_PROCS.has(name) || IGNORE_PROC_RE.test(name);
+  return IGNORE_PROCS.has(name) || IGNORE_PROC_RE.test(name)
+    || gameDetect.isIgnoredProc(name.replace(/\.exe$/, ''));
 }
 
 // A PresentMode counts as a game only when it uses the flip model typical of
@@ -65,8 +69,11 @@ function isGamingPresentMode(modeRaw) {
   return mode.startsWith('hardware') || mode.includes('independentflip');
 }
 
-// Where the single-binary PresentMon CLI is expected to live.
+// Keep the versioned binary beside 1.x so an interrupted upgrade cannot replace
+// a working collector. Its filename also selects the matching CLI arguments.
+const MODERN_PRESENTMON = path.join(__dirname, 'presentmon', 'PresentMon-2.5.1-x64.exe');
 const PRESENTMON_CANDIDATES = [
+  MODERN_PRESENTMON,
   path.join(__dirname, 'presentmon', 'PresentMon.exe'),
   path.join(__dirname, 'PresentMon.exe'),
 ];
@@ -80,7 +87,8 @@ const PRESENTMON_CANDIDATES = [
 const ETW_SESSION_NAME = 'XenonFps';
 
 let _proc = null;
-let _cols = null;                // { frameTime, fps, app, pid }
+let _runningExe = null;
+let _cols = null;
 let _consecutiveFastFails = 0;
 let _stopped = false;            // terminal: server shutting down, never restart
 // Paused starts TRUE: PresentMon runs an admin ETW tracing session, so it stays
@@ -91,7 +99,7 @@ let _paused = true;
 let _buffer = '';
 let _restartTimer = null;        // pending relaunch timer, so reload() can pre-empt it
 let _lastGamingAt = 0;           // last time a real app was presenting (for grace window)
-const _byPid = new Map();        // pid -> { name, samples:number[], usesFps:bool, lastSeen:number }
+const _bySwapChain = new Map();  // pid + swap chain -> recent frame intervals
 
 function presentMonPath() {
   for (const candidate of PRESENTMON_CANDIDATES) {
@@ -100,7 +108,11 @@ function presentMonPath() {
   return 'PresentMon.exe'; // last resort: rely on PATH (spawn errors → fallback)
 }
 
-// True when the PresentMon binary is present locally (vs. relying on PATH).
+function isCurrentVersionAvailable() {
+  try { return fs.existsSync(MODERN_PRESENTMON); } catch { return false; }
+}
+
+// True when any supported local reader is present (vs. relying on PATH).
 function isAvailable() {
   return PRESENTMON_CANDIDATES.some(c => { try { return fs.existsSync(c); } catch { return false; } });
 }
@@ -128,12 +140,25 @@ function parseHeader(fields) {
   const norm = fields.map(normHeader);
   const find = pred => norm.findIndex(pred);
   const frameTime = find(n => n.includes('betweenpresents')); // msBetweenPresents
+  // Prefer 2.x display durations: these include the collector's frame-generation
+  // and flip-metering handling. Never infer a generated-frame multiplier.
+  const displayDuration = find(n => n === 'displayedtime');
+  const displayTime = displayDuration >= 0 ? displayDuration : find(n => n === 'msbetweendisplaychange');
   const fps = find(n => n === 'fps' || n.endsWith('fps') || n.includes('displayedfps'));
   const app = find(n => n === 'application' || n.includes('processname'));
   const pid = find(n => n.includes('processid'));
   const presentMode = find(n => n.includes('presentmode'));
-  if (frameTime < 0 && fps < 0) return null; // nothing usable
-  return { frameTime, fps, app, pid, presentMode };
+  const dropped = find(n => n === 'dropped');
+  const swapChain = find(n => n === 'swapchainaddress');
+  const time = find(n => n === 'cpustarttime' || n === 'cpustarttimeinms' || n === 'timeinseconds');
+  const timeScale = time >= 0 && norm[time] === 'timeinseconds' ? 1000 : 1;
+  if (displayTime < 0 && frameTime < 0 && fps < 0) return null;
+  return { frameTime, displayTime, fps, app, pid, presentMode, dropped, swapChain, time, timeScale };
+}
+
+function pruneSamples(entry, at) {
+  while (entry.samples.length && (at - entry.samples[0].at > SAMPLE_WINDOW_MS
+      || entry.samples.length > MAX_SAMPLES)) entry.samples.shift();
 }
 
 function handleRow(fields) {
@@ -147,9 +172,14 @@ function handleRow(fields) {
   // so windowed desktop apps and the dashboard's own browser don't count.
   if (_cols.presentMode >= 0 && !isGamingPresentMode(fields[_cols.presentMode])) return;
 
+  const displayed = _cols.displayTime >= 0;
+  // A burst of Present() calls can contain frames never shown. Dropping those
+  // rows only works with DISPLAY intervals; present intervals would then count
+  // just the tiny gap after a dropped frame and inflate the result further.
+  if (displayed && _cols.dropped >= 0 && fields[_cols.dropped] !== '0') return;
   let value, usesFps;
-  if (_cols.frameTime >= 0) {
-    const ft = parseFloat(fields[_cols.frameTime]);
+  if (displayed || _cols.frameTime >= 0) {
+    const ft = parseFloat(fields[displayed ? _cols.displayTime : _cols.frameTime]);
     if (!Number.isFinite(ft) || ft <= 0 || ft > 1000) return;
     value = ft; usesFps = false;
   } else {
@@ -158,13 +188,22 @@ function handleRow(fields) {
     value = f; usesFps = true;
   }
 
-  let entry = _byPid.get(pid);
-  if (!entry) { entry = { name, samples: [], usesFps, lastSeen: 0 }; _byPid.set(pid, entry); }
+  const now = Date.now();
+  const at = _cols.time >= 0 ? Number(fields[_cols.time]) * _cols.timeScale : now;
+  if (!Number.isFinite(at)) return;
+  const swapChain = _cols.swapChain >= 0 ? fields[_cols.swapChain] : '';
+  const key = `${pid}:${swapChain}`;
+  let entry = _bySwapChain.get(key);
+  if (!entry) {
+    entry = { pid, name, samples: [], usesFps, metric: displayed ? 'displayed' : 'presented', lastSeen: 0 };
+    _bySwapChain.set(key, entry);
+  }
   entry.name = name || entry.name;
   entry.usesFps = usesFps;
-  entry.samples.push(value);
-  if (entry.samples.length > MAX_SAMPLES) entry.samples.shift();
-  entry.lastSeen = Date.now();
+  entry.samples.push({ value, at });
+  entry.lastSampleAt = at;
+  pruneSamples(entry, at);
+  entry.lastSeen = now;
 }
 
 function onData(chunk) {
@@ -191,10 +230,15 @@ function start() {
   const exe = presentMonPath();
   _cols = null;
   _buffer = '';
-  _byPid.clear(); // fresh PresentMon session → PIDs from the old one are meaningless
+  _bySwapChain.clear(); // fresh session → old process/swap-chain identities are meaningless
   const startedAt = Date.now();
+  const args = exe === MODERN_PRESENTMON
+    ? ['--output_stdout', '--stop_existing_session', '--no_console_stats', '--session_name', ETW_SESSION_NAME,
+      '--v2_metrics', '--track_frame_type', '--no_track_gpu', '--no_track_input']
+    : ['-output_stdout', '-stop_existing_session', '-no_top', '-session_name', ETW_SESSION_NAME];
   try {
-    _proc = spawn(exe, ['-output_stdout', '-stop_existing_session', '-no_top', '-session_name', ETW_SESSION_NAME], { windowsHide: true });
+    _runningExe = exe;
+    _proc = spawn(exe, args, { windowsHide: true });
   } catch {
     _proc = null;
     scheduleRestart(startedAt);
@@ -216,39 +260,43 @@ function scheduleRestart(startedAt) {
   _restartTimer = setTimeout(start, delay);
 }
 
-function median(arr) {
-  const s = arr.slice().sort((a, b) => a - b);
-  const mid = s.length >> 1;
-  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
-}
-
 // How long a silent process keeps its slot before being dropped. Long enough
-// to survive loading screens, short enough that _byPid never accumulates every
+// to survive loading screens, short enough that the map never accumulates every
 // PID seen over a 24/7 uptime.
 const STALE_ENTRY_MS = 60000;
 
-// The busiest recently-presenting process (i.e. our best "active game" guess).
-// Doubles as the pruning pass: stale PIDs are evicted while we scan, keeping
-// the map bounded to processes that presented in the last minute.
+// Use the existing foreground/game identity, never whichever desktop app filled
+// a sample buffer first. Pure getters avoid recursing through isGaming(), which
+// itself asks getGamingProcess() for a windowed-game hint. Within that process,
+// choose one swap chain so separate windows/overlays cannot mix their timings.
 function _bestEntry() {
   const now = Date.now();
-  let best = null;
-  for (const [pid, entry] of _byPid) {
-    if (now - entry.lastSeen > STALE_ENTRY_MS) { _byPid.delete(pid); continue; }
+  const foreground = gameDetect.getForegroundProcess();
+  const game = gameDetect.getGameDiag();
+  let focused = null, tracked = null;
+  for (const [key, entry] of _bySwapChain) {
+    if (now - entry.lastSeen > STALE_ENTRY_MS) { _bySwapChain.delete(key); continue; }
     if (now - entry.lastSeen > SAMPLE_WINDOW_MS) continue;
+    pruneSamples(entry, entry.lastSampleAt + now - entry.lastSeen);
     if (!entry.samples.length) continue;
-    if (!best || entry.samples.length > best.samples.length) best = entry;
+    const name = entry.name.replace(/\.exe$/, '');
+    if (name === foreground && (name !== game.gameProc || !game.gamePid || entry.pid === String(game.gamePid))
+        && (!focused || entry.samples.length > focused.samples.length)) focused = entry;
+    if (entry.pid === String(game.gamePid) && name === game.gameProc
+        && (!tracked || entry.samples.length > tracked.samples.length)) tracked = entry;
   }
-  return best;
+  return focused || tracked;
 }
 
 function _entryFps(entry) {
-  const m = median(entry.samples);
+  // FPS is frames / elapsed seconds. Inverting the median frame interval can
+  // report 400 FPS for a 100 FPS stream with short bursts followed by stalls.
+  const m = entry.samples.reduce((sum, sample) => sum + sample.value, 0) / entry.samples.length;
   if (!Number.isFinite(m) || m <= 0) return null;
   return Math.round(entry.usesFps ? m : 1000 / m);
 }
 
-// FPS of the busiest recently-presenting process (the active game), or null.
+// Recent FPS of the foreground/tracked game, or null.
 function getCurrentFps() {
   const best = _bestEntry();
   return best ? _entryFps(best) : null;
@@ -260,7 +308,7 @@ function getGamingProcess() {
   const best = _bestEntry();
   if (!best) return null;
   const fps = _entryFps(best);
-  return fps == null ? null : { name: best.name || '?', fps };
+  return fps == null ? null : { name: best.name || '?', pid: Number(best.pid) || null, fps, metric: best.metric };
 }
 
 // True while a real foreground app is presenting frames (a game or other
@@ -282,7 +330,11 @@ function reload() {
   if (_stopped || _paused) return;
   _consecutiveFastFails = 0;
   if (_restartTimer) { clearTimeout(_restartTimer); _restartTimer = null; }
-  if (!_proc) start();
+  if (_proc && _runningExe !== presentMonPath()) {
+    // The close handler relaunches with the newly installed version and clears
+    // only our own ETW session. Other overlays keep their sessions.
+    try { _proc.kill(); } catch { /* normal retry remains available */ }
+  } else if (!_proc) start();
 }
 
 // Pause/resume tie PresentMon's admin ETW session to whether a dashboard is
@@ -293,7 +345,7 @@ function pauseFpsMonitor() {
   _paused = true;
   if (_restartTimer) { clearTimeout(_restartTimer); _restartTimer = null; }
   if (_proc) { try { _proc.kill(); } catch { /* ignore */ } _proc = null; stopEtwSession(); }
-  _byPid.clear(); // a future session's PIDs are unrelated to this one
+  _bySwapChain.clear(); // a future session's PIDs are unrelated to this one
 }
 
 function resumeFpsMonitor() {
@@ -307,7 +359,7 @@ function stopFpsMonitor() {
   _stopped = true;
   if (_restartTimer) { clearTimeout(_restartTimer); _restartTimer = null; }
   if (_proc) { try { _proc.kill(); } catch { /* ignore */ } _proc = null; stopEtwSession(); }
-  _byPid.clear();
+  _bySwapChain.clear();
 }
 
-module.exports = { startFpsMonitor, stopFpsMonitor, pauseFpsMonitor, resumeFpsMonitor, getCurrentFps, getGamingProcess, isGaming, isAvailable, reload };
+module.exports = { startFpsMonitor, stopFpsMonitor, pauseFpsMonitor, resumeFpsMonitor, getCurrentFps, getGamingProcess, isGaming, isAvailable, isCurrentVersionAvailable, reload };

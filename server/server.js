@@ -13396,7 +13396,7 @@ const handleRequest = async (req, res) => {
     // cannot tell them apart from an availability boolean alone.
     try {
       json({
-        presentMonAvailable: fpsMonitor.isAvailable(),
+        presentMonAvailable: fpsMonitor.backend === 'presentmon' ? fpsMonitor.isCurrentVersionAvailable() : fpsMonitor.isAvailable(),
         fpsBackend: fpsMonitor.backend || null,
         fpsAvailable: fpsMonitor.isAvailable(),
         gaming: gameDetect.isGaming(),
@@ -13722,27 +13722,23 @@ const handleRequest = async (req, res) => {
     } catch (e) { json({ ok: false, error: e.message }); }
 
   } else if (reqPath === '/api/gamemode/install-presentmon' && req.method === 'POST') {
-    // One-click download of the classic single-binary PresentMon CLI (the same
-    // v1.10.0 asset install.ps1 fetches), placed in server/presentmon/.
+    // Install the standalone 2.5.1 CLI alongside legacy readers. Modern display
+    // timing accounts for generated frames and NVIDIA flip metering.
     try {
       // PresentMon is a Windows ETW tool: there is no build to fetch anywhere
       // else, and the download itself is written in PowerShell. Refusing by name
       // beats letting the client discover it through a spawn failure.
       if (process.platform !== 'win32') { json({ ok: false, error: 'unsupported_platform' }); }
-      else if (fpsMonitor.isAvailable()) { json({ ok: true, alreadyInstalled: true }); }
+      else if (fpsMonitor.isCurrentVersionAvailable()) { json({ ok: true, alreadyInstalled: true }); }
       else {
         const ps = [
           "$ErrorActionPreference='Stop';",
-          "$dir=$env:PM_DIR; $exe=Join-Path $dir 'PresentMon.exe';",
+          "$dir=$env:PM_DIR; $exe=Join-Path $dir 'PresentMon-2.5.1-x64.exe'; $download=$exe+'.download';",
           "if(-not(Test-Path $dir)){New-Item -ItemType Directory -Path $dir -Force | Out-Null};",
           '[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;',
-          "$h=@{'User-Agent'='XenonEdgeHub';'Accept'='application/vnd.github+json'};",
-          "$rel=Invoke-RestMethod -Uri 'https://api.github.com/repos/GameTechDev/PresentMon/releases/tags/v1.10.0' -Headers $h -TimeoutSec 25;",
-          "$a=$rel.assets | Where-Object { $_.name -match 'PresentMon.*x64.*\\.exe$' } | Select-Object -First 1;",
-          "if(-not $a){$a=$rel.assets | Where-Object { $_.name -match '\\.exe$' } | Select-Object -First 1};",
-          "if(-not $a){throw 'no PresentMon x64 executable in release assets'};",
-          "Invoke-WebRequest -Uri $a.browser_download_url -OutFile $exe -Headers @{'User-Agent'='XenonEdgeHub'} -TimeoutSec 120 -UseBasicParsing;",
-          "if(-not(Test-Path $exe)){throw 'download did not produce PresentMon.exe'}",
+          "Invoke-WebRequest -Uri 'https://github.com/GameTechDev/PresentMon/releases/download/v2.5.1/PresentMon-2.5.1-x64.exe' -OutFile $download -Headers @{'User-Agent'='XenonEdgeHub'} -TimeoutSec 120 -UseBasicParsing;",
+          "if((Get-FileHash -LiteralPath $download -Algorithm SHA256).Hash -ne '9bec3083069f58f911e6a512f4806db51a27bd096103087bc1d05ef54c80a191'){throw 'PresentMon SHA-256 mismatch'};",
+          "Move-Item -LiteralPath $download -Destination $exe -Force;",
         ].join(' ');
         await new Promise((resolve, reject) =>
           execFile('powershell.exe',

@@ -1,4 +1,4 @@
-﻿# -Mode native|icue skips the interactive surface prompt (used by the native
+# -Mode native|icue skips the interactive surface prompt (used by the native
 # app's bootstrap, where env vars don't survive the -Verb RunAs elevation).
 #
 # -SkipNativeApp leaves the Tauri shell alone. The bootstrap passes it because
@@ -867,7 +867,7 @@ function Install-PawnIoIfNeeded {
 
 function Install-PresentMonIfNeeded {
   $dir = Join-Path $filesDir 'presentmon'
-  $exe = Join-Path $dir 'PresentMon.exe'
+  $exe = Join-Path $dir 'PresentMon-2.5.1-x64.exe'
   if (Test-Path $exe) { Write-Step "PresentMon found: $exe"; return }
 
   Write-Step 'Installing PresentMon for real in-game FPS (including exclusive fullscreen)...'
@@ -881,18 +881,16 @@ function Install-PresentMonIfNeeded {
       if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
       [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
       $headers = @{ 'User-Agent' = 'XenonEdgeHub'; 'Accept' = 'application/vnd.github+json' }
-      # Pin the last classic 1.x release: its single-binary CLI (-output_stdout)
-      # is what server/fpsmon.js parses. (2.x uses a different service-based CLI.)
-      $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/GameTechDev/PresentMon/releases/tags/v1.10.0' -Headers $headers -TimeoutSec 25
-      $asset = $rel.assets | Where-Object { $_.name -match 'PresentMon.*x64.*\.exe$' } | Select-Object -First 1
-      if (-not $asset) { $asset = $rel.assets | Where-Object { $_.name -match '\.exe$' } | Select-Object -First 1 }
-      if (-not $asset) { throw 'no PresentMon x64 executable in the release assets' }
-      Invoke-DownloadWithSpinner -Uri $asset.browser_download_url -OutFile $exe -Headers @{ 'User-Agent' = 'XenonEdgeHub' } -TimeoutSec 120 -Activity 'Downloading PresentMon'
-      if (Test-Path $exe) { Write-Step "PresentMon installed: $exe"; return }
-      throw 'download did not produce PresentMon.exe'
+      # Use the standalone CLI, not the service/MSI. Keep 1.x in place for rollback.
+      $download = $exe + '.download'
+      Invoke-DownloadWithSpinner -Uri 'https://github.com/GameTechDev/PresentMon/releases/download/v2.5.1/PresentMon-2.5.1-x64.exe' -OutFile $download -Headers @{ 'User-Agent' = 'XenonEdgeHub' } -TimeoutSec 120 -Activity 'Downloading PresentMon'
+      if ((Get-FileHash -LiteralPath $download -Algorithm SHA256).Hash -ne '9bec3083069f58f911e6a512f4806db51a27bd096103087bc1d05ef54c80a191') { throw 'PresentMon SHA-256 mismatch' }
+      Move-Item -LiteralPath $download -Destination $exe -Force
+      Write-Step "PresentMon installed: $exe"
+      return
     } catch {
       if ($attempt -eq $maxAttempts) {
-        Write-Host "PresentMon could not be installed automatically ($($_.Exception.Message)). In-game FPS will fall back to the windowed-only method until PresentMon.exe is placed in server\presentmon\." -ForegroundColor Yellow
+        Write-Host "PresentMon could not be installed automatically ($($_.Exception.Message)). In-game FPS will fall back to the windowed-only method until PresentMon-2.5.1-x64.exe is placed in server\presentmon\." -ForegroundColor Yellow
       }
     }
   }
@@ -1383,7 +1381,7 @@ function Get-ComponentStatus {
     'FFmpeg (AI voice)'     = [bool](Get-FfmpegPath)
     'LibreHardwareMonitor'  = [bool](Get-LibreHardwareMonitorPath)
     'PawnIO driver'         = [bool](Get-PawnIoDriver)
-    'PresentMon (game FPS)' = (Test-Path (Join-Path $filesDir 'presentmon\PresentMon.exe'))
+    'PresentMon (game FPS)' = (Test-Path (Join-Path $filesDir 'presentmon\PresentMon-2.5.1-x64.exe'))
     'Xenon Helper'          = (Test-Path (Join-Path $filesDir 'helper\xenon-helper.exe'))
   }
 }
