@@ -428,6 +428,8 @@ iCUE's embedded WebView can reject some MP4 files even when they play fine in Ch
 
 ## Documentation
 
+- **[docs/fork-workflow.md](docs/fork-workflow.md)** — personal production/dev branches, validation, releases and rollback.
+
 - **[FEATURES.md](FEATURES.md)** — the complete feature guide, with screenshots.
 - **[DEVELOPER.md](DEVELOPER.md)** — developer quick start, HTTP API, file layout, and architecture.
 - **[docs/THEME_SYSTEM.md](docs/THEME_SYSTEM.md)** — semantic theme roles, contrast, per-widget overrides, and import/export.
