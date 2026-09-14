@@ -30250,6 +30250,15 @@ Object.assign(i18n.en, {
 });
 
 Object.assign(i18n.en, {
+  ambient_editor_title: 'Ambient layout', ambient_editor_save: 'Save layout',
+  ambient_editor_background: 'Background', ambient_editor_dashboard_bg: 'Use Xenon background',
+  ambient_editor_scene_bg: 'Use scene background', ambient_editor_snap: 'Snap to grid',
+  ambient_editor_hint: 'Drag to move · corner to resize · arrow keys for precision',
+  ambient_editor_width: 'Width', ambient_editor_height: 'Height',
+  ambient_editor_move: 'Move widget', ambient_editor_resize: 'Resize widget',
+});
+
+Object.assign(i18n.en, {
   ai_whisper_required: 'Voice recognition is not installed. Open Settings → Xenon AI → Local → Components, install Whisper, then try again.',
   ai_tts_failed: 'Voice playback failed. Tap to close, then try again.',
   settings_openai_access: 'Connection',

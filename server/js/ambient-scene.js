@@ -61,6 +61,9 @@
     const n = num(v, lo, hi, null);
     return n == null ? fb : Math.round(n);
   }
+  function percent(v, lo, hi, fb) {
+    return Math.round(num(v, lo, hi, fb) * 100) / 100;
+  }
   function str(v, max) {
     return typeof v === 'string' ? v.slice(0, max) : '';
   }
@@ -107,7 +110,7 @@
   // screensaver sits lit for hours.
   function normalizeBg(raw) {
     const src = raw && typeof raw === 'object' ? raw : {};
-    const out = { type: pick(src.type, ['color', 'gradient', 'image'], 'color') };
+    const out = { type: pick(src.type, ['color', 'gradient', 'image', 'dashboard'], 'color') };
     out.color = hex(src.color, '#05060a');
     const g = grad(src.grad);
     if (g) out.grad = g;
@@ -193,10 +196,10 @@
     const out = {
       id: SCENE_ID_RE.test(String(raw.id || '')) ? raw.id : genId('cmp'),
       type,
-      x: round(raw.x, 0, 100, 10),
-      y: round(raw.y, 0, 100, 10),
-      w: round(raw.w, 2, 100, 30),
-      h: round(raw.h, 2, 100, 20),
+      x: percent(raw.x, 0, 100, 10),
+      y: percent(raw.y, 0, 100, 10),
+      w: percent(raw.w, 2, 100, 30),
+      h: percent(raw.h, 2, 100, 20),
       rot: round(raw.rot, -180, 180, 0),
       z: round(raw.z, 0, MAX_COMPONENTS, 0),
       props,

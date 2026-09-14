@@ -217,7 +217,7 @@ body.ambient-layout-editing .ambient-editor-dock {
 /* The scene backdrop owns the grid so it stays behind every widget and never
    changes hit testing. Twenty-four columns retain horizontal precision on the
    Xeneon Edge; twelve rows keep vertical snapping legible on its short canvas. */
-.ambient-canvas-stage.is-editing > .ac-bg::before {
+.ambient-canvas-stage.is-editing.has-snap > .ac-bg::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -259,7 +259,7 @@ body.ambient-layout-editing .ambient-editor-dock {
 }
 
 .ambient-canvas-stage.is-editing .ac-item.is-selected {
-  z-index: 50 !important;
+  z-index: 1000 !important;
 }
 
 /* Live controls are display-only while arranging; host editor chrome remains
@@ -387,7 +387,7 @@ body.ambient-layout-editing .ambient-editor-dock {
   touch-action: manipulation;
 }
 
-.ambient-canvas-stage.is-editing .ac-item.is-compact-editor .ambient-editor-resize {
+.ambient-canvas-stage.is-editing .ac-item.is-compact-editor .ambient-editor-remove {
   display: none;
 }
 
@@ -439,4 +439,49 @@ body.ambient-layout-editing .ambient-editor-dock {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* Keep the canvas clear while settings stay together in a compact movable dock. */
+.ambient-editor-options, .ambient-editor-inspector {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  width: 100%;
+  gap: 8px 12px;
+  padding: 7px 5px 2px;
+  border-top: 1px solid #ffffff12;
+}
+.ambient-editor-options label { display: inline-flex; align-items: center; gap: 8px; font-size: 11px; }
+.ambient-editor-options select, .ambient-editor-inspector input {
+  min-height: 34px;
+  border: 1px solid #ffffff25;
+  border-radius: 7px;
+  background: #17232d;
+  color: #e8ecf4;
+  font: inherit;
+  padding: 5px 8px;
+}
+.ambient-editor-options select { max-width: 200px; font-size: 11px; }
+.ambient-editor-options option { background: #17232d; }
+.ambient-editor-options [aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: rgba(var(--accent-rgb), .12); }
+.ambient-editor-hint { flex: 1; min-width: 180px; color: #99aebc; font-size: 11px; }
+.ambient-editor-inspector[hidden] { display: none; }
+.ambient-editor-selection { min-width: 56px; text-transform: capitalize; font-size: 12px; color: var(--accent); }
+.ambient-editor-inspector label { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #afbfca; }
+.ambient-editor-inspector input { width: 65px; font-variant-numeric: tabular-nums; }
+.ambient-editor-options :focus-visible, .ambient-editor-inspector :focus-visible, .ambient-editor-size:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.ambient-editor-chip, .ambient-editor-add-chip, .ambient-editor-item-label, .ambient-editor-size { font-weight: 650; }
+.ambient-editor-grip, .ambient-editor-remove, .ambient-editor-resize, .ambient-editor-size {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.ambient-canvas-stage.is-editing .ac-item.is-dragging { cursor: grabbing; }
+.ambient-canvas-stage.is-editing .ac-item.is-dragging > .grid-stack-item-content { transition: none; }
+@media (max-width: 720px), (orientation: portrait) {
+  .ambient-editor-hint { flex-basis: 100%; }
+  .ambient-editor-inspector { gap: 8px; }
+  .ambient-editor-inspector label { flex: 1 1 40%; justify-content: space-between; }
+  .ambient-editor-selection { width: 100%; }
 }

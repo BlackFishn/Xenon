@@ -14,9 +14,8 @@
 // CustomWidget.registerCanvasFrame; an ungranted package (or the SDK master off)
 // renders a quiet placeholder — never an un-vetted frame.
 //
-// Performance: one self-pausing rAF drives the dynamic components, updating a
-// node's DOM only when its data signature actually changes (per reference/
-// ambient.md), and the loop stops entirely on document.hidden and on unmount.
+// Dynamic readings refresh once a second; unchanged values keep their DOM.
+// The timer stops entirely on document.hidden and on unmount.
 
 (function () {
   if (typeof window === 'undefined') return;
@@ -26,7 +25,7 @@
 
   // current = { scene, items:[{ comp, el, body, sig, dynamic }], onClose }
   let current = null;
-  let raf = null;
+  let timer = null;
 
   function tt(key, fb) {
     const v = (typeof window.t === 'function') ? window.t(key) : key;
@@ -53,6 +52,7 @@
   // ── background ──────────────────────────────────────────────────────────
   function bgCss(bg) {
     if (!bg || typeof bg !== 'object') return '#05060a';
+    if (bg.type === 'dashboard') return 'transparent';
     if (bg.type === 'image' && bg.url) return `#000 url("${bg.url}") center/cover no-repeat`;
     if (bg.type === 'gradient' && bg.grad) {
       return `linear-gradient(${bg.grad.angle || 180}deg, ${bg.grad.from}, ${bg.grad.to})`;
@@ -72,7 +72,7 @@
   }
 
   // ── component renderers ─────────────────────────────────────────────────
-  // Each entry: build(body, comp) once; update(item) on the rAF loop returns a
+  // Each entry: build(body, comp) once; update(item) on the timer returns a
   // signature string — the loop rewrites the DOM only when it changes. Static
   // types (text/image/shape/sdk) declare no update.
   const R = {
@@ -356,16 +356,23 @@
   // ── build one positioned component ──────────────────────────────────────
   // opts.noSdkFrame → SDK components render a placeholder instead of a live iframe
   // (used by the throwaway import-preview thumbnail, which can't clean frames up).
+  function applyGeometry(node, comp) {
+    node.style.left = comp.x + '%';
+    node.style.top = comp.y + '%';
+    node.style.width = comp.w + '%';
+    node.style.height = comp.h + '%';
+    node.style.transform = comp.rot ? `rotate(${comp.rot}deg)` : '';
+    node.style.zIndex = String(comp.z || 0);
+  }
+  function syncBackdrop() {
+    overlayEl()?.classList.toggle('uses-dashboard-background', current?.scene.bg.type === 'dashboard');
+  }
   function buildItem(comp, opts) {
     const def = R[comp.type];
     if (!def) return null;
     const wrap = el('div', 'ac-item ac-item-' + comp.type);
     wrap.dataset.ambientId = comp.id;
-    wrap.style.left = comp.x + '%';
-    wrap.style.top = comp.y + '%';
-    wrap.style.width = comp.w + '%';
-    wrap.style.height = comp.h + '%';
-    if (comp.rot) wrap.style.transform = `rotate(${comp.rot}deg)`;
+    applyGeometry(wrap, comp);
     // Give the item the tile DOM shape applyTileStyle expects, so per-component
     // colour tokens + decor reuse the exact tile pipeline (no drift).
     const content = wrap.appendChild(el('div', 'grid-stack-item-content'));
@@ -375,19 +382,19 @@
     return { comp, el: wrap, body, sig: '', dynamic: !!def.dynamic };
   }
 
-  // ── self-pausing rAF loop ───────────────────────────────────────────────
+  // ── self-pausing update loop ───────────────────────────────────────────────
   function tick() {
-    raf = null;
+    timer = null;
     if (!current) return;
     for (const item of current.items) {
       if (!item.dynamic) continue;
       const def = R[item.comp.type];
       if (def && def.update) { try { item.sig = def.update(item); } catch { /* keep going */ } }
     }
-    if (!document.hidden) raf = requestAnimationFrame(tick);
+    if (!document.hidden) timer = setTimeout(tick, 1000 - Date.now() % 1000);
   }
-  function startLoop() { if (!raf && !document.hidden) tick(); }
-  function stopLoop() { if (raf) { cancelAnimationFrame(raf); raf = null; } }
+  function startLoop() { if (!timer && !document.hidden) tick(); }
+  function stopLoop() { if (timer) { clearTimeout(timer); timer = null; } }
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) stopLoop(); else if (current) startLoop();
   });
@@ -409,6 +416,7 @@
     stage.replaceChildren(frag);
     overlay.hidden = false;
     document.body.classList.add('ambient-canvas-open');
+    syncBackdrop();
     startLoop();
     return true;
   }
@@ -443,21 +451,34 @@
       if (item) { frag.appendChild(item.el); current.items.push(item); }
     });
     stage.replaceChildren(frag);
+    syncBackdrop();
     startLoop();
   }
 
-  // Editor seam: the layout editor owns only interaction state while this
-  // renderer remains the authority for live component DOM. Replacing a draft
-  // always runs through AmbientScene first, then rebuilds in place so weather,
-  // media, tile styling and SDK safety gates cannot drift from normal playback.
+  // Geometry edits retain live DOM and SDK frames. Structural/prop/style edits
+  // still rebuild through the normal renderer and its SDK permission gates.
   function replaceScene(scene) {
     if (!isOpen() || !current) return false;
     const norm = (window.AmbientScene && AmbientScene.normalizeScene)
       ? AmbientScene.normalizeScene(scene)
       : scene;
     if (!norm || !Array.isArray(norm.components)) return false;
+    const sameContent = norm.components.length === current.items.length && current.items.every(item => {
+      const next = norm.components.find(comp => comp.id === item.comp.id);
+      return next && next.type === item.comp.type
+        && JSON.stringify(next.props) === JSON.stringify(item.comp.props)
+        && JSON.stringify(next.style) === JSON.stringify(item.comp.style);
+    });
+    const backgroundChanged = JSON.stringify(norm.bg) !== JSON.stringify(current.scene.bg);
     current.scene = norm;
-    refresh();
+    if (sameContent) {
+      for (const item of current.items) {
+        item.comp = norm.components.find(comp => comp.id === item.comp.id);
+        applyGeometry(item.el, item.comp);
+      }
+      if (backgroundChanged) stageEl().querySelector('.ac-bg')?.replaceWith(buildBg(norm.bg));
+      syncBackdrop();
+    } else refresh();
     return true;
   }
 
@@ -469,7 +490,7 @@
   // Preview reuse (js/preset-share.js import thumbnail): build a single item / the
   // bg layer with the EXACT same DOM + style pipeline as a live scene, and run one
   // update pass for a dynamic component — so the import preview can never drift from
-  // what the screensaver renders. The caller owns the lifecycle (no rAF here).
+  // what the screensaver renders. The caller owns the lifecycle (no update timer here).
   function previewUpdate(item) {
     const def = item && R[item.comp.type];
     if (def && def.update) { try { item.sig = def.update(item); } catch { /* keep going */ } }

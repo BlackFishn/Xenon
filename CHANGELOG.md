@@ -25,6 +25,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Subscription voice checks Whisper before listening.** Missing speech recognition stays visible with setup instructions, Thai speech is detected independently of the menu language, and Whisper installation skips releases without Windows binaries.
 - **Thai voice replies work with ChatGPT subscriptions and other Edge TTS providers.** Thai text selects a Thai voice even with English menus. Speech failures remain visible instead of silently reopening the microphone; canceled replies cannot restart listening.
 - **ChatGPT sign-in explains when the backend needs restarting.** Empty HTTP errors no longer appear as JSON parsing failures; connection controls show recovery instructions and remain usable for retry.
+- **Custom Ambient layouts keep the Xenon background and are easier to arrange.** Choose the dashboard or scene background, move freely with optional grid snapping, and enter exact position and size values in a movable toolbar. Fractional positions survive saving, dragging preserves live widgets, and clock text and media artwork fit short ultrawide screens. See the [Ambient editor guide](docs/ambient-editor.md).
 - **Microphone mute now reflects the real Windows device state.** SoundVolumeView exports are decoded as UTF-8 so non-ASCII microphones such as RØDE retain a usable device ID, mute targets the current default capture device even if Voicemod changes it between polls, and Xenon verifies the hardware result before updating the control.
 
 ## [v4.11.7] - 05-09-2026

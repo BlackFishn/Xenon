@@ -13,8 +13,11 @@
   animation: lockscreen-enter 0.34s cubic-bezier(.2, .9, .2, 1) both;
 }
 body.ambient-canvas-open { overflow: hidden; }
+body.ambient-canvas-open .shell { visibility: hidden; pointer-events: none; }
+.ambient-canvas-overlay.uses-dashboard-background { background: linear-gradient(180deg, #0001, #0003); }
 
 .ambient-canvas-stage {
+  isolation: isolate;
   position: absolute;
   inset: 0;
   overflow: hidden;
@@ -79,23 +82,23 @@ body.ambient-canvas-open { overflow: hidden; }
 .ac-item.ac-empty { opacity: 0.5; }
 
 /* ── clock / date ─────────────────────────────────────────────────────────── */
-.ac-item-clock .ac-body { flex-direction: row; align-items: baseline; gap: 0.15em; }
+.ac-item-clock .ac-body { flex-direction: row; align-items: center; gap: 0.15em; }
 .ac-clock-time {
-  font-size: clamp(28px, 16cqmin, 40vmin);
+  font-size: max(20px, min(16cqw, 68cqh));
   font-weight: 200;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
 .ac-clock-ampm {
-  font-size: clamp(10px, 4cqmin, 6vmin);
+  font-size: max(10px, min(3cqw, 12cqh));
   font-weight: 600;
   letter-spacing: 0.12em;
   color: var(--muted-text, #8b93a7);
 }
 .ac-clock-ampm:empty { display: none; }
 .ac-date-text {
-  font-size: clamp(12px, 9cqmin, 4vmin);
+  font-size: max(12px, min(4.5cqw, 45cqh, 4vmin));
   color: var(--muted-text, #8b93a7);
   text-transform: capitalize;
   letter-spacing: 0.06em;
@@ -115,7 +118,8 @@ body.ambient-canvas-open { overflow: hidden; }
 .ac-item-media .ac-body { flex-direction: row; align-items: center; gap: 1em; padding: 0 4%; }
 .ac-m-art {
   flex: 0 0 auto;
-  width: clamp(40px, 40%, 100%);
+  width: min(28cqw, 82cqh);
+  height: min(28cqw, 82cqh);
   aspect-ratio: 1;
   border-radius: 12%;
   background: rgba(255, 255, 255, 0.06) center/cover no-repeat;

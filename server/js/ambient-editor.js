@@ -73,6 +73,15 @@
   function updateDock() {
     if (!active || !active.dock) return;
     active.undoButton.disabled = active.history.length === 0;
+    active.backgroundSelect.value = active.draft.bg.type === 'dashboard' ? 'dashboard' : 'scene';
+    const comp = componentById(active.selectedId);
+    active.inspector.hidden = !comp;
+    if (comp) {
+      active.selectionLabel.textContent = comp.type;
+      for (const [key, input] of Object.entries(active.fields)) {
+        if (document.activeElement !== input) input.value = String(Math.round(comp[key] * 10) / 10);
+      }
+    }
   }
 
   function decorateItems() {
@@ -83,23 +92,22 @@
       const id = item.dataset.ambientId;
       const comp = componentById(id);
       if (!comp) return;
+      const decorated = item.classList.contains('is-editable');
       item.classList.add('is-editable');
       item.classList.toggle('is-selected', id === active.selectedId);
       item.tabIndex = 0;
       item.setAttribute('aria-label', tt('ui_layout', 'Layout') + ': ' + comp.type);
-      item.addEventListener('focus', () => select(id));
-      item.addEventListener('pointerdown', event => {
-        if (event.target.closest('button')) return;
-        select(id);
-        startPointer(event, 'move', id);
-      });
+      const existingSize = item.querySelector('.ambient-editor-size');
+      if (existingSize) existingSize.textContent = Math.round(comp.w) + '% × ' + Math.round(comp.h) + '%';
+      item.classList.toggle('is-compact-editor', item.getBoundingClientRect().height < 96);
+      if (decorated) return;
 
       const grip = document.createElement('button');
       grip.type = 'button';
       grip.className = 'ambient-editor-grip';
       grip.innerHTML = ICONS.move + '<span class="ambient-editor-item-label"></span>';
       grip.querySelector('span').textContent = comp.type;
-      grip.title = tt('layout_customize', 'Move widget');
+      grip.title = tt('ambient_editor_move', 'Move widget');
       grip.setAttribute('aria-label', grip.title);
       grip.addEventListener('pointerdown', event => startPointer(event, 'move', id));
 
@@ -107,12 +115,12 @@
         event.stopPropagation();
         removeSelected(id);
       });
-      const resize = iconButton('ambient-editor-resize', tt('layout_customize', 'Resize widget'), ICONS.resize, () => {});
+      const resize = iconButton('ambient-editor-resize', tt('ambient_editor_resize', 'Resize widget'), ICONS.resize, () => {});
       resize.addEventListener('pointerdown', event => startPointer(event, 'resize', id));
       const size = document.createElement('button');
       size.type = 'button';
       size.className = 'ambient-editor-size';
-      size.textContent = Math.round(comp.w) + ' × ' + Math.round(comp.h);
+      size.textContent = Math.round(comp.w) + '% × ' + Math.round(comp.h) + '%';
       size.title = tt('layout_resize', 'Change widget size');
       size.setAttribute('aria-label', size.title);
       size.addEventListener('click', event => {
@@ -120,13 +128,13 @@
         cycleSize(id);
       });
       item.append(grip, remove, resize, size);
-      item.classList.toggle('is-compact-editor', item.getBoundingClientRect().height < 96);
     });
   }
 
   function renderDraft() {
     if (!active || !canvas() || !canvas().replaceScene(active.draft)) return false;
     decorateItems();
+    stage().classList.toggle('has-snap', active.snap);
     updateDock();
     return true;
   }
@@ -138,6 +146,7 @@
     if (root) root.querySelectorAll('.ac-item').forEach(item => {
       item.classList.toggle('is-selected', item.dataset.ambientId === active.selectedId);
     });
+    updateDock();
   }
 
   function geometryForPointer(pointer, event) {
@@ -145,7 +154,7 @@
     const dx = (event.clientX - pointer.clientX) / Math.max(1, rect.width) * 100;
     const dy = (event.clientY - pointer.clientY) / Math.max(1, rect.height) * 100;
     const start = pointer.start;
-    const bypass = !!event.altKey;
+    const bypass = !active.snap || !!event.altKey;
     if (pointer.mode === 'resize') {
       const w = clamp(snap(start.w + dx, SNAP_X, bypass), MIN_W, 100 - start.x);
       const h = clamp(snap(start.h + dy, SNAP_Y, bypass), MIN_H, 100 - start.y);
@@ -157,7 +166,7 @@
   }
 
   function paintPointer(pointer, geometry) {
-    const node = stage() && stage().querySelector(`.ac-item[data-ambient-id="${CSS.escape(pointer.id)}"]`);
+    const node = pointer.node;
     if (!node) return;
     if (geometry.x != null) node.style.left = geometry.x + '%';
     if (geometry.y != null) node.style.top = geometry.y + '%';
@@ -165,7 +174,7 @@
     if (geometry.h != null) node.style.height = geometry.h + '%';
     const comp = { ...pointer.start, ...geometry };
     const size = node.querySelector('.ambient-editor-size');
-    if (size) size.textContent = Math.round(comp.w) + ' × ' + Math.round(comp.h);
+    if (size) size.textContent = Math.round(comp.w) + '% × ' + Math.round(comp.h) + '%';
   }
 
   function onPointerMove(event) {
@@ -178,12 +187,22 @@
     const geometry = geometryForPointer(active.pointer, event);
     active.pointer.geometry = geometry;
     active.pointer.changed = Object.keys(geometry).some(key => Math.abs(geometry[key] - active.pointer.start[key]) > 0.01);
-    paintPointer(active.pointer, geometry);
+    const pointer = active.pointer;
+    if (!pointer.frame) pointer.frame = requestAnimationFrame(() => {
+      pointer.frame = null;
+      if (active?.pointer === pointer) paintPointer(pointer, pointer.geometry);
+    });
   }
 
   function finishPointer(event) {
     if (!active || !active.pointer || event.pointerId !== active.pointer.pointerId) return;
     const pointer = active.pointer;
+    if (event.type !== 'pointercancel' && pointer.activated) {
+      pointer.geometry = geometryForPointer(pointer, event);
+      pointer.changed = Object.keys(pointer.geometry).some(key => Math.abs(pointer.geometry[key] - pointer.start[key]) > 0.01);
+    }
+    if (pointer.frame) cancelAnimationFrame(pointer.frame);
+    pointer.node?.classList.remove('is-dragging');
     active.pointer = null;
     window.removeEventListener('pointermove', onPointerMove, true);
     window.removeEventListener('pointerup', finishPointer, true);
@@ -204,6 +223,8 @@
     active.pointer = {
       id,
       mode,
+      node: stage().querySelector(`.ac-item[data-ambient-id="${CSS.escape(id)}"]`),
+      frame: null,
       pointerId: event.pointerId,
       clientX: event.clientX,
       clientY: event.clientY,
@@ -214,6 +235,7 @@
       changed: false,
       activated: false,
     };
+    active.pointer.node?.classList.add('is-dragging');
     try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* detached target */ }
     window.addEventListener('pointermove', onPointerMove, true);
     window.addEventListener('pointerup', finishPointer, true);
@@ -298,6 +320,8 @@
     if (!active) return null;
     const state = active;
     if (state.pointer) {
+      if (state.pointer.frame) cancelAnimationFrame(state.pointer.frame);
+      state.pointer.node?.classList.remove('is-dragging');
       window.removeEventListener('pointermove', onPointerMove, true);
       window.removeEventListener('pointerup', finishPointer, true);
       window.removeEventListener('pointercancel', finishPointer, true);
@@ -307,7 +331,8 @@
     const root = stage();
     if (root) {
       if (state.stagePointerDown) root.removeEventListener('pointerdown', state.stagePointerDown);
-      root.classList.remove('is-editing');
+      if (state.stageFocusIn) root.removeEventListener('focusin', state.stageFocusIn);
+      root.classList.remove('is-editing', 'has-snap');
       root.querySelectorAll('.ac-item').forEach(item => {
         item.classList.remove('is-editable', 'is-selected');
         item.removeAttribute('tabindex');
@@ -366,6 +391,7 @@
 
   function onKeyDown(event) {
     if (!active) return;
+    if (event.target?.closest('input, select, textarea, [contenteditable="true"]')) return;
     if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); cancel(); return; }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
       event.preventDefault(); event.stopImmediatePropagation(); undo(); return;
@@ -378,6 +404,16 @@
     }
   }
 
+  function changeGeometry(key, value) {
+    const comp = componentById(active?.selectedId);
+    if (!comp || value === '' || !Number.isFinite(Number(value))) return;
+    const max = key === 'x' ? 100 - comp.w : key === 'y' ? 100 - comp.h : key === 'w' ? 100 - comp.x : 100 - comp.y;
+    const next = clamp(Number(value), key === 'w' || key === 'h' ? 2 : 0, max);
+    if (next === comp[key]) return;
+    pushHistory(active.draft);
+    active.draft = model().updateComponentGeometry(active.draft, comp.id, { [key]: next });
+    renderDraft();
+  }
   function buildDock() {
     const dock = document.createElement('div');
     dock.className = 'ambient-editor-dock';
@@ -385,7 +421,7 @@
     dock.setAttribute('aria-label', tt('layout_customize', 'Edit Ambient layout'));
     const title = document.createElement('span');
     title.className = 'ambient-editor-dock-title';
-    title.textContent = 'Ambient layout';
+    title.textContent = tt('ambient_editor_title', 'Ambient layout');
     const actions = document.createElement('div');
     actions.className = 'ambient-editor-actions';
     const add = button('ambient-editor-chip', tt('layout_add_widget', 'Add widget'), ICONS.add, () => {
@@ -394,7 +430,7 @@
     const undoButton = button('ambient-editor-chip', tt('ai_undo', 'Undo'), ICONS.undo, undo);
     const resetButton = button('ambient-editor-chip danger', tt('layout_reset', 'Reset layout'), ICONS.reset, reset);
     const cancelButton = button('ambient-editor-chip', tt('perf_sheet_cancel', 'Cancel'), ICONS.close, cancel);
-    const doneButton = button('ambient-editor-chip primary', tt('layout_exit', 'Done'), ICONS.done, done);
+    const doneButton = button('ambient-editor-chip primary', tt('ambient_editor_save', 'Save layout'), ICONS.done, done);
     actions.append(add, undoButton, resetButton, cancelButton, doneButton);
     const addRow = document.createElement('div');
     addRow.className = 'ambient-editor-add-row';
@@ -402,7 +438,62 @@
       const label = type[0].toUpperCase() + type.slice(1);
       addRow.appendChild(button('ambient-editor-add-chip', label, ICONS.add, () => addComponent(type)));
     }
-    dock.append(title, actions, addRow);
+    const options = document.createElement('div');
+    options.className = 'ambient-editor-options';
+    const backgroundLabel = document.createElement('label');
+    backgroundLabel.textContent = tt('ambient_editor_background', 'Background');
+    const backgroundSelect = document.createElement('select');
+    backgroundSelect.className = 'ambient-editor-background';
+    backgroundSelect.setAttribute('aria-label', backgroundLabel.textContent);
+    for (const [value, label] of [
+      ['dashboard', tt('ambient_editor_dashboard_bg', 'Use Xenon background')],
+      ['scene', tt('ambient_editor_scene_bg', 'Use scene background')],
+    ]) {
+      const option = document.createElement('option');
+      option.value = value; option.textContent = label;
+      backgroundSelect.appendChild(option);
+    }
+    backgroundSelect.addEventListener('change', () => {
+      if (!active) return;
+      pushHistory(active.draft);
+      const bg = backgroundSelect.value === 'dashboard'
+        ? { ...active.draft.bg, type: 'dashboard' } : clone(active.sceneBackground);
+      active.draft = model().createDraft({ ...active.draft, bg });
+      renderDraft();
+    });
+    backgroundLabel.appendChild(backgroundSelect);
+    const snapButton = button('ambient-editor-chip', tt('ambient_editor_snap', 'Snap to grid'), ICONS.move, () => {
+      active.snap = !active.snap;
+      snapButton.setAttribute('aria-pressed', String(active.snap));
+      stage().classList.toggle('has-snap', active.snap);
+    });
+    snapButton.setAttribute('aria-pressed', 'false');
+    const hint = document.createElement('span');
+    hint.className = 'ambient-editor-hint';
+    hint.textContent = tt('ambient_editor_hint', 'Drag to move · corner to resize · arrow keys for precision');
+    options.append(backgroundLabel, snapButton, hint);
+    const inspector = document.createElement('div');
+    inspector.className = 'ambient-editor-inspector';
+    inspector.hidden = true;
+    const selectionLabel = document.createElement('strong');
+    selectionLabel.className = 'ambient-editor-selection';
+    inspector.appendChild(selectionLabel);
+    active.fields = {};
+    for (const [key, label] of [['x', 'X'], ['y', 'Y'], ['w', tt('ambient_editor_width', 'Width')], ['h', tt('ambient_editor_height', 'Height')]]) {
+      const field = document.createElement('label');
+      field.textContent = label + ' %';
+      const input = document.createElement('input');
+      input.type = 'number'; input.min = key === 'w' || key === 'h' ? '2' : '0';
+      input.max = '100'; input.step = '0.1';
+      input.setAttribute('aria-label', label + ' %');
+      input.dataset.geometry = key;
+      input.addEventListener('change', () => changeGeometry(key, input.value));
+      field.appendChild(input); inspector.appendChild(field);
+      active.fields[key] = input;
+    }
+    active.inspector = inspector; active.selectionLabel = selectionLabel;
+    active.backgroundSelect = backgroundSelect;
+    dock.append(title, actions, options, inspector, addRow);
     active.undoButton = undoButton;
     active.addRow = addRow;
     return dock;
@@ -434,14 +525,24 @@
       if (event.pointerType === 'mouse' && event.button !== 0) return;
       event.preventDefault();
       const rect = dock.getBoundingClientRect();
+      // The entrance animation owns transform until it is removed.
+      dock.style.animation = 'none';
+      dock.style.width = rect.width + 'px';
+      dock.style.left = rect.left + 'px'; dock.style.top = rect.top + 'px';
+      dock.style.right = 'auto'; dock.style.bottom = 'auto'; dock.style.transform = 'none';
       drag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, left: rect.left, top: rect.top, width: rect.width, height: rect.height };
       try { handle.setPointerCapture(event.pointerId); } catch { /* detached */ }
       window.addEventListener('pointermove', move, true);
       window.addEventListener('pointerup', up, true);
       window.addEventListener('pointercancel', up, true);
     };
+    const resize = () => {
+      for (const key of ['width', 'left', 'top', 'right', 'bottom', 'transform']) dock.style[key] = '';
+    };
+    window.addEventListener('resize', resize);
     handle.addEventListener('pointerdown', down);
     return () => {
+      window.removeEventListener('resize', resize);
       handle.removeEventListener('pointerdown', down);
       window.removeEventListener('pointermove', move, true);
       window.removeEventListener('pointerup', up, true);
@@ -464,6 +565,8 @@
       history: [],
       selectedId: '',
       pointer: null,
+      snap: false,
+      sceneBackground: original.bg.type === 'dashboard' ? { ...clone(original.bg), type: original.bg.url ? 'image' : original.bg.grad ? 'gradient' : 'color' } : clone(original.bg),
       dock: null,
       addRow: null,
       undoButton: null,
@@ -478,9 +581,16 @@
     document.body.classList.add('ambient-layout-editing');
     window.addEventListener('keydown', onKeyDown, true);
     active.stagePointerDown = event => {
-      if (event.target === stage()) select('');
+      const item = event.target.closest('.ac-item');
+      if (!item) { select(''); return; }
+      if (!event.target.closest('button')) startPointer(event, 'move', item.dataset.ambientId);
+    };
+    active.stageFocusIn = event => {
+      const item = event.target.closest('.ac-item');
+      if (item) select(item.dataset.ambientId);
     };
     stage().addEventListener('pointerdown', active.stagePointerDown);
+    stage().addEventListener('focusin', active.stageFocusIn);
     renderDraft();
     return true;
   }

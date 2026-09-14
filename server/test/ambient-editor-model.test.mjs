@@ -9,6 +9,7 @@ test('default scene seeds schema-v1 Clock, Date, Weather, and Media geometry', (
   const scene = Model.createDefaultScene();
   assert.equal(scene.id, 'my-ambient');
   assert.equal(scene.v, 1);
+  assert.equal(scene.bg.type, 'dashboard', 'customizing keeps the current dashboard background');
   assert.deepEqual(scene.components.map(component => component.type), ['clock', 'date', 'weather', 'media']);
   for (const component of scene.components) {
     assert.ok(component.x >= 0 && component.x <= 100);

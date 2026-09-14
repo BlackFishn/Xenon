@@ -138,3 +138,19 @@ test('normalizeScene preserves a valid install id only for imported scenes', () 
   assert.equal('installId' in mine, false);
   assert.equal('installId' in hostile, false);
 });
+
+test('dashboard backgrounds survive normalization without changing explicit scene backdrops', () => {
+  assert.equal(AS.normalizeBg({ type: 'dashboard' }).type, 'dashboard');
+  assert.deepEqual(AS.normalizeBg({ type: 'color', color: '#123456' }), {
+    type: 'color', color: '#123456', dim: 0, blur: 0,
+  });
+  assert.equal(AS.normalizeBg({ type: 'dashboard', url: 'https://example.com/private.png' }).url, undefined);
+  assert.equal(AS.normalizeBg({ type: 'invalid' }).type, 'color');
+});
+
+test('geometry retains fractional percentages through scene save and reload', () => {
+  const comp = AS.normalizeComponent({ id: 'clock', type: 'clock', x: 8.4453, y: 22.6389, w: 41.9531, h: 31.4722 });
+  assert.deepEqual({ x: comp.x, y: comp.y, w: comp.w, h: comp.h }, { x: 8.45, y: 22.64, w: 41.95, h: 31.47 });
+  const saved = AS.normalizeScene(JSON.parse(JSON.stringify({ id: 'saved-layout', components: [comp] })));
+  assert.deepEqual(saved.components[0], comp);
+});

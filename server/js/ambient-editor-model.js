@@ -36,7 +36,7 @@
       id,
       v: 1,
       name: typeof options.name === 'string' ? options.name : 'My Ambient',
-      bg: { type: 'color', color: '#05060a', dim: 0, blur: 0 },
+      bg: { type: 'dashboard', color: '#05060a', dim: 0, blur: 0 },
       components: [
         { id: 'clock', type: 'clock', x: 7, y: 20, w: 40, h: 28, z: 2, props: { format: 'auto', seconds: false } },
         { id: 'date', type: 'date', x: 7, y: 50, w: 40, h: 10, z: 3, props: { variant: 'full' } },

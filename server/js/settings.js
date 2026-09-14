@@ -7819,19 +7819,11 @@ function syncAmbientSettings() {
   // The lockWidgets toggles only shape the builtin scene.
   const builtinWidgets = $('settings-ambient-builtin-widgets');
   if (builtinWidgets) builtinWidgets.hidden = cfg.sceneId !== 'builtin';
-  // …and say WHY they went away, which the disappearance alone does not.
-  //
-  // Only the classic scene is drawn on translucent layers, so only it lets the
-  // wallpaper through. Every other scene — an installed package or a canvas
-  // layout — sits on an opaque overlay and IS the picture, edge to edge.
-  // Reported on Discord by a user who uploaded a background, opened Ambient,
-  // and saw the artwork of the scene he had picked instead. Nothing was broken
-  // and nothing said so: the choice that overrode his wallpaper was three rows
-  // above, made days earlier. Same note the background colour row has carried
-  // for the same reason.
+  // Explain opaque scenes, while canvas layouts can inherit the dashboard background.
   const sceneNote = $('settings-ambient-scene-note');
   if (sceneNote) {
-    const covers = cfg.sceneId !== 'builtin';
+    const selectedCanvas = (hubSettings.ambientScenes || []).find(scene => 'canvas:' + scene.id === cfg.sceneId);
+    const covers = cfg.sceneId !== 'builtin' && selectedCanvas?.bg.type !== 'dashboard';
     sceneNote.hidden = !covers;
     if (covers) {
       sceneNote.setAttribute('data-i18n', 'ambient_scene_covers');

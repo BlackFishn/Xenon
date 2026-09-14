@@ -1,17 +1,6 @@
-// Saying that a chosen Ambient scene replaces the whole screen.
-//
-// Reported on Discord. A user was told he could put a GIF behind Ambient mode,
-// uploaded one, opened Ambient — and saw Van Gogh. Nothing was broken: his
-// Ambient scene was set to an installed one, picked days earlier, and a scene
-// that is not the classic one sits on an opaque overlay and IS the picture.
-// Both non-builtin overlays are `background: #000`; only the classic scene is
-// drawn on translucent layers, which is why the wallpaper shows through it and
-// through nothing else.
-//
-// The advice was right and incomplete, and the app said nothing either way: the
-// setting that overrode his wallpaper was three rows above the one he had just
-// used. This is the same note the background colour row has carried for years,
-// for exactly this shape of surprise.
+// SDK scenes and canvas layouts with explicit backgrounds cover the wallpaper.
+// Canvas layouts can also inherit the dashboard background; the settings note
+// must explain only the scenes that cover it.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -26,7 +15,7 @@ const CANVAS = readFileSync(new URL('../components/AmbientCanvas/AmbientCanvas.c
 
 // If any of these three ever changes, the note is telling the user something
 // untrue — which is worse than the silence it replaced.
-test('only the classic scene is see-through; the other two are not', () => {
+test('SDK and explicit canvas backgrounds stay opaque; inherited canvas backgrounds are transparent', () => {
   const rule = (css, sel) => {
     const at = css.indexOf(sel + ' {');
     assert.notEqual(at, -1, `${sel} must still exist`);
@@ -34,6 +23,8 @@ test('only the classic scene is see-through; the other two are not', () => {
   };
   assert.match(rule(LOCK, '.ambient-scene-overlay'), /background:\s*#000/, 'an SDK scene is opaque');
   assert.match(rule(CANVAS, '.ambient-canvas-overlay'), /background:\s*#000/, 'a canvas scene is opaque');
+  assert.match(rule(CANVAS, '.ambient-canvas-overlay.uses-dashboard-background'), /background: linear-gradient/);
+  assert.match(CANVAS, /body\.ambient-canvas-open \.shell \{ visibility: hidden/);
   // The classic one paints only translucent gradients — no opaque colour at all,
   // which is the whole reason a wallpaper reaches the screen behind it.
   const builtin = rule(LOCK, '.lockscreen-overlay');
@@ -44,14 +35,12 @@ test('only the classic scene is see-through; the other two are not', () => {
 
 // ── When it is shown ─────────────────────────────────────────────────────────
 
-test('the note appears for any scene but the classic one, and never for it', () => {
+test('the covers note excludes classic and dashboard-backed canvas scenes', () => {
   const fn = SETTINGS.slice(SETTINGS.indexOf('function syncAmbientSettings()'));
   const body = fn.slice(0, fn.indexOf('\n}'));
-  assert.match(body, /const covers = cfg\.sceneId !== 'builtin'/);
+  assert.match(body, /const covers = cfg\.sceneId !== 'builtin' && selectedCanvas\?\.bg.type !== 'dashboard'/);
   assert.match(body, /sceneNote\.hidden = !covers/);
-  // It must follow exactly the condition that hides the lock-widget toggles —
-  // the note exists to explain that disappearance, so a different rule would
-  // leave one of the two unexplained.
+  // Classic widget toggles still belong only to the classic scene.
   assert.match(body, /builtinWidgets\.hidden = cfg\.sceneId !== 'builtin'/);
 });
 
