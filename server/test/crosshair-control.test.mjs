@@ -83,8 +83,13 @@ test('success requires matching acknowledgement, not merely a written command', 
 
 test('an unacknowledged command times out without reporting ON', async t => {
   const f = await fixture(t);
-  const api = createCrosshairControl({ ...f.options, sleep: async () => {} });
+  let waited = 0;
+  const api = createCrosshairControl({ ...f.options, sleep: async ms => {
+    assert.ok(ms <= 25, 'acknowledgement checks should not add a 100 ms delay');
+    waited += ms;
+  } });
   await assert.rejects(api.send({ enabled: true }), e => e.statusCode === 504);
+  assert.equal(waited, 5000, 'faster polling must retain the full command timeout');
   assert.equal((await api.status()).enabled, false);
 });
 

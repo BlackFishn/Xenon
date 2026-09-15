@@ -20,6 +20,7 @@ const STATUS_FILE = 'xenon-crosshair-status.json';
 const COMMAND_FILE = 'xenon-crosshair-command.json';
 const FRESH_MS = 8000;
 const COMMAND_MS = 5000;
+const ACK_POLL_MS = 25;
 
 function fail(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -100,8 +101,8 @@ function createCrosshairControl({ platform = process.platform, localAppData = pr
         await fs.rename(temp, path.join(location, COMMAND_FILE));
       } finally { await fs.unlink(temp).catch(() => {}); }
       // Only an acknowledgement from Game Bar changes the displayed toggle state.
-      for (let attempt = 0; attempt < 50; attempt++) {
-        await sleep(100);
+      for (let attempt = 0; attempt < COMMAND_MS / ACK_POLL_MS; attempt++) {
+        await sleep(ACK_POLL_MS);
         const state = await statusAt(location);
         if (state.online && state.commandId === id) {
           if (state.error) throw fail(state.error, 502);

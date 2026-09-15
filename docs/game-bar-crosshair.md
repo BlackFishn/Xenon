@@ -7,7 +7,7 @@ First open **Win + G → Widgets → Xenon Crosshair**, pin it, and enable click
 - **Draw:** Cross, Dot, Ring or T-shape, custom color, length/radius, thickness, gap, black outline and center dot.
 - **Image / GIF:** choose or drop PNG, JPG, GIF or WebP. GIF animation and transparency are preserved. WebP imports its still image as PNG so Windows does not need an optional codec. Set the longest side to 8–128 Windows logical pixels; the aspect ratio is preserved.
 - **Presets:** save a name and the complete design, including its image. Presets survive browser and widget restarts. Select a saved preset to apply it, or remove it with Delete.
-- **Two-way state:** changes made in Game Bar appear back in Xenon. Edits are combined while dragging; ON/OFF reflects the widget's acknowledgement. Failed commands keep the last confirmed overlay and show a retry action.
+- **Two-way state:** changes made in Game Bar appear back in Xenon. Edits stream during dragging, keeping only the latest pending value. The open editor checks for Game Bar changes every 250 ms; ON/OFF reflects the widget's acknowledgement. Failed commands keep the last confirmed overlay and show a retry action.
 
 The editor preview stays visible while the game overlay is OFF. Its label distinguishes the preview from the confirmed game state. Offline edits wait for Game Bar to reconnect; turning the overlay ON requires a live widget.
 

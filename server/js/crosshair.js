@@ -130,32 +130,34 @@ window.XenonCrosshair = (() => {
     if(statusRequest)return statusRequest;
     const before=revision;
     statusRequest=request('/api/crosshair').then(result=>{
-      if(sending)return;
+      if(sending||before!==revision)return;
+      const changed=JSON.stringify(state)!==JSON.stringify(result);
       state=result;
       if(before===revision&&!editing&&!queued)draft=model.settings(result);
-      render();
+      if(changed)render();
       if(queued&&ready())flush();
-    }).catch(e=>{state=null;error=e.message;render();}).finally(()=>{statusRequest=null;});
+    }).catch(e=>{if(!sending&&before===revision){state=null;error=e.message;render();}}).finally(()=>{statusRequest=null;});
     return statusRequest;
   }
   async function flush() {
-    clearTimeout(timer);
+    clearTimeout(timer);timer=null;
     if(sending||!queued||!ready()){render();return;}
-    const patch=queued, before=revision;queued=null;sending=true;error='';render();
+    const patch=queued, before=++revision;queued=null;sending=true;error='';render();
     try{
       state=await request('/api/crosshair',patch);
       if(before===revision&&!queued&&(Object.keys(patch).some(k=>model.keys.includes(k))||!editing)){draft=model.settings(state);editing=false;}
     }catch(e){
       error=e.name==='AbortError'?'Game Bar ไม่ตอบกลับ เปิด Win + G แล้วลองใหม่':e.message;
       state=await request('/api/crosshair').catch(()=>null);
-    }finally{sending=false;render();if(queued)timer=setTimeout(flush,100);}
+    }finally{sending=false;render();if(queued)flush();}
   }
   function change(patch) {
     try { Object.assign(draft,model.validatePatch(patch)); }
     catch(e){error=e.message;render();return;}
     revision++;editing=true;error='';
-    if(validDraft()){queued={...queued,...model.settings(draft)};clearTimeout(timer);timer=setTimeout(flush,180);}
-    else{queued=null;clearTimeout(timer);}
+    // Keep the latest drag value moving; new input must not postpone the send.
+    if(validDraft()){queued={...queued,...model.settings(draft)};if(!sending&&!timer)timer=setTimeout(flush,40);}
+    else{queued=null;clearTimeout(timer);timer=null;}
     render();
   }
   async function apply(patch) {
@@ -257,7 +259,11 @@ window.XenonCrosshair = (() => {
   document.addEventListener('keydown',e=>{if(e.key==='Escape'&&dialog.open){e.preventDefault();close();}});
   const visible=()=>!document.hidden&&(dialog.open||[...document.querySelectorAll('[data-crosshair-rail],[data-crosshair-toggle]')].some(el=>el.getClientRects().length));
   document.addEventListener('visibilitychange',()=>{if(visible())refresh();});
-  setInterval(()=>{if(visible())refresh();},2000);
+  async function poll() {
+    if(visible())await refresh();
+    setTimeout(poll,dialog.open?250:1000);
+  }
+  setTimeout(poll,250);
   new ResizeObserver(draw).observe(root);
   refresh();
   return { open, close, toggle, apply, openGameBar, togglePanel:()=>dialog.open?close():open() };

@@ -26,7 +26,7 @@ namespace Xenon.Crosshair
         private const string StatusFile = "xenon-crosshair-status.json";
         private readonly XboxGameBarWidget widget;
         private readonly CoreDispatcher uiDispatcher;
-        private readonly DispatcherTimer timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        private readonly DispatcherTimer timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
         private readonly Grid root = new Grid();
         private readonly Grid reticle = new Grid { Width = 132, Height = 132, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
         private readonly Canvas drawing = new Canvas { Width = 132, Height = 132 };
@@ -42,6 +42,7 @@ namespace Xenon.Crosshair
         private string commandId = "", error = "", loadedAsset = "";
         private BitmapImage bitmap;
         private long lastStatus;
+        private DateTime lastCommandWrite;
 
         public CrosshairPage(XboxGameBarWidget widget)
         {
@@ -251,9 +252,13 @@ namespace Xenon.Crosshair
             try
             {
                 string file = Path.Combine(ApplicationData.Current.LocalFolder.Path, CommandFile);
-                if (File.Exists(file) && new FileInfo(file).Length <= 4096)
+                var info = new FileInfo(file);
+                // Check cheaply at 20 Hz; unchanged commands need no read, parse or redraw.
+                if (info.Exists && info.Length <= 4096 && info.LastWriteTimeUtc != lastCommandWrite)
                 {
+                    DateTime written = info.LastWriteTimeUtc;
                     if (JsonObject.TryParse(File.ReadAllText(file), out JsonObject command)) await ApplyCommand(command);
+                    lastCommandWrite = written;
                 }
                 if (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - lastStatus >= 2000) await Publish();
             }
