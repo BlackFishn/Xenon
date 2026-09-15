@@ -1430,6 +1430,8 @@ pub fn run() {
         // When the loopback dashboard first loads (not the splash), check once
         // for a newer signed release and, if any, surface the update toast.
         .on_page_load(|_webview, _payload| {
+            // URLs may contain login secrets; only record the lifecycle event.
+            crash_log::debug(&format!("page load {:?}", _payload.event()));
             #[cfg(desktop)]
             {
                 use std::sync::atomic::Ordering;
@@ -1461,6 +1463,7 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            crash_log::debug("setup started");
             let port = std::env::var("XENON_PORT")
                 .ok()
                 .and_then(|p| p.parse::<u16>().ok())
@@ -1843,12 +1846,23 @@ pub fn run() {
             //    `lowPowerGpu` cap.
             #[cfg(windows)]
             let builder = builder.additional_browser_args(&browser_args(gpu_flag));
+            crash_log::debug("building main webview");
             let window = builder.build()?;
+            crash_log::debug("main webview built");
+            window.on_window_event(|event| {
+                match event {
+                    tauri::WindowEvent::CloseRequested { .. } => crash_log::debug("window close requested"),
+                    tauri::WindowEvent::Destroyed => crash_log::debug("window destroyed"),
+                    tauri::WindowEvent::Focused(on) => crash_log::debug(&format!("window focused={on}")),
+                    _ => {}
+                }
+            });
 
             // Place the kiosk window on the Xeneon Edge (if connected) and keep a
             // watchdog running so it returns there after display reorders, replug
             // or resume from standby.
             monitor::place_now(&window);
+            crash_log::debug("initial display placement finished");
             // Seed the watchdog's Remote-Desktop-hide flag from the saved pref so a
             // launch that starts inside an RDP session already knows to hide (the
             // dashboard's toggle updates it live once the page loads).
@@ -1892,6 +1906,7 @@ pub fn run() {
             // launch, so someone who had chosen their phone and then opened Xenon
             // once from the Start menu silently got the window back at every login.
             sync_autostart(app.handle());
+            crash_log::debug("setup services ready");
 
             // Stop Windows from stealing edge touch swipes (taskbar/Start reveal)
             // so the "swipe up to the desktop" gesture reaches the dashboard —

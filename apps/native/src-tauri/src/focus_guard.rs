@@ -158,6 +158,7 @@ pub fn start(window: &WebviewWindow) {
 
 /// The dashboard entered/left game mode (`xenon-focus:guard-on/off`).
 pub fn set_game_mode(on: bool) {
+    crate::crash_log::debug(&format!("focus guard game mode={on}"));
     GAME_MODE.store(on, Ordering::Relaxed);
     if !on {
         TYPING.store(false, Ordering::Relaxed);
@@ -189,6 +190,7 @@ pub fn type_start(window: &WebviewWindow) {
         return; // nothing is guarded — normal focus behavior already applies
     }
     TYPING.store(true, Ordering::Relaxed);
+    crate::crash_log::debug("focus guard typing started");
     apply_guard();
     let _ = window.set_focus();
 }
@@ -199,6 +201,7 @@ pub fn type_end() {
     if !TYPING.swap(false, Ordering::Relaxed) {
         return;
     }
+    crate::crash_log::debug("focus guard typing ended");
     if armed() {
         apply_guard();
         give_back();
@@ -207,6 +210,7 @@ pub fn type_end() {
 
 /// Tray toggle: flip the behavior now and remember the choice across launches.
 pub fn set_enabled(app: &AppHandle, on: bool) {
+    crate::crash_log::debug(&format!("focus guard enabled={on}"));
     ENABLED.store(on, Ordering::Relaxed);
     prefs::update(app, |p| p.focus_guard = on);
     apply_guard();

@@ -56,6 +56,7 @@ const RESTART_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 /// serialises through the file, and a second panicking thread has nothing new
 /// to add anyway.
 static IN_HOOK: AtomicBool = AtomicBool::new(false);
+static DEBUG: AtomicBool = AtomicBool::new(false);
 
 /// Directory Tauri would give as `app_config_dir()`, resolved without an
 /// `AppHandle` — the hook has to be installed before the app exists.
@@ -128,6 +129,10 @@ fn fmt_utc(secs: i64) -> String {
 /// write.
 fn append(kind: &str, detail: &str) {
     let Some(path) = path() else { return };
+    append_to(&path, kind, detail);
+}
+
+fn append_to(path: &std::path::Path, kind: &str, detail: &str) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -139,9 +144,10 @@ fn append(kind: &str, detail: &str) {
     };
     let _ = writeln!(
         f,
-        "[{}] v{} {} {}",
+        "[{}] v{} pid={} {} {}",
         timestamp(),
         env!("CARGO_PKG_VERSION"),
+        std::process::id(),
         kind,
         detail
     );
@@ -181,9 +187,19 @@ pub fn install() {
 /// Note that this process started. Written after `install()` so a panic during
 /// startup still lands in a file that says which launch it belongs to.
 pub fn session_start() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let line = format!("{} {}", std::env::consts::OS, args.join(" "));
-    append("launched", line.trim_end());
+    let debug = std::env::args().any(|a| a == "--debug-log")
+        || std::env::var("XENON_DEBUG_LOG").as_deref() == Ok("1");
+    DEBUG.store(debug, Ordering::Relaxed);
+    // Arbitrary launch arguments can contain credentials or private URLs.
+    append("launched", &format!("{} arch={} debug={debug}",
+        std::env::consts::OS, std::env::consts::ARCH));
+}
+
+/// Only fixed event names and non-sensitive state belong in diagnostic records.
+pub fn debug(detail: &str) {
+    if DEBUG.load(Ordering::Relaxed) {
+        append("debug", detail);
+    }
 }
 
 /// Note that this process is stopping on purpose. Anything that ends a session
@@ -210,8 +226,10 @@ where
     let spawned = std::thread::Builder::new()
         .name(name.to_string())
         .spawn(move || {
+            debug(&format!("thread `{name}` started"));
             for attempt in 0..=MAX_RESTARTS {
                 if panic::catch_unwind(panic::AssertUnwindSafe(&mut body)).is_ok() {
+                    debug(&format!("thread `{name}` finished"));
                     return; // finished on its own terms (window gone) — done
                 }
                 if attempt == MAX_RESTARTS {
@@ -230,6 +248,27 @@ where
 #[cfg(test)]
 mod tests {
     use super::fmt_utc;
+
+    #[test]
+    fn records_pid_and_rotates_previous_log() {
+        let dir = std::env::temp_dir().join(format!("xenon-log-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("crash.log");
+        let old = vec![b'x'; super::MAX_BYTES as usize + 1];
+        std::fs::write(&path, &old).unwrap();
+        super::append_to(&path, "debug", "main webview built");
+        let record = std::fs::read_to_string(&path).unwrap();
+        assert!(record.contains(&format!("pid={} debug main webview built", std::process::id())));
+        assert_eq!(std::fs::read(path.with_extension("log.1")).unwrap(), old);
+        // A second rotation replaces the existing backup, including on Windows.
+        std::fs::write(&path, &old).unwrap();
+        super::append_to(&path, "exited", "clean shutdown");
+        assert!(std::fs::read_to_string(&path).unwrap().contains("exited clean shutdown"));
+        assert_eq!(std::fs::read(path.with_extension("log.1")).unwrap(), old);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(path.with_extension("log.1")).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+    }
 
     #[test]
     fn formats_known_instants() {
