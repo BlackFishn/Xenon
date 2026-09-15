@@ -8,7 +8,7 @@ window.XenonCrosshair = (() => {
   const q = s => root.querySelector(s);
   const qa = s => [...root.querySelectorAll(s)];
   let state = null, draft = { ...model.defaults }, sending = false, queued = null, editing = false;
-  let toggling = false;
+  let toggling = false, launching = false;
   let revision = 0, timer, statusRequest, error = '', uploading = false, uploadSequence = 0;
   let selected = 'custom', scene = 'dark', saved = [];
   const profiles = {
@@ -22,7 +22,8 @@ window.XenonCrosshair = (() => {
 
   async function request(path, body, method = 'POST') {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 12000);
+    const timeout = setTimeout(() => controller.abort(),
+      path === '/api/crosshair/open' || body?.enabled === true ? 20000 : 12000);
     try {
       const binary = body instanceof Blob;
       const response = await fetch(SERVER + path, {
@@ -79,22 +80,23 @@ window.XenonCrosshair = (() => {
   function render() {
     const on=!!(state?.online&&state.visible&&state.enabled);
     document.querySelectorAll('[data-crosshair-toggle]').forEach(b=>{
-      b.textContent='Crosshair '+(on?'ON':'OFF');b.setAttribute('aria-pressed',String(on));b.disabled=sending||toggling||!!queued;b.classList.toggle('active',on);
+      b.textContent='Crosshair '+(on?'ON':'OFF');b.setAttribute('aria-pressed',String(on));b.disabled=sending||toggling||(!!queued&&ready());b.classList.toggle('active',on);
     });
     document.querySelectorAll('[data-crosshair-rail]').forEach(b=>{
       b.dataset.enabled=String(on);b.setAttribute('aria-expanded',String(dialog.open));b.hidden=state?.supported===false;
     });
     if(!dialog.open)return;
-    q('[data-power]').setAttribute('aria-pressed',String(on));q('[data-power]').disabled=sending||toggling||!!queued||!ready();
-    q('[data-power-label]').textContent=sending||toggling?'กำลังซิงก์':on?'เปิดอยู่':'ปิดอยู่';
-    q('[data-connection]').textContent=!state?.installed?'ยังไม่ได้ติดตั้ง Xenon Crosshair':state.protocol<2?'อัปเดต Xenon Crosshair ก่อนใช้งาน':!state.online||!state.visible?'เปิด Xenon Crosshair ใน Win + G':'Game Bar เชื่อมต่อแล้ว';
+    q('[data-power]').setAttribute('aria-pressed',String(on));q('[data-power]').disabled=sending||toggling||(!!queued&&ready())||state?.supported===false||state?.installed===false;
+    q('[data-power-label]').textContent=launching?'กำลังเปิด Game Bar…':sending||toggling?'กำลังซิงก์':on?'เปิดอยู่':'ปิดอยู่';
+    q('[data-connection]').textContent=!state?.installed?'ยังไม่ได้ติดตั้ง Xenon Crosshair':!state.online||!state.visible?'กดเปิดเป้าเพื่อเชื่อมต่อ Game Bar':state.protocol<2?'อัปเดต Xenon Crosshair ก่อนใช้งาน':'Game Bar เชื่อมต่อแล้ว';
     q('[data-connection]').style.color=ready()?'#8fe0bd':'#efc384';
     q('.xc-check').textContent=state?.pinned?(state.clickThrough?'ปักหมุด · Click-through':'เปิด Click-through ใน Game Bar'):'ปักหมุดใน Game Bar';
     q('.xc-check').hidden=!ready();q('[data-offline]').hidden=ready();
-    q('[data-sync]').textContent=error|| (sending?'กำลังส่งไป Game Bar…':!validDraft()?'เลือกรูปเพื่อใช้เป้าแบบนี้':queued?!ready()?'รอ Game Bar เชื่อมต่อ':'รอส่งการปรับแต่ง':editing?'ยังไม่ได้ซิงก์การปรับแต่ง':ready()?'ซิงก์กับ Game Bar แล้ว':'Game Bar ไม่ได้เชื่อมต่อ');
+    q('[data-sync]').textContent=error|| (launching?'กำลังเปิด Game Bar และรอ widget…':sending?'กำลังส่งไป Game Bar…':!validDraft()?'เลือกรูปเพื่อใช้เป้าแบบนี้':queued?!ready()?'รอ Game Bar เชื่อมต่อ':'รอส่งการปรับแต่ง':editing?'ยังไม่ได้ซิงก์การปรับแต่ง':ready()?'ซิงก์กับ Game Bar แล้ว':'Game Bar ไม่ได้เชื่อมต่อ');
     q('[data-sync]').style.color=error?'#ffacb7':'';
     q('[data-retry]').hidden=!error||!validDraft()||!ready();q('[data-retry]').disabled=sending;
     q('[data-center]').disabled=!ready()||sending;
+    q('[data-reconnect]').disabled=sending||toggling;
     q('[data-preview]').dataset.mode=draft.mode;q('[data-preview]').dataset.scene=scene;
     q('[data-preview-scale]').textContent=draft.mode==='image'?'พรีวิว · 1×':'พรีวิว · 3×';
     q('[data-preview-state]').textContent=!validDraft()?'ยังไม่ได้เลือกรูป':editing||queued||sending?'ตัวอย่างการปรับแต่ง':on?'แสดงเป้าบนจอเกม':'ปิดบนจอเกม · พรีวิวเท่านั้น';
@@ -141,15 +143,15 @@ window.XenonCrosshair = (() => {
   }
   async function flush() {
     clearTimeout(timer);timer=null;
-    if(sending||!queued||!ready()){render();return;}
-    const patch=queued, before=++revision;queued=null;sending=true;error='';render();
+    if(sending||!queued||(!ready()&&queued.enabled!==true)){render();return;}
+    const patch=queued, before=++revision;queued=null;sending=true;launching=patch.enabled===true&&!ready();error='';render();
     try{
       state=await request('/api/crosshair',patch);
       if(before===revision&&!queued&&(Object.keys(patch).some(k=>model.keys.includes(k))||!editing)){draft=model.settings(state);editing=false;}
     }catch(e){
       error=e.name==='AbortError'?'Game Bar ไม่ตอบกลับ เปิด Win + G แล้วลองใหม่':e.message;
       state=await request('/api/crosshair').catch(()=>null);
-    }finally{sending=false;render();if(queued)flush();}
+    }finally{sending=false;launching=false;render();if(queued)flush();}
   }
   function change(patch) {
     try { Object.assign(draft,model.validatePatch(patch)); }
@@ -168,12 +170,13 @@ window.XenonCrosshair = (() => {
     }catch(e){error=e.message;render();}
   }
   async function toggle() {
-    if(sending||toggling||queued)return;
+    if(sending||toggling||(queued&&ready()))return;
     toggling=true;render();
     try {
       await refresh();
-      if(!ready()){await open();return;}
-      await apply({enabled:!state.enabled});
+      if(!state?.installed||state.supported===false){await open();return;}
+      if(!ready()&&!dialog.open)dialog.show();
+      await apply({enabled:!(state.online&&state.visible&&state.enabled)});
     } finally { toggling=false;render(); }
   }
   async function loadPresets() {

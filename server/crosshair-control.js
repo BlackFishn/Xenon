@@ -37,7 +37,7 @@ async function readJson(file) {
 function createCrosshairControl({ platform = process.platform, localAppData = process.env.LOCALAPPDATA,
   now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
   openGameBar = launchGameBar } = {}) {
-  let queue = Promise.resolve();
+  let queue = Promise.resolve(), opening = null;
   const media = createMediaStore(folder);
 
   async function folder() {
@@ -88,8 +88,9 @@ function createCrosshairControl({ platform = process.platform, localAppData = pr
     const operation = queue.catch(() => {}).then(async () => {
       const location = await folder();
       if (!location) throw fail('Install and open Xenon Crosshair from Win + G first.', 409);
-      const before = await statusAt(location);
-      if (!before.online || !before.visible) throw fail('Open Win + G and pin Xenon Crosshair first.', 409);
+      let before = await statusAt(location);
+      if ((!before.online || !before.visible) && patch.enabled === true) before = await activate(location);
+      if (!before.online || !before.visible) throw fail('Turn the crosshair on in Xenon to reconnect Game Bar.', 409);
       if (before.protocol < 2 && Object.keys(patch).some(k => !['enabled','color','size','center'].includes(k))) throw fail('Update Xenon Crosshair in Game Bar to use custom shapes and images.', 409);
       const next = model.settings({ ...before, ...patch });
       if (next.mode === 'image') { model.drawable(next); await media.read(next.asset); }
@@ -115,11 +116,29 @@ function createCrosshairControl({ platform = process.platform, localAppData = pr
     return operation;
   }
 
+  function activate(location) {
+    if (opening) return opening;
+    opening = (async () => {
+      const current = await statusAt(location);
+      if (current.online && current.visible) return current;
+      const family = path.basename(path.dirname(location));
+      // Game Assist uses launchForeground: launch alone can leave a closed widget dormant.
+      await openGameBar('ms-gamebar://launchForeground/activate/' + family + '_App_Crosshair');
+      for (let attempt = 0; attempt < 32; attempt++) {
+        const state = await statusAt(location);
+        if (state.online && state.visible) return state;
+        await sleep(250);
+      }
+      throw fail('Game Bar did not open the widget. Try again, or open Xenon Crosshair from Win + G once.', 504);
+    })().finally(() => { opening = null; });
+    return opening;
+  }
+
   async function open() {
     if (platform !== 'win32') throw fail('Xbox Game Bar requires Windows.', 409);
     const location = await folder();
-    const family = location && path.basename(path.dirname(location));
-    await openGameBar(family ? 'ms-gamebar:activate/' + family + '_App_Crosshair' : 'ms-gamebar:');
+    if (location) return { ok: true, ...await activate(location) };
+    await openGameBar('ms-gamebar:');
     return { ok: true };
   }
 

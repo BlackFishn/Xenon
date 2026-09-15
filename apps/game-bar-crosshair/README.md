@@ -4,14 +4,14 @@ A local Windows crosshair widget controlled from Xenon’s crosshair side-menu p
 
 ## Use
 
-1. Open **Win + G → Widgets → Xenon Crosshair** on the game display.
+1. Press the crosshair power button in Xenon. It opens the installed Game Bar widget when needed, waits for connection, then enables the saved crosshair. Game Bar may appear in the foreground during activation.
 2. Pin the widget and enable Game Bar’s click-through option.
 3. Press **Center on this screen**, then close the Game Bar interface.
 4. In Xenon, press the **crosshair icon in the side menu**. Draw a custom crosshair or upload an image/GIF, adjust its size, save a preset, and turn the overlay on or off. System → FPS opens the same panel.
 
 Open Game Bar targets this widget directly when it is installed. Pinning, click-through, and the selected display remain Game Bar settings. The button only reports a successful change after the widget acknowledges it.
 
-Color and size are saved. A fresh widget launch starts OFF. Closing Game Bar with the widget unpinned, suspending the widget, or ending its process makes Xenon report it unavailable after at most eight seconds. Reopen it from Win + G if necessary. Game Bar recreates the connection on the next widget launch. Cleanup is dispatched to the widget’s own UI thread.
+Color and size are saved. A fresh widget launch starts OFF. Closing Game Bar with the widget unpinned, suspending the widget, or ending its process makes Xenon report it unavailable after at most eight seconds. Press ON in Xenon to reopen it. If Windows cannot activate it, the editor reports the failure and provides a manual Game Bar fallback. Game Bar recreates the connection on the next widget launch. Cleanup is dispatched to the widget’s own UI thread.
 
 The crosshair draws Cross, Dot, Ring and T-shape designs with optional black outlines and center dots, or a local image with native GIF animation. Its color stays at full opacity independently of Game Bar panel transparency. The size uses Windows device-independent pixels. Rendering over a particular game, exclusive fullscreen mode, and exact pixel alignment with display scaling should be checked in that game.
 
@@ -44,7 +44,7 @@ The UWP widget is independent of the Tauri shell. Xenon uses the Game Bar SDK ra
 - `POST /api/crosshair`: bounded drawing/image settings or an enabled/center command. Protocol v2 adds the custom editor; v1 controls are detected and extended commands request a widget update.
 - `GET/POST /api/crosshair/assets`: retrieve a hash-addressed image or upload a bounded PNG/GIF/JPG byte body. The UI converts still WebP to PNG.
 - `GET/POST/DELETE /api/crosshair/presets`: list, save or remove persistent designs.
-- `POST /api/crosshair/open`: request Game Bar activation.
+- `POST /api/crosshair/open`: request Game Bar activation and wait for the widget to be online and visible. An explicit enabled=true command performs the same activation when needed; OFF and design-only commands never launch the widget.
 
 All routes are denied to paired remote devices and protected by the existing loopback, Origin, and sandbox checks. Neither the widget nor this integration introduces a network listener.
 
@@ -67,3 +67,7 @@ See [the control guide](../../docs/game-bar-crosshair.md) for image limits, pres
 Version 1.0.0.4 was release-built and registered locally. Live PNG and GIF commands were acknowledged by the pinned widget in about 0.4–0.6 seconds; drawing settings, image sizing, OFF and restoration were exercised. Game-specific fullscreen compatibility and pixel placement under display scaling still depend on the game and display.
 
 Version 1.0.0.5 reduces command and editor polling delays and streams the latest value during dragging. On the pinned local widget, 12 unchanged-color acknowledgement samples took 64–128 ms (91 ms mean); a continuous-drag check sent 10 updates with only one in flight and confirmed its last value 122 ms after the final input. The measured reverse update appeared 28 ms after acknowledgement. These are local observations, not timing guarantees. All 88 related Node tests and the live image/GIF, preset, toggle, reverse-sync and responsive-layout checks passed.
+
+Desktop activation uses the launchForeground URI form found in Microsoft Edge Game Assist 1.0.4019.0 and verified locally with Game Bar 7.326.8061.0. The generic launch URI was accepted by Windows but left a closed widget offline. The bridge waits up to eight seconds after launching and never treats URI dispatch alone as a successful connection. This does not add a Windows startup task or silently restore ON at login. Pinning and click-through remain user-controlled Game Bar settings.
+
+One-click activation passed 93 related Node tests. A live browser test made the pinned widget unavailable, clicked ON once, restored it and received an enabled acknowledgement while preserving pinning and the current design. Repeated clicks issued one request, and startup-state layouts fit 390×844, 1600×720 and 720×1280. A closed-widget launch was also verified with the foreground URI. No Windows reboot was performed during this validation.

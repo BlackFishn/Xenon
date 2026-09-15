@@ -10,7 +10,7 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 const online = { ...model.defaults, online: true, supported: true, installed: true, protocol: 2,
   visible: true, pinned: true, clickThrough: true, enabled: false };
 
-async function editor() {
+async function editor(initial = online) {
   const nodes = new Map(), requests = [], timers = new Map();
   let clock = 0, serial = 0;
   function node(key) {
@@ -35,7 +35,7 @@ async function editor() {
         reply(value) { resolve({ ok: true, json: async () => value }); }, reject }));
     }
   });
-  requests[0].reply(online);
+  requests[0].reply(initial);
   await settle();
   return { api: window.XenonCrosshair, document, node, requests,
     async advance(ms) {
@@ -90,4 +90,38 @@ test('open editor refreshes promptly without overlapping reads or polling hidden
   e.requests[3].reply(online); await settle();
   await e.advance(1000);
   assert.equal(e.requests.length, 4);
+});
+
+test('one click while offline opens the widget and keeps ON pending until the server confirms it', async () => {
+  const offline = { ...online, online: false, visible: false, protocol: 0 };
+  const e = await editor(offline), opened = e.api.open();
+  e.requests[1].reply(offline); await opened;
+  assert.equal(e.node('[data-power]').disabled, false);
+  const pending = e.api.toggle();
+  e.requests[2].reply(offline); await settle();
+  assert.equal(e.requests[3].body.enabled, true);
+  assert.equal(e.node('[data-power-label]').textContent, 'กำลังเปิด Game Bar…');
+  assert.equal(e.node('toggle').attributes['aria-pressed'], 'false');
+  await e.api.toggle();
+  assert.equal(e.requests.length, 4, 'repeated clicks cannot enqueue a second launch');
+  e.requests[3].reply({ ...online, enabled: true }); await pending;
+  assert.equal(e.node('toggle').attributes['aria-pressed'], 'true');
+});
+
+test('offline edits are included when ON is requested and failure allows another click', async () => {
+  const offline = { ...online, online: false, visible: false, protocol: 0 };
+  const e = await editor(offline), opened = e.api.open();
+  e.requests[1].reply(offline); await opened;
+  await e.api.apply({ length: 13 }); await e.advance(40);
+  assert.equal(e.requests.length, 2, 'editing alone does not launch Game Bar');
+  assert.equal(e.node('[data-power]').disabled, false);
+  const pending = e.api.toggle();
+  e.requests[2].reply(offline); await settle();
+  assert.equal(e.requests[3].body.length, 13);
+  assert.equal(e.requests[3].body.enabled, true);
+  e.requests[3].reject(new Error('Game Bar did not open')); await settle();
+  e.requests[4].reply(offline); await pending;
+  assert.equal(e.node('toggle').attributes['aria-pressed'], 'false');
+  assert.equal(e.node('[data-power]').disabled, false);
+  assert.match(e.node('[data-sync]').textContent, /Game Bar did not open/);
 });

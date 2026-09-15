@@ -6,6 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **Turning the crosshair ON in Xenon opens its Game Bar widget automatically.** Xenon waits for connection, applies pending edits, and confirms the overlay before showing ON. Duplicate clicks share one launch; startup failures stay visible and can be retried.
 - **The crosshair side-menu panel supports custom shapes, images and animated GIFs.** Preview and adjust the aim, save persistent presets, and control the pinned Game Bar widget with confirmed two-way updates. PNG/GIF/JPG remain local; WebP imports as a still PNG. See the [crosshair guide](docs/game-bar-crosshair.md).
 - **Xenon can control a crosshair pinned in Xbox Game Bar.** The System FPS card has an ON/OFF button and settings for color, size, and centering. The standalone Windows widget acknowledges changes and detects stale connections. See [setup and local installation](docs/game-bar-crosshair.md).
 - **Native crash investigation has an opt-in debug log.** Launch with `--debug-log` to record setup, page/window events, background thread lifecycle, and focus-guard transitions with process IDs. See [crash debugging](docs/crash-debugging.md).

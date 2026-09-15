@@ -59,7 +59,7 @@ test('closed, hidden, or missing widgets cannot accept commands', async t => {
   const api = createCrosshairControl(f.options);
   for (const patch of [{ running: false }, { visible: false }, { updatedAt: clock - 9000 }]) {
     await f.write({ ...good, ...patch });
-    await assert.rejects(api.send({ enabled: true }), e => e.statusCode === 409);
+    await assert.rejects(api.send({ enabled: false }), e => e.statusCode === 409);
   }
   await fs.unlink(path.join(f.folder, statusName));
   assert.equal((await api.status()).online, false);
@@ -134,9 +134,10 @@ test('centering failures are reported even when the command is acknowledged', as
 test('opening targets only the discovered widget identity, with a Game Bar fallback', async t => {
   const f = await fixture(t);
   const launches = [];
-  const api = createCrosshairControl({ ...f.options, openGameBar: async uri => launches.push(uri) });
-  assert.deepEqual(await api.open(), { ok: true });
-  assert.deepEqual(launches, ['ms-gamebar:activate/Xenon.Crosshair_0123456789abc_App_Crosshair']);
+  await f.write({ ...good, running: false });
+  const api = createCrosshairControl({ ...f.options, openGameBar: async uri => { launches.push(uri); if (uri !== 'ms-gamebar:') await f.write(good); } });
+  assert.equal((await api.open()).online, true);
+  assert.deepEqual(launches, ['ms-gamebar://launchForeground/activate/Xenon.Crosshair_0123456789abc_App_Crosshair']);
   await fs.rename(f.folder, f.folder + '-missing');
   await api.open();
   assert.equal(launches[1], 'ms-gamebar:');
@@ -144,6 +145,68 @@ test('opening targets only the discovered widget identity, with a Game Bar fallb
 
 test('launch errors reach the caller without reporting success', async t => {
   const f = await fixture(t);
+  await f.write({ ...good, running: false });
   const api = createCrosshairControl({ ...f.options, openGameBar: async () => { throw Error('launch failed'); } });
   await assert.rejects(api.open(), /launch failed/);
+});
+
+test('ON opens a closed widget once, waits for visibility, then requires its command acknowledgement', async t => {
+  const f = await fixture(t);
+  await f.write({ ...good, running: false });
+  let launches = 0, startupPolls = 0, commands = 0;
+  const api = createCrosshairControl({ ...f.options,
+    openGameBar: async () => { launches++; await f.write({ ...good, visible: false }); },
+    sleep: async ms => {
+      if (ms === 250) {
+        assert.equal(await fs.stat(path.join(f.folder, commandName)).catch(() => null), null);
+        if (++startupPolls === 2) await f.write(good);
+      } else {
+        const command = JSON.parse(await fs.readFile(path.join(f.folder, commandName), 'utf8'));
+        assert.equal(command.enabled, true);
+        commands++;
+        await f.write({ ...good, enabled: true, commandId: command.id });
+      }
+    }
+  });
+  const [opened, enabled] = await Promise.all([api.open(), api.send({ enabled: true })]);
+  assert.equal(launches, 1);
+  assert.equal(startupPolls, 2);
+  assert.equal(opened.enabled, false);
+  assert.equal(commands, 1);
+  assert.equal(enabled.enabled, true);
+});
+
+test('a failed startup is bounded, writes no command and can be retried', async t => {
+  const f = await fixture(t);
+  await f.write({ ...good, running: false });
+  let launches = 0, waited = 0;
+  const api = createCrosshairControl({ ...f.options,
+    openGameBar: async () => { if (++launches === 2) await f.write(good); },
+    sleep: async ms => {
+      if (ms === 250) waited += ms;
+      else {
+        const command = JSON.parse(await fs.readFile(path.join(f.folder, commandName), 'utf8'));
+        await f.write({ ...good, enabled: true, commandId: command.id });
+      }
+    }
+  });
+  await assert.rejects(api.send({ enabled: true }), e => e.statusCode === 504);
+  assert.equal(waited, 8000);
+  assert.equal(await fs.stat(path.join(f.folder, commandName)).catch(() => null), null);
+  assert.equal((await api.send({ enabled: true })).enabled, true);
+  assert.equal(launches, 2);
+});
+
+test('an already visible widget does not launch again; OFF and design edits never launch a closed widget', async t => {
+  const f = await fixture(t);
+  let launches = 0;
+  const api = createCrosshairControl({ ...f.options, openGameBar: async () => { launches++; } });
+  assert.equal((await api.open()).online, true);
+  await f.write({ ...good, running: false });
+  for (const command of [{ enabled: false }, { color: '#ABCDEF' }])
+    await assert.rejects(api.send(command), e => e.statusCode === 409);
+  await fs.unlink(path.join(f.folder, statusName));
+  await fs.rename(f.folder, f.folder + '-removed');
+  await assert.rejects(api.send({ enabled: true }), e => e.statusCode === 409);
+  assert.equal(launches, 0);
 });
