@@ -145,6 +145,7 @@
 <link rel="stylesheet" href="components/PhoneView/PhoneView.css">
 <!-- Browser-only "preview at Xeneon Edge size" stage (js/edge-preview.js) -->
 <link rel="stylesheet" href="styles/edge-preview.css">
+<link rel="stylesheet" href="components/SystemPanel/Crosshair.css">
 </head>
 <body>
 <!-- Tile silhouettes. One sprite for the whole dashboard: identical shapes share
@@ -734,6 +735,7 @@
             </div>
             <div class="stat-sub" data-i18n="net_fps_sub">Richiede PresentMon / FrameView</div>
             <div class="stat-track"><div class="stat-fill net-fps" id="net-fps-fill" data-sf="net-fps-fill"></div></div>
+            <div class="crosshair-actions"><button type="button" data-crosshair-toggle aria-pressed="false" onclick="XenonCrosshair.toggle()">Crosshair OFF</button><button type="button" onclick="XenonCrosshair.open()" aria-label="Crosshair settings">⚙</button></div>
           </div>
           <div class="stat-box net-box" data-system-card="latency" data-system-card-group="net" data-system-card-size="normal" data-system-card-order="2">
             <div class="stat-head"><span data-i18n="net_latency">LATENZA</span><span class="stat-head-value" id="net-latency-tag">jitter</span></div>
@@ -3941,6 +3943,23 @@
      admin so the two Store fronts cannot disagree about what shows where.
      community-gallery.js degrades to its own default order if this is absent. -->
 <script src="shared/src/storefront-layout.js"></script>
+<dialog id="crosshair-dialog" class="crosshair-dialog" aria-labelledby="crosshair-title">
+  <header><h2 id="crosshair-title">Xenon Crosshair</h2><button type="button" onclick="XenonCrosshair.close()" aria-label="Close crosshair settings">✕</button></header>
+  <p data-crosshair-badge aria-live="polite">Xbox Game Bar</p>
+  <div class="crosshair-preview" data-crosshair-preview aria-hidden="true"><span></span></div>
+  <div class="crosshair-fields">
+    <label>Color <input type="color" value="#65f5ba" data-crosshair-color data-crosshair-setting onchange="XenonCrosshair.apply({ color: this.value })"></label>
+    <label>Size <input type="range" min="8" max="48" value="20" data-crosshair-size data-crosshair-setting onchange="XenonCrosshair.apply({ size: Number(this.value) })"><output data-crosshair-size-value>20</output></label>
+  </div>
+  <footer>
+    <button type="button" data-crosshair-toggle aria-pressed="false" onclick="XenonCrosshair.toggle()">Crosshair OFF</button>
+    <button type="button" data-crosshair-setting onclick="XenonCrosshair.apply({ center: true })">Center</button>
+    <button type="button" onclick="XenonCrosshair.openGameBar()">Open Game Bar</button>
+  </footer>
+  <p>In Win + G, open Xenon Crosshair, pin it, and enable click-through. Center it on your game display.</p>
+  <p data-crosshair-message role="status"></p>
+</dialog>
+
 <script src="js/custom-select.js"></script>
 <script src="js/color-picker.js"></script>
 <!-- Monotone-cubic path builder shared by the stat sparklines (utils.js) and the
@@ -3966,6 +3985,7 @@
 <script src="js/calendar.js"></script>
 <script src="js/system.js"></script>
 <script src="js/network.js"></script>
+<script src="js/crosshair.js"></script>
 <script src="js/notes.js"></script>
 <script src="js/tasks.js"></script>
 <script src="js/timer.js"></script>

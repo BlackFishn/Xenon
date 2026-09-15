@@ -55,6 +55,7 @@ test('only what needs a person at the PC is refused', () => {
     ['/system/enable-sensors', 'POST'],  // raises a UAC prompt nobody is at
     ['/update/prepare', 'POST'],         // swaps files and restarts the server
     ['/update/apply', 'POST'],
+    ['/api/crosshair', 'GET'], ['/api/crosshair', 'POST'], ['/api/crosshair/open', 'POST'],
     ['/api/native/install', 'POST'],     // installers: download, then place an exe
     ['/api/gamemode/install-presentmon', 'POST'],
     ['/api/lighting/sdk-install', 'POST'],
@@ -129,6 +130,7 @@ test('the refused surface matches an explicit, reviewed list', () => {
   assert.deepEqual(refused, [
     'GET /api/ai/chatgpt/models',
     'GET /api/ai/chatgpt/status',
+    'GET /api/crosshair',
     // Pairing admin — loopback-only so a phone cannot enrol another phone or
     // revoke the device that would kick it off.
     'GET /api/remote-access/status',
@@ -165,6 +167,8 @@ test('the refused surface matches an explicit, reviewed list', () => {
     // are the same actions taken by a person the hub has already authenticated.
     'POST /api/claude/question',
     'POST /api/claude/turn-end',
+    'POST /api/crosshair',
+    'POST /api/crosshair/open',
     'POST /api/gamemode/install-presentmon',
     'POST /api/lighting/sdk-install',
     'POST /api/native/install',

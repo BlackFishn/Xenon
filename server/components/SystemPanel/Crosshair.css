@@ -1,0 +1,30 @@
+.crosshair-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.crosshair-actions button, .crosshair-dialog button {
+  min-height: 36px; padding: 7px 12px; border: 1px solid var(--border, #35444f);
+  border-radius: 9px; background: var(--surface, #17232c); color: var(--text, #e7f4fa);
+  font: inherit; font-size: 12px; cursor: pointer;
+}
+.crosshair-actions button:hover, .crosshair-dialog button:hover { border-color: var(--accent, #48c9fa); }
+.crosshair-actions button.active, .crosshair-dialog button.active { color: #65f5ba; border-color: #65f5ba; }
+.crosshair-actions button:disabled, .crosshair-dialog button:disabled { opacity: .5; cursor: default; }
+.crosshair-dialog {
+  width: min(420px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); box-sizing: border-box;
+  padding: 20px; overflow: auto; border: 1px solid var(--border, #35444f); border-radius: 18px;
+  background: var(--bg, #0f1921); color: var(--text, #e7f4fa); box-shadow: 0 18px 70px #0008;
+}
+.crosshair-dialog::backdrop { background: #0008; }
+.crosshair-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.crosshair-dialog h2 { margin: 0; font-size: 20px; }
+.crosshair-dialog p { font-size: 12px; line-height: 1.6; color: var(--text-muted, #99aebc); }
+.crosshair-preview { height: 100px; display: grid; place-items: center; margin: 14px 0; border-radius: 12px; background: #080e14; }
+.crosshair-preview span { position: relative; display: block; width: var(--crosshair-size, 20px); height: var(--crosshair-size, 20px); }
+.crosshair-preview span::before, .crosshair-preview span::after { content: ''; position: absolute; background: var(--crosshair-color, #65f5ba); box-shadow: 0 0 0 1px #000; }
+.crosshair-preview span::before { width: 100%; height: 2px; top: calc(50% - 1px); }
+.crosshair-preview span::after { height: 100%; width: 2px; left: calc(50% - 1px); }
+.crosshair-fields { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
+.crosshair-fields label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.crosshair-fields input[type=color] { width: 42px; height: 36px; padding: 2px; border: 1px solid var(--border, #35444f); border-radius: 7px; background: transparent; }
+.crosshair-fields input[type=range] { width: 130px; accent-color: #65f5ba; }
+.crosshair-dialog footer { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+.crosshair-dialog [data-crosshair-message] { color: #ffb091; min-height: 20px; }
+@media (max-height: 500px) { .crosshair-preview { height: 55px; } .crosshair-dialog { padding: 14px; } }

@@ -91,6 +91,8 @@ const CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
 // the same reason — it needs a person at the PC, because it raises a dialog
 // there, restarts the server, or downloads and places an executable.
 const REMOTE_DENY = new Set([
+  // Game Bar belongs to the interactive desktop on this PC.
+  '/api/crosshair', '/api/crosshair/open',
   // ChatGPT OAuth belongs to the PC hosting the browser callback.
   '/api/ai/chatgpt/status', '/api/ai/chatgpt/login',
   '/api/ai/chatgpt/logout', '/api/ai/chatgpt/models',

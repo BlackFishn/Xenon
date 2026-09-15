@@ -19,6 +19,7 @@ const crypto = require('crypto');
 const path = require('path');
 const { decodeSoundVolumeCsv } = require('./soundvolume-csv');
 const audioControl = require('./audio-control').createAudioControl();
+const crosshairControl = require('./crosshair-control').createCrosshairControl();
 // Non-Windows native collectors (GPU/disk/CPU-temp/network/windows/audio).
 // Windows keeps the PowerShell path; elsewhere those spawns fail
 // (powershell.exe ENOENT) so the system tiles fall back to these. Each module
@@ -11900,6 +11901,7 @@ function isJsonpAllowed(pathname) {
 // sends no Origin, so the loopback/Origin checks below can't catch it. They are
 // guarded by the Sec-Fetch-Site check in the request handler.
 const CSRF_MUTATION_PATHS = new Set([
+  '/api/crosshair', '/api/crosshair/open',
   // OAuth and account reads start a local Codex process; opaque-origin widgets
   // and cross-site navigations must never operate on this account session.
   '/api/ai/chatgpt/status',
@@ -13379,6 +13381,18 @@ const handleRequest = async (req, res) => {
       const out = await runPowerShellScript(ENABLE_SENSORS_SCRIPT, [], 120000);
       json(out && typeof out === 'object' ? out : { ok: false, status: 'failed', message: 'no result' });
     } catch (e) { json({ ok: false, status: 'failed', message: e.message }); }
+
+  } else if (reqPath === '/api/crosshair' || reqPath === '/api/crosshair/open') {
+    try {
+      if (reqPath === '/api/crosshair' && req.method === 'GET') json(await crosshairControl.status());
+      else if (reqPath === '/api/crosshair' && req.method === 'POST') json(await crosshairControl.send(JSON.parse(await readBody(req, 4096))));
+      else if (reqPath === '/api/crosshair/open' && req.method === 'POST') json(await crosshairControl.open());
+      else { res.writeHead(405, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Method not allowed.' })); }
+    } catch (e) {
+      const code = e instanceof SyntaxError ? 400 : (e.statusCode || 502);
+      res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ error: e instanceof SyntaxError ? 'Invalid crosshair command.' : (e.statusCode ? e.message : 'Crosshair is unavailable.') }));
+    }
 
   } else if (reqPath === '/network' && req.method === 'GET') {
     try   { json(await getNetworkInfo()); }
