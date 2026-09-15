@@ -6,6 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **Xenon can control a crosshair pinned in Xbox Game Bar.** The System FPS card has an ON/OFF button and settings for color, size, and centering. The standalone Windows widget acknowledges changes and detects stale connections. See [setup and local installation](docs/game-bar-crosshair.md).
 - **AJAZZ StreamDock can sleep and wake the XENEON EDGE display.** A standalone Sleep / Wake plugin targets the EDGE hardware ID, confirms the resulting power state, and keeps the other displays running. See [installation and recovery](tools/streamdock-xeneon-edge/README.md).
 - **YouTube has a Focus mode.** Center the video at its largest proportional size in the window, with the surrounding dashboard blurred. Click or tap the blurred area, or press Escape while keyboard focus is on the dashboard, to restore the previous layout without restarting playback. No exit button covers the video; a slim blurred side margin remains available in 16:9 windows.
 - **YouTube now plays pasted links without an account connection.** Play immediately or build a queue, keep favorites and recent videos on this browser, and choose autoplay or repeat. Playback uses YouTube’s own controls; Fill widget hides the surrounding UI without restarting the video. Browser fullscreen and the native kiosk’s existing safe fullscreen path remain separate. See the [YouTube player guide](docs/youtube-player.md).
