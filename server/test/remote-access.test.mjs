@@ -128,9 +128,12 @@ test('the refused surface matches an explicit, reviewed list', () => {
     .sort();
 
   assert.deepEqual(refused, [
+    'DELETE /api/crosshair/presets',
     'GET /api/ai/chatgpt/models',
     'GET /api/ai/chatgpt/status',
     'GET /api/crosshair',
+    'GET /api/crosshair/assets',
+    'GET /api/crosshair/presets',
     // Pairing admin — loopback-only so a phone cannot enrol another phone or
     // revoke the device that would kick it off.
     'GET /api/remote-access/status',
@@ -168,7 +171,9 @@ test('the refused surface matches an explicit, reviewed list', () => {
     'POST /api/claude/question',
     'POST /api/claude/turn-end',
     'POST /api/crosshair',
+    'POST /api/crosshair/assets',
     'POST /api/crosshair/open',
+    'POST /api/crosshair/presets',
     'POST /api/gamemode/install-presentmon',
     'POST /api/lighting/sdk-install',
     'POST /api/native/install',

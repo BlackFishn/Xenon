@@ -271,6 +271,7 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
       { id: 'layout', hidden: false, side: 'right' },
       { id: 'settings', hidden: false, side: 'right' },
       { id: 'apps', hidden: false, side: 'right' },
+      { id: 'crosshair', hidden: false, side: 'right' },
       { id: 'favorites', hidden: false, side: 'right' },
     ],
   },
@@ -1448,6 +1449,7 @@ function normalizeTopbarActions(value) {
     { id: 'layout', side: 'right', hidden: false },
     { id: 'settings', side: 'right', hidden: false },
     { id: 'apps', side: 'right', hidden: false },
+    { id: 'crosshair', side: 'right', hidden: false },
     { id: 'favorites', side: 'right', hidden: false },
   ];
   const byId = new Map(canonical.map((entry) => [entry.id, entry]));
@@ -8801,7 +8803,7 @@ const TOPBAR_ISLAND_LABELS = { time: 'topbar_el_time', date: 'topbar_el_date', w
 const TOPBAR_ACTION_LABELS = {
   lock: 'topbar_btn_lock', ambient: 'topbar_btn_ambient', xenon: 'topbar_btn_xenon',
   search: 'topbar_btn_search', mini: 'topbar_btn_mini', layout: 'topbar_btn_layout',
-  settings: 'topbar_btn_settings', apps: 'topbar_btn_apps', favorites: 'topbar_btn_favorites',
+  settings: 'topbar_btn_settings', apps: 'topbar_btn_apps', crosshair: 'topbar_btn_crosshair', favorites: 'topbar_btn_favorites',
 };
 const EYE_OPEN_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5C5 5 2 12 2 12s3 7 10 7 10-7 10-7-3-7-10-7Zm0 11a4 4 0 1 1 0-8 4 4 0 0 1 0 8Zm0-6a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg>';
 const EYE_OFF_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.8 3.2 1.4 4.6l3.1 3.1A12.9 12.9 0 0 0 2 12s3 7 10 7a10.8 10.8 0 0 0 4.4-.9l3 3 1.4-1.4L2.8 3.2ZM12 16a4 4 0 0 1-3.9-4.9l1.7 1.7A2 2 0 0 0 12 14a2 2 0 0 0 .2 0l1.7 1.7A4 4 0 0 1 12 16Zm0-11c7 0 10 7 10 7a13 13 0 0 1-2.2 3.2l-2.9-2.9A4 4 0 0 0 12 8a4 4 0 0 0-.4 0L9.2 5.6A10.9 10.9 0 0 1 12 5Z"/></svg>';

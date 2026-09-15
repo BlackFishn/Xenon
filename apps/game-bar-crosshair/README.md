@@ -1,19 +1,19 @@
 # Xenon Crosshair for Xbox Game Bar
 
-A local Windows crosshair widget controlled from Xenon’s System → FPS card.
+A local Windows crosshair widget controlled from Xenon’s crosshair side-menu panel and System → FPS shortcut.
 
 ## Use
 
 1. Open **Win + G → Widgets → Xenon Crosshair** on the game display.
 2. Pin the widget and enable Game Bar’s click-through option.
 3. Press **Center on this screen**, then close the Game Bar interface.
-4. In Xenon, open **System → FPS** and press **Crosshair ON/OFF**. The gear opens color, size (8–48), Center, and Open Game Bar controls.
+4. In Xenon, press the **crosshair icon in the side menu**. Draw a custom crosshair or upload an image/GIF, adjust its size, save a preset, and turn the overlay on or off. System → FPS opens the same panel.
 
 Open Game Bar targets this widget directly when it is installed. Pinning, click-through, and the selected display remain Game Bar settings. The button only reports a successful change after the widget acknowledges it.
 
 Color and size are saved. A fresh widget launch starts OFF. Closing Game Bar with the widget unpinned, suspending the widget, or ending its process makes Xenon report it unavailable after at most eight seconds. Reopen it from Win + G if necessary. Game Bar recreates the connection on the next widget launch. Cleanup is dispatched to the widget’s own UI thread.
 
-The crosshair draws a fully opaque plus with a black outline. Its color stays at full opacity independently of Game Bar panel transparency. The size uses Windows device-independent pixels. Rendering over a particular game, exclusive fullscreen mode, and exact pixel alignment with display scaling should be checked in that game.
+The crosshair draws Cross, Dot, Ring and T-shape designs with optional black outlines and center dots, or a local image with native GIF animation. Its color stays at full opacity independently of Game Bar panel transparency. The size uses Windows device-independent pixels. Rendering over a particular game, exclusive fullscreen mode, and exact pixel alignment with display scaling should be checked in that game.
 
 ## Build and install locally
 
@@ -27,7 +27,7 @@ Requirements:
 From the repository root, in PowerShell:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File apps/game-bar-crosshair/build.ps1 -Configuration Release -Register
+pwsh -NoProfile -ExecutionPolicy Bypass -File apps/game-bar-crosshair/build.ps1 -Configuration Release -Register
 ```
 
 The script restores pinned Microsoft packages, generates the logo assets, builds an unsigned MSIX, installs required Microsoft runtime dependencies if missing/older, unpacks the package beneath `%LOCALAPPDATA%\Xenon\GameBarCrosshair\<package-hash>`, and registers it for the current user. Updating closes only this package’s running application. It does not enable Developer Mode, create a trusted certificate, or change Xenon’s signed-update checks.
@@ -41,7 +41,9 @@ For removal, uninstall **Xenon Crosshair** from Windows Installed apps. Re-regis
 The UWP widget is independent of the Tauri shell. Xenon uses the Game Bar SDK rather than injecting code into the game.
 
 - `GET /api/crosshair`: supported/installed/online status and current settings.
-- `POST /api/crosshair`: validated enabled, color, size, or center command.
+- `POST /api/crosshair`: bounded drawing/image settings or an enabled/center command. Protocol v2 adds the custom editor; v1 controls are detected and extended commands request a widget update.
+- `GET/POST /api/crosshair/assets`: retrieve a hash-addressed image or upload a bounded PNG/GIF/JPG byte body. The UI converts still WebP to PNG.
+- `GET/POST/DELETE /api/crosshair/presets`: list, save or remove persistent designs.
 - `POST /api/crosshair/open`: request Game Bar activation.
 
 All routes are denied to paired remote devices and protected by the existing loopback, Origin, and sandbox checks. Neither the widget nor this integration introduces a network listener.
@@ -57,3 +59,9 @@ Microsoft references: [Game Bar SDK](https://learn.microsoft.com/en-us/xbox/game
 - Actual Game Bar command/readback: enable, disable, color, size, and center.
 - Browser checks on 2560×720, 440×1100, 1920×1080, and 360×320: dialog overflow, repeated clicks, color changes, and failed-command feedback.
 - Native screenshot inspection and game-specific fullscreen testing still need a manual check. The native UI automation tool was unavailable on the development machine.
+
+## Custom images and verification
+
+See [the control guide](../../docs/game-bar-crosshair.md) for image limits, presets and synchronization. BitmapImage handles GIF playback natively ([Microsoft API](https://learn.microsoft.com/en-us/uwp/api/windows.ui.xaml.media.imaging.bitmapimage.autoplay)). Both the desktop API and widget validate file IDs, dimensions and command values. A bad image is rejected before replacing the current design. GIFs pause when the widget is hidden or switched off.
+
+Version 1.0.0.4 was release-built and registered locally. Live PNG and GIF commands were acknowledged by the pinned widget in about 0.4–0.6 seconds; drawing settings, image sizing, OFF and restoration were exercised. Game-specific fullscreen compatibility and pixel placement under display scaling still depend on the game and display.

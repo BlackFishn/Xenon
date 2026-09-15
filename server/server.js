@@ -7786,6 +7786,7 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
       Object.freeze({ id: 'layout', hidden: false, side: 'right' }),
       Object.freeze({ id: 'settings', hidden: false, side: 'right' }),
       Object.freeze({ id: 'apps', hidden: false, side: 'right' }),
+      Object.freeze({ id: 'crosshair', hidden: false, side: 'right' }),
       Object.freeze({ id: 'favorites', hidden: false, side: 'right' }),
     ]),
     hiddenSources: Object.freeze([]),
@@ -8970,6 +8971,7 @@ const TOPBAR_ACTION_DEFAULTS = [
   { id: 'layout', side: 'right', hidden: false },
   { id: 'settings', side: 'right', hidden: false },
   { id: 'apps', side: 'right', hidden: false },
+    { id: 'crosshair', side: 'right', hidden: false },
   { id: 'favorites', side: 'right', hidden: false },
 ];
 function normalizeTopbarActions(value) {
@@ -11901,7 +11903,7 @@ function isJsonpAllowed(pathname) {
 // sends no Origin, so the loopback/Origin checks below can't catch it. They are
 // guarded by the Sec-Fetch-Site check in the request handler.
 const CSRF_MUTATION_PATHS = new Set([
-  '/api/crosshair', '/api/crosshair/open',
+  '/api/crosshair', '/api/crosshair/open', '/api/crosshair/assets', '/api/crosshair/presets',
   // OAuth and account reads start a local Codex process; opaque-origin widgets
   // and cross-site navigations must never operate on this account session.
   '/api/ai/chatgpt/status',
@@ -13382,11 +13384,22 @@ const handleRequest = async (req, res) => {
       json(out && typeof out === 'object' ? out : { ok: false, status: 'failed', message: 'no result' });
     } catch (e) { json({ ok: false, status: 'failed', message: e.message }); }
 
-  } else if (reqPath === '/api/crosshair' || reqPath === '/api/crosshair/open') {
+  } else if (['/api/crosshair', '/api/crosshair/open', '/api/crosshair/assets', '/api/crosshair/presets'].includes(reqPath)) {
     try {
       if (reqPath === '/api/crosshair' && req.method === 'GET') json(await crosshairControl.status());
       else if (reqPath === '/api/crosshair' && req.method === 'POST') json(await crosshairControl.send(JSON.parse(await readBody(req, 4096))));
       else if (reqPath === '/api/crosshair/open' && req.method === 'POST') json(await crosshairControl.open());
+      else if (reqPath === '/api/crosshair/assets' && req.method === 'POST') {
+        const name = new URL(req.url, 'http://127.0.0.1').searchParams.get('name');
+        json(await crosshairControl.media.upload(await readBodyBuffer(req, 5 * 1024 * 1024), name));
+      } else if (reqPath === '/api/crosshair/assets' && req.method === 'GET') {
+        const id = new URL(req.url, 'http://127.0.0.1').searchParams.get('id');
+        const asset = await crosshairControl.media.read(id);
+        res.writeHead(200, { 'Content-Type': asset.type, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, max-age=3600' });
+        res.end(asset.data);
+      } else if (reqPath === '/api/crosshair/presets' && req.method === 'GET') json(await crosshairControl.media.presets());
+      else if (reqPath === '/api/crosshair/presets' && req.method === 'POST') json(await crosshairControl.media.savePreset(JSON.parse(await readBody(req, 4096))));
+      else if (reqPath === '/api/crosshair/presets' && req.method === 'DELETE') json(await crosshairControl.media.deletePreset(JSON.parse(await readBody(req, 4096)).id));
       else { res.writeHead(405, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Method not allowed.' })); }
     } catch (e) {
       const code = e instanceof SyntaxError ? 400 : (e.statusCode || 502);

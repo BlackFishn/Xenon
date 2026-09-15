@@ -33,6 +33,7 @@
     <ApplicationDefinition Include="App.xaml" />
     <Compile Include="App.xaml.cs"><DependentUpon>App.xaml</DependentUpon></Compile>
     <Compile Include="CrosshairPage.cs" />
+    <Compile Include="CrosshairSettings.cs" />
     <AppxManifest Include="Package.appxmanifest" />
     <Content Include="Assets\*.png" />
     <Content Include="GameBar\*.png" />

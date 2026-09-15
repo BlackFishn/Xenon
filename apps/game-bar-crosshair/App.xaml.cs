@@ -53,7 +53,7 @@ namespace Xenon.Crosshair
             {
                 Window.Current.Content = new TextBlock
                 {
-                    Text = "Xenon Crosshair\n\nPress Win + G, open Widgets, then choose Xenon Crosshair.\nPin the widget and enable click-through in Game Bar.\n\nControls are also available in Xenon → System → FPS.",
+                    Text = "Xenon Crosshair\n\nPress Win + G, open Widgets, then choose Xenon Crosshair.\nPin the widget and enable click-through in Game Bar.\n\nControls are also available in the crosshair button in Xenon’s side menu.",
                     Margin = new Thickness(32), FontSize = 20, TextWrapping = TextWrapping.Wrap
                 };
             }

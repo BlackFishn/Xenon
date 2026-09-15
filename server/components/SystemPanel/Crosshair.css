@@ -1,30 +1,139 @@
-.crosshair-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
-.crosshair-actions button, .crosshair-dialog button {
-  min-height: 36px; padding: 7px 12px; border: 1px solid var(--border, #35444f);
-  border-radius: 9px; background: var(--surface, #17232c); color: var(--text, #e7f4fa);
-  font: inherit; font-size: 12px; cursor: pointer;
-}
-.crosshair-actions button:hover, .crosshair-dialog button:hover { border-color: var(--accent, #48c9fa); }
-.crosshair-actions button.active, .crosshair-dialog button.active { color: #65f5ba; border-color: #65f5ba; }
-.crosshair-actions button:disabled, .crosshair-dialog button:disabled { opacity: .5; cursor: default; }
-.crosshair-dialog {
-  width: min(420px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); box-sizing: border-box;
-  padding: 20px; overflow: auto; border: 1px solid var(--border, #35444f); border-radius: 18px;
-  background: var(--bg, #0f1921); color: var(--text, #e7f4fa); box-shadow: 0 18px 70px #0008;
-}
-.crosshair-dialog::backdrop { background: #0008; }
-.crosshair-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.crosshair-dialog h2 { margin: 0; font-size: 20px; }
-.crosshair-dialog p { font-size: 12px; line-height: 1.6; color: var(--text-muted, #99aebc); }
-.crosshair-preview { height: 100px; display: grid; place-items: center; margin: 14px 0; border-radius: 12px; background: #080e14; }
-.crosshair-preview span { position: relative; display: block; width: var(--crosshair-size, 20px); height: var(--crosshair-size, 20px); }
-.crosshair-preview span::before, .crosshair-preview span::after { content: ''; position: absolute; background: var(--crosshair-color, #65f5ba); box-shadow: 0 0 0 1px #000; }
-.crosshair-preview span::before { width: 100%; height: 2px; top: calc(50% - 1px); }
-.crosshair-preview span::after { height: 100%; width: 2px; left: calc(50% - 1px); }
-.crosshair-fields { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
-.crosshair-fields label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-.crosshair-fields input[type=color] { width: 42px; height: 36px; padding: 2px; border: 1px solid var(--border, #35444f); border-radius: 7px; background: transparent; }
-.crosshair-fields input[type=range] { width: 130px; accent-color: #65f5ba; }
-.crosshair-dialog footer { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
-.crosshair-dialog [data-crosshair-message] { color: #ffb091; min-height: 20px; }
-@media (max-height: 500px) { .crosshair-preview { height: 55px; } .crosshair-dialog { padding: 14px; } }
+
+    #xenon-crosshair-studio{--xc-bg:#101920;--xc-surface:#18232c;--xc-line:#34424c;--xc-text:#e7eff5;--xc-muted:#a0b2be;--xc-accent:#4bc7fa;--xc-space:18px;color-scheme:dark;font-family:"Segoe UI",Tahoma,sans-serif;color:var(--xc-text);font-size:14px;line-height:1.4}
+    #xenon-crosshair-studio *{box-sizing:border-box}
+    #xenon-crosshair-studio [hidden]{display:none!important}
+    #xenon-crosshair-studio button,#xenon-crosshair-studio input,#xenon-crosshair-studio select{font:inherit}
+    #xenon-crosshair-studio button{cursor:pointer;transition:background .15s,border-color .15s;color:var(--xc-text)}
+    #xenon-crosshair-studio button:disabled{cursor:default;opacity:.55}
+    #xenon-crosshair-studio button:focus-visible,#xenon-crosshair-studio input:focus-visible,#xenon-crosshair-studio select:focus-visible{outline:2px solid var(--xc-accent);outline-offset:3px}
+    #xenon-crosshair-studio .xc-panel{background:var(--xc-bg);border:1px solid var(--xc-line);border-radius:22px;overflow:hidden;box-shadow:0 12px 36px #0003;min-width:0}
+    #xenon-crosshair-studio .xc-header{padding:20px 22px 16px;display:flex;gap:12px;align-items:center;border-bottom:1px solid #2a3740}
+    #xenon-crosshair-studio .xc-heading{flex:1;min-width:0}
+    #xenon-crosshair-studio .xc-eyebrow{color:var(--xc-muted);font-size:11px;letter-spacing:1.8px;font-weight:600}
+    #xenon-crosshair-studio h2{font-size:22px;letter-spacing:-.7px;margin:3px 0 0;font-weight:650}
+    #xenon-crosshair-studio .xc-power{display:flex;align-items:center;justify-content:center;gap:8px;min-height:42px;min-width:104px;padding:9px 13px;border:1px solid var(--xc-line);border-radius:11px;background:#23313a;font-weight:600}
+    #xenon-crosshair-studio .xc-power[aria-pressed=true]{color:#071b14;background:#76e4bb;border-color:#76e4bb}
+    #xenon-crosshair-studio .xc-close{width:32px;height:36px;display:grid;place-items:center;border:0;border-radius:8px;background:transparent;color:var(--xc-muted)}
+    #xenon-crosshair-studio .xc-close:hover{background:var(--xc-surface)}
+    #xenon-crosshair-studio .xc-body{padding:var(--xc-space) 22px;display:grid;gap:16px}
+    #xenon-crosshair-studio .xc-connection{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:12px}
+    #xenon-crosshair-studio .xc-status{display:inline-flex;align-items:center;gap:7px;color:#8fe0bd}
+    #xenon-crosshair-studio .xc-status:before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+    #xenon-crosshair-studio .xc-check{color:var(--xc-muted);display:flex;align-items:center;gap:5px}
+    #xenon-crosshair-studio .xc-preview{position:relative;background:#0b1118;border:1px solid #2c3b45;border-radius:14px;overflow:hidden;min-width:0}
+    #xenon-crosshair-studio .xc-preview[data-scene=light]{background:#dadfdc}
+    #xenon-crosshair-studio .xc-preview[data-scene=texture]{background:linear-gradient(135deg,#534b39 0%,#776545 40%,#344438 40%,#222e25 80%)}
+    #xenon-crosshair-studio .xc-preview:before{content:"";position:absolute;inset:0;background-image:linear-gradient(#7c98a40c 1px,transparent 1px),linear-gradient(90deg,#7c98a40c 1px,transparent 1px);background-size:24px 24px;pointer-events:none}
+    #xenon-crosshair-studio .xc-preview canvas{display:block;width:100%;height:146px;position:relative}
+    #xenon-crosshair-studio .xc-preview-top{position:absolute;inset:11px 12px auto;display:flex;align-items:center;justify-content:space-between;gap:8px;z-index:1;font-size:11px}
+    #xenon-crosshair-studio .xc-preview-label{color:#c1d0d9;background:#101920e8;border-radius:6px;padding:4px 7px}
+    #xenon-crosshair-studio .xc-scene-switch{display:flex;padding:3px;border:1px solid #3a4a53;border-radius:8px;background:#101920}
+    #xenon-crosshair-studio .xc-scene-switch button{border:0;background:transparent;border-radius:5px;padding:3px 8px;font-size:11px;color:#a1b4c0;min-height:25px}
+    #xenon-crosshair-studio .xc-scene-switch button[aria-pressed=true]{background:#32424e;color:#e7eff5}
+    #xenon-crosshair-studio .xc-preview-bottom{position:absolute;bottom:9px;left:12px;right:12px;display:flex;align-items:center;justify-content:space-between;gap:8px;color:#b7c6cf;font-size:11px;pointer-events:none}
+    #xenon-crosshair-studio .xc-preview-bottom span{padding:3px 6px;background:#101920e8;border-radius:5px}
+    #xenon-crosshair-studio .xc-profile{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+    #xenon-crosshair-studio .xc-profile label{color:var(--xc-muted);font-size:12px}
+    #xenon-crosshair-studio select,#xenon-crosshair-studio input[type=text]{border:1px solid var(--xc-line);border-radius:8px;background:var(--xc-surface);color:var(--xc-text);padding:8px 10px;min-height:37px;min-width:0}
+    #xenon-crosshair-studio .xc-profile select{flex:1;min-width:115px}
+    #xenon-crosshair-studio .xc-link{border:0;background:transparent;color:var(--xc-accent);padding:8px 0;font-size:12px;display:inline-flex;align-items:center;gap:6px;min-height:36px}
+    #xenon-crosshair-studio .xc-shapes{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}
+    #xenon-crosshair-studio .xc-shape{border:1px solid var(--xc-line);border-radius:10px;background:#17212a;display:flex;gap:8px;align-items:center;justify-content:center;padding:9px 5px;min-width:0;min-height:43px;font-size:12px}
+    #xenon-crosshair-studio .xc-shape[aria-pressed=true]{border-color:var(--xc-accent);background:color-mix(in srgb,var(--xc-accent) 13%,var(--xc-bg));color:var(--xc-accent)}
+    #xenon-crosshair-studio .xc-shape canvas{width:21px;height:21px}
+    #xenon-crosshair-studio .xc-color-line{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+    #xenon-crosshair-studio .xc-color-title{font-size:12px;color:var(--xc-muted)}
+    #xenon-crosshair-studio .xc-swatches{display:flex;gap:5px;flex-wrap:wrap}
+    #xenon-crosshair-studio .xc-swatch{width:28px;height:32px;border:1px solid transparent;border-radius:8px;background:transparent;display:grid;place-items:center;padding:5px}
+    #xenon-crosshair-studio .xc-swatch:after{content:"";background:var(--xc-swatch);width:18px;height:18px;border-radius:5px}
+    #xenon-crosshair-studio .xc-swatch[aria-pressed=true]{border-color:var(--xc-accent);background:#253743}
+    #xenon-crosshair-studio .xc-custom-color{display:flex;align-items:center;gap:7px;margin-left:auto}
+    #xenon-crosshair-studio input[type=color]{width:30px;height:30px;padding:2px;background:#23343f;border:1px solid var(--xc-line);border-radius:7px;cursor:pointer}
+    #xenon-crosshair-studio .xc-hex{width:88px;text-transform:uppercase;font-family:Consolas,monospace;font-size:12px!important;padding:6px!important;min-height:32px!important}
+    #xenon-crosshair-studio .xc-sliders{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+    #xenon-crosshair-studio .xc-slider-label{display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:12px;margin-bottom:3px}
+    #xenon-crosshair-studio .xc-slider-label output{color:var(--xc-muted);white-space:nowrap;font-family:Consolas,monospace;font-size:11px}
+    #xenon-crosshair-studio input[type=range]{display:block;width:100%;min-width:0;accent-color:var(--xc-accent);height:26px;cursor:pointer;margin:0}
+    #xenon-crosshair-studio .xc-options{display:flex;gap:14px;flex-wrap:wrap;padding-top:2px}
+    #xenon-crosshair-studio .xc-option{display:flex;gap:7px;align-items:center;font-size:12px;cursor:pointer;min-height:30px}
+    #xenon-crosshair-studio input[type=checkbox]{accent-color:var(--xc-accent);width:16px;height:16px;margin:0}
+    #xenon-crosshair-studio .xc-opacity{margin-left:auto;color:var(--xc-muted);font-size:11px;display:flex;align-items:center;gap:5px}
+    #xenon-crosshair-studio .xc-footer{padding:12px 22px;border-top:1px solid #2a3740;display:flex;gap:10px;align-items:center;justify-content:space-between;background:#142029;flex-wrap:wrap}
+    #xenon-crosshair-studio .xc-footer .xc-sync{font-size:11px;color:#9cb2be;display:flex;align-items:center;gap:6px}
+    #xenon-crosshair-studio .xc-center{display:inline-flex;gap:7px;align-items:center;justify-content:center;border:1px solid var(--xc-line);border-radius:8px;background:#20303c;padding:8px 10px;font-size:12px;min-height:36px}
+    #xenon-crosshair-studio .xc-center:hover{border-color:var(--xc-accent)}
+    #xenon-crosshair-studio .xc-save-form{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    #xenon-crosshair-studio .xc-save-form input{flex:1;min-width:100px}
+    #xenon-crosshair-studio .xc-save-form button{border:1px solid var(--xc-accent);background:#193444;border-radius:8px;padding:8px 12px}
+    #xenon-crosshair-studio .xc-offline{background:#30271b;border:1px solid #705a32;color:#f0d39c;border-radius:10px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:12px}
+    #xenon-crosshair-studio .xc-offline button{border:1px solid #947340;background:#4d3b22;padding:7px 10px;border-radius:7px}
+    #xenon-crosshair-studio svg.lucide{width:17px;height:17px;flex:none}
+    #xenon-crosshair-studio[data-density=compact]{--xc-space:12px}
+    #xenon-crosshair-studio[data-density=compact] .xc-body{gap:11px}
+    #xenon-crosshair-studio[data-density=compact] .xc-preview canvas{height:118px}
+    @media(max-width:560px){
+      #xenon-crosshair-studio .xc-header{padding:15px 12px;gap:6px;flex-wrap:wrap}
+      #xenon-crosshair-studio .xc-header .xc-heading{min-width:92px}
+      #xenon-crosshair-studio h2{font-size:19px}
+      #xenon-crosshair-studio .xc-header .xc-power{min-width:90px;font-size:12px;min-height:38px;padding:8px}
+      #xenon-crosshair-studio .xc-close{width:26px}
+      #xenon-crosshair-studio .xc-body{padding:14px 12px;gap:14px}
+      #xenon-crosshair-studio .xc-footer{padding:12px}
+      #xenon-crosshair-studio .xc-shape{flex-direction:column;gap:4px;font-size:11px}
+      #xenon-crosshair-studio .xc-sliders{grid-template-columns:1fr;gap:10px}
+      #xenon-crosshair-studio .xc-custom-color{margin-left:0}
+      #xenon-crosshair-studio .xc-opacity{margin-left:0}
+      #xenon-crosshair-studio .xc-preview-top{inset:9px 8px auto}
+      #xenon-crosshair-studio .xc-preview-label{padding:4px;font-size:10px}
+      #xenon-crosshair-studio .xc-scene-switch button{padding:3px 5px}
+    }
+    @media(pointer:coarse){
+      #xenon-crosshair-studio button,#xenon-crosshair-studio .xc-option,#xenon-crosshair-studio select{min-height:44px}
+      #xenon-crosshair-studio .xc-swatch{width:44px}
+      #xenon-crosshair-studio .xc-close{width:44px}
+      #xenon-crosshair-studio .xc-scene-switch button{padding:3px 7px}
+      #xenon-crosshair-studio input[type=range]{height:44px}
+      #xenon-crosshair-studio input[type=text]{font-size:16px!important}
+    }
+    #xenon-crosshair-studio .xc-source{display:flex;gap:6px;min-width:0}
+    #xenon-crosshair-studio .xc-source button{flex:1;display:flex;align-items:center;justify-content:center;gap:7px;border:1px solid var(--xc-line);border-radius:9px;background:#17212a;min-height:40px;padding:8px;font-size:12px}
+    #xenon-crosshair-studio .xc-source button[aria-pressed=true]{color:var(--xc-accent);border-color:var(--xc-accent);background:#193444}
+    #xenon-crosshair-studio .xc-draw-controls,#xenon-crosshair-studio .xc-media-controls{display:grid;gap:16px;min-width:0}
+    #xenon-crosshair-studio .xc-upload{width:100%;display:flex;gap:12px;align-items:center;text-align:left;border:1px dashed #557181;background:#15232e;border-radius:12px;padding:15px;min-height:78px}
+    #xenon-crosshair-studio .xc-upload:hover,#xenon-crosshair-studio .xc-media-controls[data-dragging=true] .xc-upload{border-color:var(--xc-accent);background:#1b3342}
+    #xenon-crosshair-studio .xc-upload-copy{display:grid;gap:4px;min-width:0}
+    #xenon-crosshair-studio .xc-upload-copy strong{font-size:13px;font-weight:600}
+    #xenon-crosshair-studio .xc-upload-copy small{color:var(--xc-muted);font-size:11px}
+    #xenon-crosshair-studio .xc-file-row{display:flex;gap:10px;align-items:center;min-width:0}
+    #xenon-crosshair-studio .xc-file-details{flex:1;min-width:0}
+    #xenon-crosshair-studio .xc-file-name{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+    #xenon-crosshair-studio .xc-file-meta{display:block;font-size:11px;color:var(--xc-muted);margin-top:3px}
+    #xenon-crosshair-studio .xc-media-hint{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--xc-muted)}
+    #xenon-crosshair-studio .xc-media-hint span{display:flex;align-items:center;gap:5px}
+    #xenon-crosshair-studio .xc-file-error{font-size:12px;color:#ffacb7;margin:0;overflow-wrap:anywhere}
+    #xenon-crosshair-studio .xc-preview[data-mode=image] canvas{height:220px}
+    #xenon-crosshair-studio .xc-image-layer{position:absolute;inset:44px 10px 36px;display:grid;place-items:center;pointer-events:none}
+    #xenon-crosshair-studio .xc-image-layer img{display:block;object-fit:contain;max-width:100%;max-height:100%;opacity:1}
+    #xenon-crosshair-studio .xc-image-empty{font-size:12px;text-align:center;color:#c1d0d9;background:#101920e8;padding:7px 10px;border-radius:7px}
+    #xenon-crosshair-studio[data-density=compact] .xc-draw-controls,#xenon-crosshair-studio[data-density=compact] .xc-media-controls{gap:11px}
+    @media(max-width:560px){#xenon-crosshair-studio .xc-draw-controls,#xenon-crosshair-studio .xc-media-controls{gap:14px}#xenon-crosshair-studio .xc-preview[data-mode=image] .xc-preview-bottom{flex-wrap:wrap}#xenon-crosshair-studio .xc-upload{padding:12px;gap:8px}}
+    @media(prefers-reduced-motion:reduce){#xenon-crosshair-studio button{transition:none}}
+
+.crosshair-dialog{position:fixed;inset:50% 82px auto auto;transform:translateY(-50%);margin:0;width:min(640px,calc(100vw - 100px));max-width:none;max-height:calc(100dvh - 24px);padding:0;border:0;background:transparent;overflow:visible;z-index:10050}
+.crosshair-dialog:not([open]){display:none}
+#xenon-crosshair-studio .xc-panel{display:flex;flex-direction:column;max-height:calc(100dvh - 24px)}
+#xenon-crosshair-studio .xc-header,#xenon-crosshair-studio .xc-footer{flex:none}
+#xenon-crosshair-studio .xc-body{overflow:auto;min-height:0;overscroll-behavior:contain;scrollbar-width:thin}
+#xenon-crosshair-studio [data-file-error]{overflow-wrap:anywhere}
+#xenon-crosshair-studio [data-preview-name]{max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qbtn-crosshair{position:relative}
+.qbtn-crosshair[data-enabled=true]::after{content:"";position:absolute;right:5px;bottom:5px;width:6px;height:6px;background:#76e4bb;border-radius:50%;border:1px solid #13202a}
+.qbtn-crosshair[aria-expanded=true]{color:#4bc7fa}
+.crosshair-actions{display:flex;gap:6px;margin-top:12px}
+.crosshair-actions button{padding:7px 12px;min-height:36px;border:1px solid #35444f;border-radius:9px;background:#17232c;color:#e7f4fa;font:inherit;font-size:12px;cursor:pointer}
+.crosshair-actions button.active{color:#76e4bb;border-color:#76e4bb}
+@media(max-height:760px){#xenon-crosshair-studio{--xc-space:12px}#xenon-crosshair-studio .xc-body,#xenon-crosshair-studio .xc-draw-controls,#xenon-crosshair-studio .xc-media-controls{gap:11px}#xenon-crosshair-studio .xc-header{padding-top:13px;padding-bottom:13px}}
+@media(max-width:560px){.crosshair-dialog{inset:50% 10px auto;width:calc(100vw - 20px)}}
+@media(pointer:coarse){#xenon-crosshair-studio button,#xenon-crosshair-studio .xc-source button,#xenon-crosshair-studio .xc-center,#xenon-crosshair-studio .xc-close{min-height:44px}#xenon-crosshair-studio .xc-close{min-width:44px}#xenon-crosshair-studio .xc-preview[data-mode=image] canvas{height:244px}#xenon-crosshair-studio .xc-image-layer{inset:62px 10px 42px}}
+
+.qbtn-crosshair svg{fill:none;stroke:currentColor;stroke-width:2}

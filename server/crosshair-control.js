@@ -6,6 +6,8 @@ const { randomUUID } = require('node:crypto');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 
+const model = require('../packages/core/src/crosshair');
+const { createMediaStore } = require('./crosshair-media');
 const runFile = promisify(execFile);
 function launchGameBar(uri) {
   // ShellExecute resolves the registered protocol; Explorer can return before
@@ -23,16 +25,7 @@ function fail(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
 
-function validateCommand(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw fail('Invalid crosshair command.');
-  const keys = Object.keys(value);
-  if (!keys.length || keys.some(k => !['enabled', 'color', 'size', 'center'].includes(k))) throw fail('Unknown crosshair setting.');
-  if ('enabled' in value && typeof value.enabled !== 'boolean') throw fail('Enabled must be true or false.');
-  if ('center' in value && value.center !== true) throw fail('Center must be true.');
-  if ('color' in value && (typeof value.color !== 'string' || !/^#[0-9a-f]{6}$/i.test(value.color))) throw fail('Use a six-digit hex color.');
-  if ('size' in value && (!Number.isInteger(value.size) || value.size < 8 || value.size > 48)) throw fail('Size must be 8–48.');
-  return { ...value, ...('color' in value ? { color: value.color.toUpperCase() } : {}) };
-}
+const validateCommand = model.validatePatch;
 
 async function readJson(file) {
   const info = await fs.stat(file);
@@ -44,6 +37,7 @@ function createCrosshairControl({ platform = process.platform, localAppData = pr
   now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
   openGameBar = launchGameBar } = {}) {
   let queue = Promise.resolve();
+  const media = createMediaStore(folder);
 
   async function folder() {
     if (platform !== 'win32' || !localAppData) return null;
@@ -65,19 +59,22 @@ function createCrosshairControl({ platform = process.platform, localAppData = pr
     let state;
     try { state = await readJson(path.join(location, STATUS_FILE)); }
     catch (e) { if (e.code !== 'ENOENT') throw fail('Cannot read the Game Bar widget state.', 502); }
-    const valid = state && state.version === 1 && typeof state.enabled === 'boolean'
+    let settings;
+    try { settings = model.settings(state || {}); } catch { settings = null; }
+    const valid = settings && state && [1, 2].includes(state.version) && typeof state.enabled === 'boolean'
       && typeof state.pinned === 'boolean' && typeof state.visible === 'boolean'
       && typeof state.clickThrough === 'boolean' && Number.isFinite(state.updatedAt)
       && Number.isInteger(state.size) && state.size >= 8 && state.size <= 48
       && typeof state.color === 'string' && /^#[0-9a-f]{6}$/i.test(state.color);
     const age = valid ? now() - state.updatedAt : Infinity;
     const online = valid && age >= -1000 && age <= FRESH_MS && state.running === true;
-    return { supported: true, installed: true, online: !!online,
+    return { ...(settings || model.defaults), protocol: valid ? state.version : 0,
+      supported: true, installed: true, online: !!online,
       enabled: !!(online && state.enabled), pinned: !!(online && state.pinned),
       visible: !!(online && state.visible), clickThrough: !!(online && state.clickThrough),
       color: valid ? state.color : '#65F5BA', size: valid ? state.size : 20,
       commandId: online && typeof state.commandId === 'string' ? state.commandId.slice(0, 64) : null,
-      error: online && state.error === 'center_failed' ? 'Could not center the widget on this display.' : null };
+      error: online ? ({ center_failed: 'Could not center the widget on this display.', image_failed: 'Windows could not load this image. Choose another file.', invalid_settings: 'Game Bar rejected the crosshair settings.' }[state.error] || null) : null };
   }
 
   async function status() {
@@ -92,15 +89,18 @@ function createCrosshairControl({ platform = process.platform, localAppData = pr
       if (!location) throw fail('Install and open Xenon Crosshair from Win + G first.', 409);
       const before = await statusAt(location);
       if (!before.online || !before.visible) throw fail('Open Win + G and pin Xenon Crosshair first.', 409);
+      if (before.protocol < 2 && Object.keys(patch).some(k => !['enabled','color','size','center'].includes(k))) throw fail('Update Xenon Crosshair in Game Bar to use custom shapes and images.', 409);
+      const next = model.settings({ ...before, ...patch });
+      if (next.mode === 'image') { model.drawable(next); await media.read(next.asset); }
       const id = randomUUID();
-      const payload = JSON.stringify({ version: 1, id, expiresAt: now() + COMMAND_MS, ...patch });
+      const payload = JSON.stringify({ version: before.protocol, id, expiresAt: now() + COMMAND_MS, ...patch });
       const temp = path.join(location, COMMAND_FILE + '.' + id + '.tmp');
       try {
         await fs.writeFile(temp, payload, { flag: 'wx' });
         await fs.rename(temp, path.join(location, COMMAND_FILE));
       } finally { await fs.unlink(temp).catch(() => {}); }
       // Only an acknowledgement from Game Bar changes the displayed toggle state.
-      for (let attempt = 0; attempt < 25; attempt++) {
+      for (let attempt = 0; attempt < 50; attempt++) {
         await sleep(100);
         const state = await statusAt(location);
         if (state.online && state.commandId === id) {
@@ -122,7 +122,7 @@ function createCrosshairControl({ platform = process.platform, localAppData = pr
     return { ok: true };
   }
 
-  return { status, send, open };
+  return { status, send, open, media };
 }
 
 module.exports = { createCrosshairControl, validateCommand };

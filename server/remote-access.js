@@ -92,7 +92,7 @@ const CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
 // there, restarts the server, or downloads and places an executable.
 const REMOTE_DENY = new Set([
   // Game Bar belongs to the interactive desktop on this PC.
-  '/api/crosshair', '/api/crosshair/open',
+  '/api/crosshair', '/api/crosshair/open', '/api/crosshair/assets', '/api/crosshair/presets',
   // ChatGPT OAuth belongs to the PC hosting the browser callback.
   '/api/ai/chatgpt/status', '/api/ai/chatgpt/login',
   '/api/ai/chatgpt/logout', '/api/ai/chatgpt/models',

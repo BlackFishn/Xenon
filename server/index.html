@@ -247,6 +247,7 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h7v7H4V4Zm9 0h7v7h-7V4ZM4 13h7v7H4v-7Zm9 0h7v7h-7v-7Z"/></svg>
         <span data-i18n="ui_apps">App</span>
       </button>
+      <button class="topbtn qbtn-crosshair" type="button" onclick="XenonCrosshair.togglePanel()" aria-label="Crosshair controls" aria-expanded="false" data-crosshair-rail title="Crosshair"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="7"/><path d="M12 2v5m0 10v5M2 12h5m10 0h5"/></svg><span>Crosshair</span></button>
       <span class="app-favorites" id="app-favorites"></span>
       <span class="pager-dots" id="pager-dots" role="tablist" aria-label="Dashboard pages"></span>
     </div>
@@ -3943,22 +3944,74 @@
      admin so the two Store fronts cannot disagree about what shows where.
      community-gallery.js degrades to its own default order if this is absent. -->
 <script src="shared/src/storefront-layout.js"></script>
-<dialog id="crosshair-dialog" class="crosshair-dialog" aria-labelledby="crosshair-title">
-  <header><h2 id="crosshair-title">Xenon Crosshair</h2><button type="button" onclick="XenonCrosshair.close()" aria-label="Close crosshair settings">✕</button></header>
-  <p data-crosshair-badge aria-live="polite">Xbox Game Bar</p>
-  <div class="crosshair-preview" data-crosshair-preview aria-hidden="true"><span></span></div>
-  <div class="crosshair-fields">
-    <label>Color <input type="color" value="#65f5ba" data-crosshair-color data-crosshair-setting onchange="XenonCrosshair.apply({ color: this.value })"></label>
-    <label>Size <input type="range" min="8" max="48" value="20" data-crosshair-size data-crosshair-setting onchange="XenonCrosshair.apply({ size: Number(this.value) })"><output data-crosshair-size-value>20</output></label>
-  </div>
-  <footer>
-    <button type="button" data-crosshair-toggle aria-pressed="false" onclick="XenonCrosshair.toggle()">Crosshair OFF</button>
-    <button type="button" data-crosshair-setting onclick="XenonCrosshair.apply({ center: true })">Center</button>
-    <button type="button" onclick="XenonCrosshair.openGameBar()">Open Game Bar</button>
-  </footer>
-  <p>In Win + G, open Xenon Crosshair, pin it, and enable click-through. Center it on your game display.</p>
-  <p data-crosshair-message role="status"></p>
-</dialog>
+<dialog id="crosshair-dialog" class="crosshair-dialog" aria-label="Xenon Crosshair"><div id="xenon-crosshair-studio"><section class="xc-panel" data-panel aria-label="Crosshair controls">
+      <header class="xc-header">
+        <div class="xc-heading"><div class="xc-eyebrow">XENON / GAMING</div><h2>Crosshair</h2></div>
+        <button class="xc-power" type="button" data-power aria-pressed="true"><span data-power-label>เปิดอยู่</span></button>
+        <button class="xc-close" type="button" data-close aria-label="ปิดแผงควบคุม">×</button>
+      </header>
+      <div class="xc-body">
+        <div class="xc-connection">
+          <span class="xc-status" data-connection>Game Bar เชื่อมต่อแล้ว</span>
+          <span class="xc-check"> ปักหมุด · Click-through</span>
+        </div>
+        <div class="xc-offline" data-offline hidden><span>เปิด Game Bar เพื่อเชื่อมต่อเป้า</span><button type="button" data-reconnect>เปิด Game Bar</button></div>
+        <div class="xc-preview" data-preview data-scene="dark">
+          <div class="xc-preview-top"><span class="xc-preview-label" data-preview-scale>พรีวิว · 3×</span><div class="xc-scene-switch" role="group" aria-label="พื้นหลังพรีวิว"><button type="button" data-scene="dark" aria-pressed="true">มืด</button><button type="button" data-scene="light" aria-pressed="false">สว่าง</button><button type="button" data-scene="texture" aria-pressed="false">ฉาก</button></div></div>
+          <canvas data-main-canvas role="img" aria-label="พรีวิวเป้าที่ปรับแต่ง"></canvas>
+          <div class="xc-image-layer" data-image-layer hidden><img data-main-image alt="พรีวิวรูปเป้าของคุณ" hidden><span class="xc-image-empty" data-image-empty>เลือกรูปหรือ GIF ของคุณ</span></div>
+          <div class="xc-preview-bottom"><span data-preview-name>Custom 01</span><span data-preview-state>แสดงเป้าบนจอเกม</span></div>
+        </div>
+        <div class="xc-profile">
+          <label for="xcc-profile">พรีเซ็ต</label>
+          <select id="xcc-profile" data-profile><option value="custom">Current</option><option value="classic">Classic</option><option value="dot">Dot</option><option value="ring">Ring</option></select>
+          <button class="xc-link" type="button" data-delete-preset hidden aria-label="ลบพรีเซ็ต">ลบ</button><button class="xc-link" type="button" data-save-open>บันทึกใหม่</button>
+        </div>
+        <div class="xc-save-form" data-save-form role="group" aria-label="บันทึกพรีเซ็ตใหม่" hidden><input type="text" maxlength="40" placeholder="ชื่อพรีเซ็ต" aria-label="ชื่อพรีเซ็ตใหม่" required data-preset-name><button type="button" data-save-confirm>บันทึก</button><button type="button" data-save-cancel aria-label="ยกเลิกการบันทึก">×</button></div>
+        <div class="xc-source" role="group" aria-label="ชนิดของเป้า">
+          <button type="button" data-mode="draw" aria-pressed="true">วาดเป้า</button>
+          <button type="button" data-mode="image" aria-pressed="false">Image / GIF</button>
+        </div>
+        <div class="xc-media-controls" data-media-controls hidden>
+          <input type="file" data-file accept="image/png,image/gif,image/webp,image/jpeg" aria-label="เลือกรูปหรือ GIF เป็นเป้า" hidden>
+          <button class="xc-upload" type="button" data-upload><span class="xc-upload-copy"><strong data-upload-label>เลือกรูป หรือวางไฟล์ที่นี่</strong><small>PNG · GIF · WebP · JPG — สูงสุด 5 MB</small></span></button>
+          <div class="xc-file-row" data-file-row hidden><div class="xc-file-details"><span class="xc-file-name" data-file-name></span><span class="xc-file-meta" data-file-meta></span></div><button class="xc-center" type="button" data-replace>เปลี่ยนรูป</button><button class="xc-close" type="button" data-remove aria-label="นำรูปเป้าออก">×</button></div>
+          <p class="xc-file-error" data-file-error role="alert" hidden></p>
+          <label><span class="xc-slider-label"><span>ขนาดเป้า · ด้านยาว</span><output data-value="imageSize">64 px</output></span><input type="range" min="8" max="128" step="1" value="64" data-setting="imageSize" aria-label="ขนาดรูปเป้าด้านยาว"></label>
+          <div class="xc-media-hint"><span>คงสัดส่วน · โปร่งใสตามไฟล์</span><span>ความทึบ 100%</span></div>
+        </div>
+        <div class="xc-draw-controls" data-draw-controls>
+        <div class="xc-shapes" role="group" aria-label="รูปทรงเป้า">
+          <button class="xc-shape" type="button" data-shape="cross" aria-pressed="true"><canvas data-mini="cross" aria-hidden="true"></canvas><span>Cross</span></button>
+          <button class="xc-shape" type="button" data-shape="dot" aria-pressed="false"><canvas data-mini="dot" aria-hidden="true"></canvas><span>Dot</span></button>
+          <button class="xc-shape" type="button" data-shape="ring" aria-pressed="false"><canvas data-mini="ring" aria-hidden="true"></canvas><span>Ring</span></button>
+          <button class="xc-shape" type="button" data-shape="t" aria-pressed="false"><canvas data-mini="t" aria-hidden="true"></canvas><span>T-shape</span></button>
+        </div>
+        <div class="xc-color-line">
+          <span class="xc-color-title">สีเป้า</span>
+          <div class="xc-swatches" role="group" aria-label="สีเป้าสำเร็จรูป">
+            <button type="button" class="xc-swatch" data-color="#65F5BA" style="--xc-swatch:#65f5ba" aria-label="สีมิ้นต์" aria-pressed="true"></button>
+            <button type="button" class="xc-swatch" data-color="#FFFFFF" style="--xc-swatch:#fff" aria-label="สีขาว" aria-pressed="false"></button>
+            <button type="button" class="xc-swatch" data-color="#4BCCFF" style="--xc-swatch:#4bccff" aria-label="สีฟ้า" aria-pressed="false"></button>
+            <button type="button" class="xc-swatch" data-color="#FFE66D" style="--xc-swatch:#ffe66d" aria-label="สีเหลือง" aria-pressed="false"></button>
+            <button type="button" class="xc-swatch" data-color="#FF5E74" style="--xc-swatch:#ff5e74" aria-label="สีชมพู" aria-pressed="false"></button>
+          </div>
+          <div class="xc-custom-color"><input type="color" value="#65f5ba" data-color-input aria-label="เลือกสีเป้าเอง"><input class="xc-hex" type="text" value="#65F5BA" maxlength="7" pattern="#[0-9A-Fa-f]{6}" data-hex aria-label="รหัสสีเป้า"></div>
+        </div>
+        <div class="xc-sliders">
+          <label><span class="xc-slider-label"><span data-length-label>ความยาว</span><output data-value="length">8 px</output></span><input type="range" min="2" max="20" step="1" value="8" data-setting="length" aria-label="ความยาวเส้นเป้า"></label>
+          <label><span class="xc-slider-label"><span>ความหนา</span><output data-value="thickness">2 px</output></span><input type="range" min="1" max="6" step="1" value="2" data-setting="thickness" aria-label="ความหนาของเป้า"></label>
+          <label><span class="xc-slider-label"><span>ช่องว่างกลาง</span><output data-value="gap">4 px</output></span><input type="range" min="0" max="12" step="1" value="4" data-setting="gap" aria-label="ช่องว่างกลางเป้า"></label>
+        </div>
+        <div class="xc-options">
+          <label class="xc-option"><input type="checkbox" checked data-setting="outline">ขอบดำ</label>
+          <label class="xc-option"><input type="checkbox" data-setting="centerDot">จุดกึ่งกลาง</label>
+          <span class="xc-opacity">ความทึบ 100%</span>
+        </div>
+        </div>
+      </div>
+      <footer class="xc-footer"><span class="xc-sync" role="status" aria-live="polite"><span data-sync>กำลังเชื่อมต่อ Game Bar</span></span><button class="xc-center" type="button" data-retry hidden>ลองซิงก์ใหม่</button><button class="xc-center" type="button" data-center>กลางจอ</button></footer>
+    </section></div></dialog>
 
 <script src="js/custom-select.js"></script>
 <script src="js/color-picker.js"></script>
@@ -3985,6 +4038,7 @@
 <script src="js/calendar.js"></script>
 <script src="js/system.js"></script>
 <script src="js/network.js"></script>
+<script src="shared/src/crosshair.js"></script>
 <script src="js/crosshair.js"></script>
 <script src="js/notes.js"></script>
 <script src="js/tasks.js"></script>

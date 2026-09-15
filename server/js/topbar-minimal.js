@@ -77,6 +77,7 @@
     layout: '#layout-edit-toggle',
     settings: '.qbtn-settings',
     apps: '.qbtn-apps',
+    crosshair: '.qbtn-crosshair',
     favorites: '#app-favorites',
   };
   const ACTION_IDS = Object.keys(ACTION_SELECTORS);
@@ -140,7 +141,7 @@
     return ACTION_IDS.map(id => ({
       id,
       hidden: false,
-      side: (id === 'layout' || id === 'settings' || id === 'apps' || id === 'favorites') ? 'right' : 'left',
+      side: (id === 'layout' || id === 'settings' || id === 'apps' || id === 'crosshair' || id === 'favorites') ? 'right' : 'left',
     }));
   }
 
