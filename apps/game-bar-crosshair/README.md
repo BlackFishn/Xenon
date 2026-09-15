@@ -13,7 +13,7 @@ Open Game Bar targets this widget directly when it is installed. Pinning, click-
 
 Color and size are saved. A fresh widget launch starts OFF. Closing Game Bar with the widget unpinned, suspending the widget, or ending its process makes Xenon report it unavailable after at most eight seconds. Reopen it from Win + G if necessary. Game Bar recreates the connection on the next widget launch. Cleanup is dispatched to the widget’s own UI thread.
 
-The first version draws a plus with a black outline. The size uses Windows device-independent pixels. Rendering over a particular game, exclusive fullscreen mode, and exact pixel alignment with display scaling should be checked in that game.
+The crosshair draws a fully opaque plus with a black outline. Its color stays at full opacity independently of Game Bar panel transparency. The size uses Windows device-independent pixels. Rendering over a particular game, exclusive fullscreen mode, and exact pixel alignment with display scaling should be checked in that game.
 
 ## Build and install locally
 

@@ -71,7 +71,6 @@ namespace Xenon.Crosshair
             widget.GameBarDisplayModeChanged += WidgetChanged;
             widget.PinnedChanged += WidgetChanged;
             widget.ClickThroughEnabledChanged += WidgetChanged;
-            widget.RequestedOpacityChanged += WidgetChanged;
             widget.VisibleChanged += WidgetChanged;
             timer.Tick += Tick;
             Loaded += async (s, e) => { Render(); await Center(); await Publish(); if (!stopped && widget.Visible) timer.Start(); };
@@ -100,7 +99,8 @@ namespace Xenon.Crosshair
             hint.Text = error == "center_failed" ? "Could not center here. Move Game Bar to your game display and try Center again."
                 : "Pin this widget, then enable click-through in Game Bar.\nUse Xenon → System → FPS to control it while playing.";
             reticle.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
-            reticle.Opacity = Math.Max(0, Math.Min(1, widget.RequestedOpacity / 100.0));
+            // Keep the aim point legible independently of Game Bar panel transparency.
+            reticle.Opacity = 1;
             reticle.Width = reticle.Height = size + 2;
             reticle.Children.Clear();
             var brush = new SolidColorBrush(Color.FromArgb(255,
@@ -251,7 +251,6 @@ namespace Xenon.Crosshair
             widget.GameBarDisplayModeChanged -= WidgetChanged;
             widget.PinnedChanged -= WidgetChanged;
             widget.ClickThroughEnabledChanged -= WidgetChanged;
-            widget.RequestedOpacityChanged -= WidgetChanged;
             widget.VisibleChanged -= WidgetChanged;
             try { File.Delete(Path.Combine(ApplicationData.Current.LocalFolder.Path, StatusFile)); }
             catch (Exception) { /* A terminated widget also becomes offline after its heartbeat expires. */ }
