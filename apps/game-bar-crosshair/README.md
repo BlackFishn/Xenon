@@ -4,12 +4,12 @@ A local Windows crosshair widget controlled from Xenon’s crosshair side-menu p
 
 ## Use
 
-1. Press the crosshair power button in Xenon. It opens the installed Game Bar widget when needed, waits for connection, then enables the saved crosshair. Game Bar may appear in the foreground during activation.
+1. Press the crosshair power button in Xenon. It opens the installed Game Bar widget when needed, waits for connection, then enables the saved crosshair. Activation targets the Windows primary display and centers the crosshair there. Game Bar may appear in the foreground during activation.
 2. Pin the widget and enable Game Bar’s click-through option.
 3. Press **Center on this screen**, then close the Game Bar interface.
 4. In Xenon, press the **crosshair icon in the side menu**. Draw a custom crosshair or upload an image/GIF, adjust its size, save a preset, and turn the overlay on or off. System → FPS opens the same panel.
 
-Open Game Bar targets this widget directly when it is installed. Pinning, click-through, and the selected display remain Game Bar settings. The button only reports a successful change after the widget acknowledges it.
+Open Game Bar targets this widget directly when it is installed. Pinning and click-through remain Game Bar settings. A widget that is already visible keeps its placement; when Xenon needs to open it, the Windows primary display is the target. The button only reports a successful change after the widget acknowledges it.
 
 Color and size are saved. A fresh widget launch starts OFF. Closing Game Bar with the widget unpinned, suspending the widget, or ending its process makes Xenon report it unavailable after at most eight seconds. Press ON in Xenon to reopen it. If Windows cannot activate it, the editor reports the failure and provides a manual Game Bar fallback. Game Bar recreates the connection on the next widget launch. Cleanup is dispatched to the widget’s own UI thread.
 
@@ -71,3 +71,9 @@ Version 1.0.0.5 reduces command and editor polling delays and streams the latest
 Desktop activation uses the launchForeground URI form found in Microsoft Edge Game Assist 1.0.4019.0 and verified locally with Game Bar 7.326.8061.0. The generic launch URI was accepted by Windows but left a closed widget offline. The bridge waits up to eight seconds after launching and never treats URI dispatch alone as a successful connection. This does not add a Windows startup task or silently restore ON at login. Pinning and click-through remain user-controlled Game Bar settings.
 
 One-click activation passed 93 related Node tests. A live browser test made the pinned widget unavailable, clicked ON once, restored it and received an enabled acknowledgement while preserving pinning and the current design. Repeated clicks issued one request, and startup-state layouts fit 390×844, 1600×720 and 720×1280. A closed-widget launch was also verified with the foreground URI. No Windows reboot was performed during this validation.
+
+The native Xenon shell first holds a tiny transparent window on the primary display while Game Bar opens. This uses the focus permission from the user's click; a background process cannot reliably claim it. The window has no webview or taskbar entry, retires after the request (25-second safety limit), and does not take focus back from Game Bar or another selected app. Failed preparation prevents the launch. This requires the updated native shell; browser/older-shell launches only provide a monitor hint.
+
+The desktop launcher also supplies `SEE_MASK_HMONITOR` with the primary monitor through [ShellExecuteEx](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/ns-shellapi-shellexecuteinfow), in an isolated, hidden PowerShell process. It allows only this widget's activation URI and the Game Bar fallback. Enabling after activation also sends the existing center command, since Game Bar can retain a position relative to the old display. This does not move Xenon or change Windows display settings. Regression checks include native URI rejection, bounded launch arguments and centering on reconnect.
+
+Primary-display activation passed 100 related Node tests and an optimized native build. Live testing verified a widget previously on the Edge moved to the primary 2560×1440 display and centered at (1280, 720), with pinning, click-through and design preserved. A manual click in the updated native Xenon app also confirmed the primary display. Browser automation of Tauri's custom navigation can wait indefinitely for a navigation that the native shell deliberately cancels; native checks use the widget's acknowledged state and actual window bounds. No reboot was performed.

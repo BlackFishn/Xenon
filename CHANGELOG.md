@@ -26,6 +26,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Smart Home cards can be arranged instead of forced into device bundles.** Settings now offers a Custom card layout that shows every selected Home Assistant entity separately. In Dashboard edit mode, cards can be reordered by mouse or touch, resized independently, and split into named sections and one level of subsections. The existing room-and-device grouping remains the default.
 
 ### Fixed
+- **Crosshair auto-open targets the Windows primary display instead of the Xenon screen.** The native app prepares a foreground window on the primary display, then centers the overlay for that display before confirming ON. Existing visible widgets keep their placement; pinning, click-through and saved designs are preserved.
 - **Crosshair changes follow dragging without waiting for it to stop.** Shorter Game Bar and acknowledgement intervals reduce sync delays, faster visible-editor refresh brings changes back sooner, and late status responses cannot overwrite newer confirmed settings.
 - **Game Bar crosshair colors stay fully opaque.** Panel transparency no longer dims the aim point; the transparent overlay background and black outline remain.
 - **An idle Volume mixer keeps its app list current.** Visible audio controls renew fallback updates even when SSE stays connected, so closed games disappear and newly active apps appear without touching a slider. Hidden tabs and dashboard pages stop renewing the watch; returning refreshes immediately.

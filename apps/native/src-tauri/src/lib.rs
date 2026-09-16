@@ -2,6 +2,8 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 mod crash_log;
 #[cfg(windows)]
+mod crosshair_launch;
+#[cfg(windows)]
 mod cursor_guard;
 #[cfg(windows)]
 mod edge_swipe;
@@ -1534,6 +1536,7 @@ pub fn run() {
                     "updateEvents": true,
                     "lowPowerGpu": matches!(gpu_flag, Some("--force_low_power_gpu")),
                     "displayPicker": true,
+                    "crosshairPrimary": cfg!(windows),
                     // The monitor list, injected BEFORE the page loads. It used
                     // to arrive only with the first `push_display_state`, after
                     // the dashboard had loaded — so the first-run screen picker
@@ -1662,6 +1665,18 @@ pub fn run() {
                                 std::thread::spawn(move || spotlight_window::open(&h));
                             }
                             _ => {}
+                        }
+                        return false;
+                    }
+                    if scheme == "xenon-crosshair" {
+                        #[cfg(windows)]
+                        {
+                            let handle = nav_handle.clone();
+                            match url.path() {
+                                "prepare" => crosshair_launch::prepare(&handle),
+                                "release" => crosshair_launch::release(&handle),
+                                _ => {}
+                            }
                         }
                         return false;
                     }

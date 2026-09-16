@@ -10,7 +10,7 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 const online = { ...model.defaults, online: true, supported: true, installed: true, protocol: 2,
   visible: true, pinned: true, clickThrough: true, enabled: false };
 
-async function editor(initial = online) {
+async function editor(initial = online, native = false) {
   const nodes = new Map(), requests = [], timers = new Map();
   let clock = 0, serial = 0;
   function node(key) {
@@ -24,7 +24,9 @@ async function editor(initial = online) {
   }
   const document = { hidden: false, getElementById: node, querySelector: node, addEventListener() {},
     querySelectorAll: selector => selector === '[data-crosshair-toggle]' ? [node('toggle')] : [] };
-  const window = { XenonCrosshairModel: model };
+  const navigations = [];
+  const window = { XenonCrosshairModel: model, __XENON_NATIVE_CAPS__: { crosshairPrimary: native },
+    location: { set href(value) { navigations.push(value); } } };
   vm.runInNewContext(source, { window, document, SERVER: '', Blob, AbortController,
     ResizeObserver: class { observe() {} },
     setTimeout(fn, ms) { const id = ++serial; timers.set(id, { fn, at: clock + ms }); return id; },
@@ -37,7 +39,7 @@ async function editor(initial = online) {
   });
   requests[0].reply(initial);
   await settle();
-  return { api: window.XenonCrosshair, document, node, requests,
+  return { api: window.XenonCrosshair, document, node, requests, navigations,
     async advance(ms) {
       const end = clock + ms;
       for (;;) {
@@ -124,4 +126,61 @@ test('offline edits are included when ON is requested and failure allows another
   assert.equal(e.node('toggle').attributes['aria-pressed'], 'false');
   assert.equal(e.node('[data-power]').disabled, false);
   assert.match(e.node('[data-sync]').textContent, /Game Bar did not open/);
+});
+
+test('native auto-open waits for the primary display and releases it after acknowledgement', async () => {
+  const offline = { ...online, online: false, visible: false };
+  const e = await editor(offline, true), pending = e.api.apply({ enabled: true });
+  await settle();
+  assert.deepEqual(e.navigations, ['xenon-crosshair:prepare']);
+  assert.equal(e.requests.length, 1, 'Game Bar must not open before the shell selects the display');
+  e.api.onPrimaryReady({ ok: true }); await settle();
+  assert.equal(e.requests[1].body.enabled, true);
+  e.requests[1].reply({ ...online, enabled: true }); await pending;
+  assert.equal(e.node('toggle').attributes['aria-pressed'], 'true');
+  assert.deepEqual(e.navigations, ['xenon-crosshair:prepare', 'xenon-crosshair:release']);
+});
+
+test('a failed native display selection never opens Game Bar on the wrong display', async () => {
+  const offline = { ...online, online: false, visible: false };
+  const e = await editor(offline, true), pending = e.api.apply({ enabled: true });
+  await settle(); e.api.onPrimaryReady({ ok: false, error: 'Could not select the primary display' });
+  await settle();
+  assert.equal(e.requests[1].body, undefined, 'only status is read after a preparation failure');
+  e.requests[1].reply(offline); await pending;
+  assert.equal(e.node('toggle').attributes['aria-pressed'], 'false');
+  assert.equal(e.navigations.at(-1), 'xenon-crosshair:release');
+});
+
+test('native OFF and edits on an existing widget do not change display focus', async () => {
+  const e = await editor(online, true), pending = e.api.apply({ enabled: false });
+  e.requests[1].reply(online); await pending;
+  assert.deepEqual(e.navigations, []);
+  const opened = e.api.openGameBar();
+  e.requests[2].reply(online); await opened;
+  assert.deepEqual(e.navigations, []);
+});
+
+test('native preparation times out without dispatch and releases its display lease', async () => {
+  const offline = { ...online, online: false, visible: false };
+  const e = await editor(offline, true), pending = e.api.apply({ enabled: true });
+  await e.advance(4000);
+  const reads = e.requests.slice(1);
+  assert.ok(reads.length > 0);
+  assert.ok(reads.every(r => r.body === undefined));
+  reads.forEach(r => r.reply(offline));
+  await pending;
+  assert.equal(e.node('toggle').attributes['aria-pressed'], 'false');
+  assert.equal(e.navigations.at(-1), 'xenon-crosshair:release');
+});
+
+test('the explicit open button also waits for native display preparation', async () => {
+  const e = await editor({ ...online, visible: false }, true), pending = e.api.openGameBar();
+  await settle();
+  assert.deepEqual(e.navigations, ['xenon-crosshair:prepare']);
+  assert.equal(e.requests.length, 1);
+  e.api.onPrimaryReady({ ok: true }); await settle();
+  assert.equal(e.requests[1].url, '/api/crosshair/open');
+  e.requests[1].reply(online); await pending;
+  assert.equal(e.navigations.at(-1), 'xenon-crosshair:release');
 });

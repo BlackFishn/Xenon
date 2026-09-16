@@ -10,10 +10,10 @@ const model = require('../packages/core/src/crosshair');
 const { createMediaStore } = require('./crosshair-media');
 const runFile = promisify(execFile);
 function launchGameBar(uri) {
-  // ShellExecute resolves the registered protocol; Explorer can return before
-  // delivering it (or exit with code 1 even after a successful handoff).
-  return runFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-    "Start-Process -FilePath '" + uri + "'"], { windowsHide: true, timeout: 4000 });
+  // Give the shell the primary monitor explicitly: the dashboard is on the Edge.
+  return runFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Sta',
+    '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'crosshair-launch.ps1'),
+    '-Uri', uri], { windowsHide: true, timeout: 6000 });
 }
 const PACKAGE_RE = /^Xenon\.Crosshair_[a-z0-9]{13}$/i;
 const STATUS_FILE = 'xenon-crosshair-status.json';
@@ -89,7 +89,11 @@ function createCrosshairControl({ platform = process.platform, localAppData = pr
       const location = await folder();
       if (!location) throw fail('Install and open Xenon Crosshair from Win + G first.', 409);
       let before = await statusAt(location);
-      if ((!before.online || !before.visible) && patch.enabled === true) before = await activate(location);
+      if ((!before.online || !before.visible) && patch.enabled === true) {
+        before = await activate(location);
+        // Game Bar can retain the old display's relative position after moving.
+        patch.center = true;
+      }
       if (!before.online || !before.visible) throw fail('Turn the crosshair on in Xenon to reconnect Game Bar.', 409);
       if (before.protocol < 2 && Object.keys(patch).some(k => !['enabled','color','size','center'].includes(k))) throw fail('Update Xenon Crosshair in Game Bar to use custom shapes and images.', 409);
       const next = model.settings({ ...before, ...patch });

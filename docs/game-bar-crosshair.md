@@ -2,7 +2,7 @@
 
 Open the **crosshair icon in Xenon's side menu**. The System → FPS shortcut opens the same controls.
 
-Press the power button in Xenon to launch the installed Game Bar widget and enable the crosshair in one action. On first setup, pin the widget and enable click-through in Game Bar. Put Game Bar on the game display before using Center. A newly launched widget starts OFF; closing Xenon's control panel leaves the overlay state unchanged.
+Press the power button in Xenon to launch the installed Game Bar widget and enable the crosshair in one action. On first setup, pin the widget and enable click-through in Game Bar. In the updated native Xenon app, automatic opening targets the Windows primary display and centers the crosshair there, even when Xenon is on another display. A widget that is already visible keeps its existing display; Center uses that display. A newly launched widget starts OFF; closing Xenon's control panel leaves the overlay state unchanged.
 
 - **Draw:** Cross, Dot, Ring or T-shape, custom color, length/radius, thickness, gap, black outline and center dot.
 - **Image / GIF:** choose or drop PNG, JPG, GIF or WebP. GIF animation and transparency are preserved. WebP imports its still image as PNG so Windows does not need an optional codec. Set the longest side to 8–128 Windows logical pixels; the aspect ratio is preserved.

@@ -141,17 +141,42 @@ window.XenonCrosshair = (() => {
     }).catch(e=>{if(!sending&&before===revision){state=null;error=e.message;render();}}).finally(()=>{statusRequest=null;});
     return statusRequest;
   }
+
+  let primaryRequest = null;
+  const nativePrimary = () => window.__XENON_NATIVE_CAPS__?.crosshairPrimary === true;
+  function onPrimaryReady(result) {
+    if (!primaryRequest) return;
+    const pending = primaryRequest; primaryRequest = null; clearTimeout(pending.timer);
+    if (result?.ok) pending.resolve();
+    else pending.reject(new Error(result?.error || 'Could not select the primary display.'));
+  }
+  function preparePrimary() {
+    if (!nativePrimary()) return Promise.resolve();
+    if (primaryRequest) return primaryRequest.promise;
+    const pending = {};
+    pending.promise = new Promise((resolve,reject) => { pending.resolve=resolve;pending.reject=reject; });
+    primaryRequest = pending;
+    pending.timer = setTimeout(()=>onPrimaryReady({error:'Xenon ไม่ตอบกลับตอนเลือกจอหลัก ลองอีกครั้ง'}),4000);
+    try { window.location.href = 'xenon-crosshair:prepare'; }
+    catch(e) { onPrimaryReady({error:e.message}); }
+    return pending.promise;
+  }
+  function releasePrimary() {
+    if (nativePrimary()) { try { window.location.href = 'xenon-crosshair:release'; } catch { /* native lease also expires */ } }
+  }
+
   async function flush() {
     clearTimeout(timer);timer=null;
     if(sending||!queued||(!ready()&&queued.enabled!==true)){render();return;}
     const patch=queued, before=++revision;queued=null;sending=true;launching=patch.enabled===true&&!ready();error='';render();
     try{
+      if(launching)await preparePrimary();
       state=await request('/api/crosshair',patch);
       if(before===revision&&!queued&&(Object.keys(patch).some(k=>model.keys.includes(k))||!editing)){draft=model.settings(state);editing=false;}
     }catch(e){
       error=e.name==='AbortError'?'Game Bar ไม่ตอบกลับ เปิด Win + G แล้วลองใหม่':e.message;
       state=await request('/api/crosshair').catch(()=>null);
-    }finally{sending=false;launching=false;render();if(queued)flush();}
+    }finally{if(launching)releasePrimary();sending=false;launching=false;render();if(queued)flush();}
   }
   function change(patch) {
     try { Object.assign(draft,model.validatePatch(patch)); }
@@ -191,7 +216,13 @@ window.XenonCrosshair = (() => {
   }
   async function open() { if(!dialog.open)dialog.show();render();await refresh();await loadPresets(); }
   function close() { dialog.close();render();document.querySelector('[data-crosshair-rail]')?.focus(); }
-  async function openGameBar() { try{await request('/api/crosshair/open',{});}catch(e){error=e.message;render();} }
+  async function openGameBar() {
+    if(sending||toggling)return;
+    toggling=true;render();const opening=!ready();
+    try{if(opening)await preparePrimary();await request('/api/crosshair/open',{});}
+    catch(e){error=e.message;render();}
+    finally{if(opening)releasePrimary();toggling=false;render();}
+  }
   function cancelUpload() { uploadSequence++;uploading=false;q('[data-file-error]').hidden=true; }
   async function upload(file) {
     if(!file)return;
@@ -269,5 +300,5 @@ window.XenonCrosshair = (() => {
   setTimeout(poll,250);
   new ResizeObserver(draw).observe(root);
   refresh();
-  return { open, close, toggle, apply, openGameBar, togglePanel:()=>dialog.open?close():open() };
+  return { open, close, toggle, apply, openGameBar, onPrimaryReady, togglePanel:()=>dialog.open?close():open() };
 })();
