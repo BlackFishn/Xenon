@@ -39,6 +39,7 @@
   let _sheetWindows = [];      // windows listed on the open sheet (for choice learning)
   let _sheetStats = null;      // process stats snapshot behind the open sheet (for impact)
   let _sheetMeta = { by: 'manual' }; // how the open sheet was triggered: manual, or auto (then it auto-restores)
+  let _planMenuEl = null;      // the open power-plan picker popover, if any
 
   // Built-in trigger apps per activity (bare process names, lowercase). Gaming is
   // primarily detected full-screen server-side; this list is for windowed titles
@@ -163,6 +164,134 @@
       body: JSON.stringify(action),
     });
     return res.json().catch(() => ({ ok: false }));
+  }
+
+  async function fetchPowerPlans() {
+    try {
+      const res = await fetch(SERVER + '/api/performance/powerplans');
+      const d = await res.json();
+      if (!d || !d.ok || !Array.isArray(d.plans)) return null;
+      return d;
+    } catch { return null; }
+  }
+
+  // ── Power-plan picker ────────────────────────────────────────────
+  // The System-tile button opens this anchored menu instead of the optimization
+  // sheet: every installed Windows power scheme, the active one marked, click to
+  // switch. Read-only listing; switching reuses the same allowlisted POST.
+  function _onPlanMenuDocDown(e) {
+    if (!_planMenuEl) return;
+    if (_planMenuEl.contains(e.target)) return;
+    // Clicking the trigger (or a cloned copy of it) toggles the menu instead of
+    // closing-then-reopening it.
+    if (e.target && e.target.closest && e.target.closest('.sys-optimize-btn')) return;
+    _closePlanMenu();
+  }
+
+  function _onPlanMenuKey(e) { if (e.key === 'Escape') _closePlanMenu(); }
+
+  function _closePlanMenu() {
+    if (!_planMenuEl) return;
+    const el = _planMenuEl;
+    _planMenuEl = null;
+    el.classList.remove('visible');
+    setTimeout(() => el.remove(), 180);
+    document.removeEventListener('mousedown', _onPlanMenuDocDown, true);
+    document.removeEventListener('keydown', _onPlanMenuKey, true);
+    window.removeEventListener('resize', _closePlanMenu);
+    window.removeEventListener('scroll', _closePlanMenu, true);
+  }
+
+  function _positionPlanMenu(el, anchor) {
+    const r = anchor.getBoundingClientRect();
+    const gap = 8;
+    const w = el.offsetWidth || 230;
+    const h = el.offsetHeight || 200;
+    let left = r.right - w;
+    left = Math.max(8, Math.min(left, window.innerWidth - 8 - w));
+    let top = r.bottom + gap;
+    if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - gap - h);
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+  }
+
+  async function showPowerPlans(anchor) {
+    if (_planMenuEl) { _closePlanMenu(); return; }
+    const btn = (anchor && anchor.getBoundingClientRect) ? anchor : document.getElementById('sys-optimize-btn');
+    if (!btn) return;
+
+    const menu = document.createElement('div');
+    menu.className = 'perf-plan-menu';
+    menu.setAttribute('role', 'menu');
+
+    const head = document.createElement('div');
+    head.className = 'perf-plan-head';
+    head.textContent = tr('perf_plan_title', 'Power plan');
+    menu.appendChild(head);
+
+    const list = document.createElement('div');
+    list.className = 'perf-plan-list';
+    const loading = document.createElement('div');
+    loading.className = 'perf-plan-hint';
+    loading.textContent = tr('perf_plan_loading', 'Loading…');
+    list.appendChild(loading);
+    menu.appendChild(list);
+
+    document.body.appendChild(menu);
+    _planMenuEl = menu;
+    _positionPlanMenu(menu, btn);
+    requestAnimationFrame(() => menu.classList.add('visible'));
+
+    document.addEventListener('mousedown', _onPlanMenuDocDown, true);
+    document.addEventListener('keydown', _onPlanMenuKey, true);
+    window.addEventListener('resize', _closePlanMenu);
+    window.addEventListener('scroll', _closePlanMenu, true);
+
+    const data = await fetchPowerPlans();
+    if (_planMenuEl !== menu) return;   // dismissed while loading
+    list.textContent = '';
+
+    if (!data || !data.plans.length) {
+      const err = document.createElement('div');
+      err.className = 'perf-plan-hint';
+      err.textContent = tr('perf_plan_error', 'Could not read power plans.');
+      list.appendChild(err);
+      _positionPlanMenu(menu, btn);
+      return;
+    }
+
+    const activeGuid = String(data.guid || '').toLowerCase();
+    for (const plan of data.plans) {
+      const isActive = plan.active || String(plan.guid).toLowerCase() === activeGuid;
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'perf-plan-item' + (isActive ? ' is-active' : '');
+      item.setAttribute('role', 'menuitem');
+      const name = document.createElement('span');
+      name.className = 'perf-plan-name';
+      name.textContent = plan.name || plan.guid;
+      const check = document.createElement('span');
+      check.className = 'perf-plan-check';
+      check.textContent = isActive ? '✓' : '';
+      item.appendChild(name);
+      item.appendChild(check);
+      item.addEventListener('click', async () => {
+        if (item.disabled || isActive) { _closePlanMenu(); return; }
+        list.querySelectorAll('.perf-plan-item').forEach(b => { b.disabled = true; });
+        item.classList.add('is-busy');
+        const set = await powerPlan('POST', String(plan.guid));
+        if (set && set.ok) {
+          _perfToastText(tr('perf_plan_changed', 'Power plan changed') + (plan.name ? ' · ' + plan.name : ''), 'ok');
+          _closePlanMenu();
+        } else {
+          item.classList.remove('is-busy');
+          list.querySelectorAll('.perf-plan-item').forEach(b => { b.disabled = false; });
+          _perfToastText(tr('perf_plan_failed', 'Could not change power plan'), 'error');
+        }
+      });
+      list.appendChild(item);
+    }
+    _positionPlanMenu(menu, btn);
   }
 
   function aiAvailable(p) {
@@ -888,7 +1017,7 @@
   function refresh() { applyState(); _lastActivity = 'other'; _snoozedActivities.clear(); }
   function init() { applyState(); }
 
-  window.PerfMode = { init, refresh, optimize, restore, onStatus, onActivity, onActivityChange, activity, onGaming, onObs, applyState, defaultApps, effectiveApps };
+  window.PerfMode = { init, refresh, optimize, restore, showPowerPlans, onStatus, onActivity, onActivityChange, activity, onGaming, onObs, applyState, defaultApps, effectiveApps };
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init, { once: true });

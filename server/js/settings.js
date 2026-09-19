@@ -7501,6 +7501,13 @@ function optimizePerformanceNow() {
   if (window.PerfMode && typeof window.PerfMode.optimize === 'function') window.PerfMode.optimize();
 }
 
+// System-tile button: open the Windows power-plan picker anchored to the button.
+function showPowerPlanPicker(ev) {
+  if (window.PerfMode && typeof window.PerfMode.showPowerPlans === 'function') {
+    window.PerfMode.showPowerPlans(ev && ev.currentTarget ? ev.currentTarget : undefined);
+  }
+}
+
 function restorePerformance() {
   if (window.PerfMode && typeof window.PerfMode.restore === 'function') window.PerfMode.restore();
 }
