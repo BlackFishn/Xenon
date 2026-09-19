@@ -30315,6 +30315,25 @@ Object.assign(i18n.en, {
 
 Object.assign(i18n.en, { youtube_player_hidden: 'Show the Player section in Edit Layout before playing a link.' });
 
+Object.assign(i18n.en, {
+  sys_powerplan: 'Power plan',
+  sys_powerplan_short: 'Power plan',
+  perf_plan_title: 'Power plan',
+  perf_plan_loading: 'Loading…',
+  perf_plan_error: 'Could not read power plans.',
+  perf_plan_changed: 'Power plan changed',
+  perf_plan_failed: 'Could not change power plan',
+});
+Object.assign(i18n.it, {
+  sys_powerplan: 'Piano di alimentazione',
+  sys_powerplan_short: 'Piano energia',
+  perf_plan_title: 'Piano di alimentazione',
+  perf_plan_loading: 'Caricamento…',
+  perf_plan_error: 'Impossibile leggere i piani di alimentazione.',
+  perf_plan_changed: 'Piano di alimentazione cambiato',
+  perf_plan_failed: 'Impossibile cambiare il piano di alimentazione',
+});
+
 function t(key) {
   // Fallback: selected language → English → key name (never silently shows Italian to non-Italian users)
   return (i18n[lang] && i18n[lang][key]) ?? (i18n.en && i18n.en[key]) ?? key;

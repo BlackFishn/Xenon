@@ -13449,6 +13449,12 @@ const handleRequest = async (req, res) => {
     try   { json(await runPowerShellScript(PERFORMANCE_SCRIPT, ['get'], 6000)); }
     catch (e) { json({ ok: false, error: e.message }); }
 
+  } else if (reqPath === '/api/performance/powerplans' && req.method === 'GET') {
+    // Every installed Windows power scheme + the active one, for the System-tile
+    // power-plan picker. Read-only; switching still goes through the POST below.
+    try   { json(await runPowerShellScript(PERFORMANCE_SCRIPT, ['list'], 7000)); }
+    catch (e) { json({ ok: false, error: e.message }); }
+
   } else if (reqPath === '/api/performance/powerplan' && req.method === 'POST') {
     // Switch to a known high-performance plan ('high'/'ultimate') or restore a
     // previously-saved scheme by GUID. The .ps1 rejects anything else.

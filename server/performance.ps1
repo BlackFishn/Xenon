@@ -1,15 +1,22 @@
 param([string]$verb, [string]$value)
 # Allowlisted Windows power-plan + process-stats helper for Performance Mode.
 #   get               -> { ok, guid }   active power scheme GUID
+#   list              -> { ok, guid, plans }  every installed scheme + active flag
 #   set high|ultimate -> { ok, guid }   switch to a known high-performance plan
 #   set <guid>        -> { ok, guid }   restore a previously-saved plan by GUID
 #   stats             -> { ok, totalMB, freeMB, apps }  per-process RAM + CPU%
 # Only these verbs/values are accepted; everything else is rejected. Switching
 # power plans is fully reversible - the caller saves the prior GUID and restores
 # it on exit. We never create, delete, or tweak individual plan settings here.
-# `stats` is read-only: it feeds the optimization sheet and the AI planner with
-# real memory/CPU numbers instead of guesses.
+# `stats` and `list` are read-only: they feed the optimization sheet / AI planner
+# and the power-plan picker with real data instead of guesses.
 $ErrorActionPreference = 'Stop'
+
+# Native commands (powercfg) must speak UTF-8 like the rest of the app, or a
+# localized plan name comes back mojibake through the UTF-8 stdout pipe.
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
+[Console]::OutputEncoding = $utf8NoBom
+$OutputEncoding = $utf8NoBom
 
 # Well-known scheme GUIDs shipped with Windows.
 $HIGH     = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'  # High performance
@@ -29,6 +36,25 @@ try {
       $g = Get-ActiveGuid
       if (-not $g) { throw 'could not read active scheme' }
       Write-Output ('{"ok":true,"guid":"' + $g + '"}')
+    }
+    'list' {
+      # Every visible scheme, with the active one flagged. `powercfg /list` lines
+      # look like: Power Scheme GUID: <guid>  (<name>) [*]. The header text is
+      # localized, so key off the GUID + trailing asterisk instead of the words.
+      $plans = @()
+      $active = ''
+      foreach ($line in @(powercfg /list 2>$null)) {
+        if ($line -match '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') {
+          $guid = $Matches[1].ToLower()
+          $name = ''
+          if ($line -match '\(([^)]+)\)') { $name = $Matches[1].Trim() }
+          $isActive = $line.TrimEnd().EndsWith('*')
+          if ($isActive) { $active = $guid }
+          $plans += [pscustomobject]@{ guid = $guid; name = $name; active = $isActive }
+        }
+      }
+      if (-not $plans.Count) { throw 'could not read power schemes' }
+      @{ ok = $true; guid = $active; plans = @($plans) } | ConvertTo-Json -Depth 3 -Compress
     }
     'set' {
       $target = ''
