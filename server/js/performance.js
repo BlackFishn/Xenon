@@ -170,6 +170,7 @@
     try {
       const res = await fetch(SERVER + '/api/performance/powerplans');
       const d = await res.json();
+      if (d && d.error === 'unsupported_platform') return d;
       if (!d || !d.ok || !Array.isArray(d.plans)) return null;
       return d;
     } catch { return null; }
@@ -249,6 +250,11 @@
 
     const data = await fetchPowerPlans();
     if (_planMenuEl !== menu) return;   // dismissed while loading
+    if (data && data.error === 'unsupported_platform') {
+      _closePlanMenu();
+      optimize();
+      return;
+    }
     list.textContent = '';
 
     if (!data || !data.plans.length) {
