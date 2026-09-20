@@ -4,6 +4,9 @@
 
 # Xenon
 
+> **Fork maintainers and coding agents:** read [INSTRUCTURE.md](INSTRUCTURE.md)
+> for architecture, the owner's branch workflow, runtime/data safety and validation.
+
 **Turn any second screen into your PC's control center.** A spare monitor, an old display you dug out of a drawer, a tablet, the phone already in your pocket, or a **CORSAIR Xeneon Edge 14.5" LCD touchscreen** — driven from any browser, on Windows, macOS or Linux.
 Monitor your PC, control media and audio, mute your mic, manage your day, talk to a built-in AI assistant, drive your RGB lighting, and more, all from one glanceable screen.
 

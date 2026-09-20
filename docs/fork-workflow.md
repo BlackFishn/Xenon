@@ -1,12 +1,17 @@
 # Personal fork workflow
 
+Read [INSTRUCTURE.md](../INSTRUCTURE.md) for the full project and agent guide.
+The owner-selected flow is `upstream -> main -> production`, with features
+branching from `production -> feat/* -> develop -> production`.
+
 ## Branch roles
 
 | Branch | Purpose | Local checkout |
 | --- | --- | --- |
+| main | Track the selected upstream source | Inspect git worktree list before use |
 | production | Tested daily-use code | F:/BrainSlop/xeon |
 | develop | Completed features integrated for testing before promotion | F:/BrainSlop/xeon/.worktrees/develop |
-| feat/<feature> or codex/<feature> | One feature or fix, based on develop | A separate worktree |
+| feat/<feature> or codex/<feature> | One feature or fix, based on production | A separate worktree |
 
 The old dev branch/worktree is preserved as legacy pending work. Do not merge it
 wholesale into develop or production; review its remaining changes separately.
@@ -15,7 +20,7 @@ GitHub default branch are not changed by this workflow.
 
 ## Finish a feature
 
-1. Create a feature branch from develop and work in an isolated checkout.
+1. Create a feature branch from production and work in an isolated checkout.
 2. Test and commit the intended source changes; never commit private server/data,
    credentials, downloaded helpers or local runtime state.
 3. Merge the finished feature into develop with a merge commit and push to origin
@@ -23,7 +28,8 @@ GitHub default branch are not changed by this workflow.
 4. Test the combined result before promoting it to production. Record failures,
    compare them with the baseline, and keep unfinished work on feature branches.
 5. When the integrated changes are ready, fast-forward production to develop and
-   push production. Do not force-push or reset away existing history.
+   push production. If production advanced, merge production into develop and test
+   again first. Do not force-push or reset away existing history.
 
 Example from the root checkout, after the feature commit:
 
@@ -63,8 +69,11 @@ shared links in the test checkout when necessary.
 
 ## Upstream and recovery
 
-Upstream updates remain deferred. When requested, integrate a selected upstream
-revision in a feature branch from develop, validate, then follow the same flow.
+Upstream updates are performed when requested: fetch upstream, update main to the
+selected revision, then merge main into production while preserving fork features.
+Review conflicts and validate the result before publication/runtime changes; an
+isolated worktree can stage this merge. Then merge production back into develop.
+Do not reset production to main. This documents a workflow, not an automatic sync.
 Publish only to origin, never upstream. Do not apply the upstream app updater to
 this custom source installation; keep signed-update verification unchanged.
 
