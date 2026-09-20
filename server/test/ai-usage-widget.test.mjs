@@ -33,9 +33,10 @@ async function setup(copies = 1, options = {}) {
   }
   const pager = makeEl('div', 'pager-page');
   document.body.append(pager);
-  const mounts = Array.from({ length: copies }, () => {
+  const mounts = Array.from({ length: copies }, (_, index) => {
     const tile = makeEl('section', 'aiusage-panel');
     tile.dataset.dashboardWidget = 'aiusage';
+    if (index) tile.dataset.dashboardInstance = 'aiusage~test' + index;
     const mount = makeEl('div', 'ai-usage-widget-mount');
     tile.append(mount); pager.append(tile);
     return mount;
@@ -57,7 +58,7 @@ async function setup(copies = 1, options = {}) {
     getContext: () => ({ drawImage() {} }),
     toBlob: cb => cb(options.encodingFails ? null : imageBlob),
   } : mkEl(tag);
-  vm.runInNewContext(source, { document, window, makeEl, Intl, Date, AbortController,
+  vm.runInNewContext(source, { document, window, makeEl, Intl, Date, AbortController, localStorage: options.storage,
     setInterval() {}, setTimeout() {}, clearTimeout() {}, timeParts: () => ({}),
     navigator: { clipboard: options.clipboard },
     getComputedStyle: () => Object.assign([], { getPropertyValue: () => '', marginBottom: '14px' }),
@@ -254,4 +255,70 @@ test('unavailable clipboard, denied writes, and failed encoding never report a c
     assert.equal(h.mounts[0].querySelector('.aiu-copy-btn').disabled, false);
     assert.equal(h.mounts[0].querySelector('.aiu-copy-result').textContent, options.clipboard ? 'aiu_copy_failed' : 'aiu_copy_unavailable');
   }
+});
+
+test('live quota source and stale-read warning remain visible together', async () => {
+  const h = await setup(1, { fetch: async (url, init, payload) => {
+    payload.providers[1].connection = { source: 'provider_api', liveStatus: 'rate_limited' };
+    payload.providers[1].limits = [{ id: 'codex', observedAt: Date.now() - 600000,
+      windows: [{ usedPercent: 40, windowMinutes: 300, resetsAt: Date.now() / 1000 + 3600 }] }];
+    return { ok: true, json: async () => payload };
+  } });
+  const card = h.mounts[0];
+  assert.match(card.querySelector('.aiu-codex .aiu-source').textContent, /aiu_provider_api/);
+  assert.match(card.querySelector('.aiu-codex .aiu-warning').textContent, /aiu_live_rate_limited/);
+});
+
+test('layout persists per instance, survives refresh, and restores after remount', async () => {
+  const saved = new Map();
+  const storage = { getItem: key => saved.get(key), setItem: (key, value) => saved.set(key, value) };
+  const h = await setup(2, { storage });
+  const select = h.mounts[1].querySelector('.aiu-layout-select');
+  select.value = 'list'; select._handlers.change[0]();
+  assert.equal(h.mounts[0].querySelector('.aiu-wrap').dataset.layout, 'auto');
+  assert.equal(h.mounts[1].querySelector('.aiu-wrap').dataset.layout, 'list');
+  h.widget.renderWidgets();
+  assert.equal(h.mounts[1].querySelector('.aiu-wrap').dataset.layout, 'list');
+  const restored = await setup(2, { storage });
+  assert.equal(restored.mounts[1].querySelector('.aiu-wrap').dataset.layout, 'list');
+  assert.equal(restored.mounts[0].querySelector('.aiu-wrap').dataset.layout, 'auto');
+});
+
+test('invalid saved layouts fall back to auto; unavailable storage keeps change in memory', async () => {
+  const h = await setup(1, { storage: { getItem: () => '999', setItem: () => { throw new Error('blocked'); } } });
+  assert.equal(h.mounts[0].querySelector('.aiu-wrap').dataset.layout, 'auto');
+  const select = h.mounts[0].querySelector('.aiu-layout-select');
+  select.value = '2'; select._handlers.change[0]();
+  assert.equal(h.mounts[0].querySelector('.aiu-wrap').dataset.layout, '2');
+  assert.match(h.mounts[0].textContent, /aiu_layout_save_failed/);
+});
+
+test('three providers render with quota-only OpenCode and no fabricated history', async () => {
+  const h = await setup(1, { fetch: async (url, init, payload) => {
+    if (payload.providers.length === 2) payload.providers.push({
+      ...payload.providers[1], id: 'opencode', historyUnavailable: true,
+      limits: [{ id: 'opencode', windows: [{ usedPercent: 25, windowMinutes: 300 }] }],
+    });
+    return { ok: true, json: async () => payload };
+  } });
+  assert.equal(h.mounts[0].querySelectorAll('.aiu-provider').length, 3);
+  assert.equal(h.mounts[0].querySelector('.aiu-opencode .aiu-trend'), null);
+  assert.match(h.mounts[0].textContent, /OpenCode/);
+  assert.match(h.mounts[0].textContent, /aiu_history_unavailable/);
+});
+
+test('compact list folds history, preserves expansion on refresh, and leaves grid untouched', async () => {
+  const h = await setup(1, { storage: { getItem: () => 'list' } });
+  let row = h.mounts[0].querySelector('.aiu-compact');
+  assert.equal(row.open, false);
+  assert.equal(row.querySelector('.aiu-compact-summary').querySelectorAll('.aiu-compact-quota').length, 3);
+  assert.ok(row.querySelector('.aiu-compact-body .aiu-trend'));
+  row.open = true; row._handlers.toggle[0]();
+  h.widget.renderWidgets();
+  row = h.mounts[0].querySelector('.aiu-compact');
+  assert.equal(row.open, true);
+  const selector = h.mounts[0].querySelector('.aiu-layout-select');
+  selector.value = '2'; selector._handlers.change[0]();
+  assert.equal(h.mounts[0].querySelector('.aiu-compact'), null);
+  assert.ok(h.mounts[0].querySelector('.aiu-provider .aiu-trend'));
 });

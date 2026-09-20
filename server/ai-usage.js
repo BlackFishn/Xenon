@@ -250,7 +250,7 @@ function provider(id, daily, limits, now, extra = {}) {
   } };
 }
 
-function createService({ claudeReader, bridge, connection = async () => ({}), quotaCache = async () => null, codexReader = createCodexReader() }) {
+function createService({ claudeReader, bridge, connection = async () => ({}), quotaCache = async () => null, liveQuota = async () => ({}), codexReader = createCodexReader() }) {
   let cached = null, inflight = null, inflightForced = false;
   return { async snapshot(now, { force = false } = {}) {
     if (force && inflight && !inflightForced) await inflight;
@@ -264,28 +264,36 @@ function createService({ claudeReader, bridge, connection = async () => ({}), qu
       }
       await inflight;
     }
-    const [link, savedQuota] = await Promise.all([
+    const [link, savedQuota, remote] = await Promise.all([
       connection().catch(() => ({ unavailable: true })),
       quotaCache(now).catch(() => null),
+      liveQuota({ force }).catch(() => ({})),
     ]);
     const live = bridge();
     const limit = live && live.limits;
     const reported = limit ? [quotaWindow(limit.fiveHour, limit.at, 'claude-session', 300),
       quotaWindow(limit.sevenDay, limit.at, 'claude-weekly', 10080)].filter(Boolean) : [];
     const byDuration = new Map();
-    for (const w of [...(savedQuota?.windows || []), ...reported]) {
+    for (const w of [...(savedQuota?.windows || []), ...reported, ...(remote.claude?.limits || []).flatMap(l => l.windows)]) {
       const previous = byDuration.get(w.windowMinutes);
       if (!previous || previous.observedAt <= w.observedAt) byDuration.set(w.windowMinutes, w);
     }
     const windows = Array.from(byDuration.values());
     const observedAt = Math.max(0, ...windows.map(w => w.observedAt));
-    const quotaSource = windows.some(w => w.source === 'local_cache') ? 'local_cache' : 'statusline';
+    const quotaSource = windows.some(w => w.source === 'provider_api') ? 'provider_api' : windows.some(w => w.source === 'local_cache') ? 'local_cache' : 'statusline';
     const c = cached.claude, x = cached.codex;
     return { generatedAt: cached.generatedAt, checkedAt: now, refresh: { cached: !scanned, forced: force }, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       providers: [provider('claude', c.daily || [], windows.length ? [{ id: 'claude', windows, observedAt }] : [], now,
         { found: c.total.reqs > 0, lastAt: c.live.at, incomplete: false,
-          connection: { status: windows.length ? 'ready' : link.unavailable ? 'unavailable' : link.usageLinked ? 'waiting' : 'not_linked', source: windows.length ? quotaSource : null } }),
-      provider('codex', x.daily, x.limits, now, { found: x.found, lastAt: x.lastAt, incomplete: x.incomplete })] };
+          connection: { status: windows.length ? 'ready' : link.unavailable ? 'unavailable' : link.usageLinked ? 'waiting' : 'not_linked', source: windows.length ? quotaSource : null, liveStatus: remote.claude?.status } }),
+      provider('codex', x.daily, remote.codex?.limits?.length ? remote.codex.limits : x.limits, now, { found: x.found, lastAt: x.lastAt, incomplete: x.incomplete,
+        connection: { source: remote.codex?.limits?.length ? 'provider_api' : 'local_history', liveStatus: remote.codex?.status } }),
+      ...(remote.opencode && remote.opencode.status !== 'not_signed_in' ? [
+        provider('opencode', [], remote.opencode.limits || [], now, {
+          found: true, historyUnavailable: true, incomplete: false,
+          connection: { source: remote.opencode.limits?.length ? 'provider_api' : null, liveStatus: remote.opencode.status },
+        }),
+      ] : [])] };
   } };
 }
 

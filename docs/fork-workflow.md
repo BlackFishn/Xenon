@@ -1,82 +1,86 @@
 # Personal fork workflow
 
-This fork uses three branch roles:
+## Branch roles
 
 | Branch | Purpose | Local checkout |
 | --- | --- | --- |
-| production | Reviewed daily-use baseline; promote tested changes here | F:\BrainSlop\xeon |
-| dev | Integration and pending work | F:\BrainSlop\xeon\.worktrees\dev |
-| codex/<feature> | One feature or fix, created from dev | Use the dev checkout or a separate worktree |
+| production | Tested daily-use code | F:/BrainSlop/xeon |
+| develop | Completed features integrated for testing before promotion | F:/BrainSlop/xeon/.worktrees/develop |
+| feat/<feature> or codex/<feature> | One feature or fix, based on develop | A separate worktree |
 
-The running source backend serves the main checkout. Make future edits in the
-dev worktree so saving frontend files does not immediately change the live app.
-Existing feature branches and main are preserved. Branch names alone do not
-enforce review or tests; no GitHub branch protection or remote default was changed.
+The old dev branch/worktree is preserved as legacy pending work. Do not merge it
+wholesale into develop or production; review its remaining changes separately.
+Existing main and feature branches are preserved. Branch protection and the
+GitHub default branch are not changed by this workflow.
 
-## Start and integrate work
+## Finish a feature
 
-From the repository root:
+1. Create a feature branch from develop and work in an isolated checkout.
+2. Test and commit the intended source changes; never commit private server/data,
+   credentials, downloaded helpers or local runtime state.
+3. Merge the finished feature into develop with a merge commit and push to origin
+   (BlackFishn/Xenon). Every completed feature must reach this integration branch.
+4. Test the combined result before promoting it to production. Record failures,
+   compare them with the baseline, and keep unfinished work on feature branches.
+5. When the integrated changes are ready, fast-forward production to develop and
+   push production. Do not force-push or reset away existing history.
+
+Example from the root checkout, after the feature commit:
 
 ~~~powershell
-rtk git -C .worktrees/dev switch -c codex/my-feature
+rtk git -C .worktrees/develop merge --no-ff feat/my-feature
+rtk git push origin develop
+# After validation:
+rtk git merge --ff-only develop
+rtk git push origin production
 ~~~
 
-Edit and test in that worktree. Commit only intended source changes, then return
-it to dev and merge the feature:
+Run git diff --check, node --check for changed JavaScript, npm test and relevant
+build/feature checks. For UI changes, verify Edge, portrait and desktop layouts.
 
-~~~powershell
-rtk git -C .worktrees/dev switch dev
-rtk git -C .worktrees/dev merge --no-ff codex/my-feature
-~~~
+## Runtime and settings isolation
 
-The dev worktree has its own shared-code links. Dependencies currently resolve
-from the parent checkout; run npm install in dev when changing dependencies.
-Do not copy production's private server/data or helper binaries into commits.
+The daily-use backend must serve F:/BrainSlop/xeon/server on port 3030 and retain
+its existing server/data. Each worktree has a separate data store. Changing the
+backend path can make the app appear reset; never use a test worktree as the
+production backend or copy its settings into the daily-use store.
 
-For a separate browser preview, run these commands **from the dev worktree**:
+Use a separate browser profile/context for test data. Before a runtime change,
+back up the existing data and verify the served storeId and dashboard layout.
+Do not clear browser storage or hand-edit server/data to change branches.
+
+For a separate develop preview, run from .worktrees/develop:
 
 ~~~powershell
 $env:XENON_PORT = '3031'
 rtk proxy npm start
 ~~~
 
-Open http://127.0.0.1:3031/. Running npm run dev without an alternate port clears
-port 3030 and can interrupt production. Native development needs its own backend
-configuration; do not assume it uses the browser preview's port automatically.
+Open http://127.0.0.1:3031/ in the test browser context. Do not run npm run dev
+on the default port: it clears 3030 and interrupts the daily-use backend. Native
+tests also need explicit backend/profile isolation. Install dependencies and
+shared links in the test checkout when necessary.
 
-## Promote a release
+## Upstream and recovery
 
-Review the diff from production. Run git diff --check, node --check on changed
-JavaScript, npm test and relevant feature/native checks. Exercise affected screens
-at the Edge, portrait and desktop sizes. Record failures and compare against the
-previous baseline; a branch name is not proof of stability.
+Upstream updates remain deferred. When requested, integrate a selected upstream
+revision in a feature branch from develop, validate, then follow the same flow.
+Publish only to origin, never upstream. Do not apply the upstream app updater to
+this custom source installation; keep signed-update verification unchanged.
 
-When every change on dev is ready, merge it into production in the main checkout:
+For a regression, revert the offending change and integrate the correction into
+both develop and production. Preserve existing release tags, backups and native
+artifacts. Git branches contain source code, not user settings or native builds.
 
-~~~powershell
-rtk git merge --ff-only dev
-~~~
+## Integration validation: 2026-09-20
 
-If dev contains unfinished changes, promote only reviewed feature commits
-with git cherry-pick instead of merging the whole branch. Then merge production
-back into dev so both branches retain the promoted history.
-
-For native changes, stage an executable outside the running application's path:
-
-~~~powershell
-$env:CARGO_TARGET_DIR = 'F:\BrainSlop\xeon\.tmp\native-release'
-rtk proxy npm run build --workspace @xenon/native -- --no-bundle
-~~~
-
-The root native:build script does not forward --no-bundle through its nested npm
-invocation. Use the workspace command above for a local executable. Signed updater
-packages additionally require the appropriate signing key; preserve updater
-verification. Restart the app/backend as needed after promotion, then smoke-test.
-
-Create a new annotated tag for each accepted baseline, such as
-xenon-local-YYYY.MM.DD.N. Keep the source archive, executable, PDB, checksums and
-validation record together under .local-releases/<tag>. These local artifacts are
-ignored by Git. Do not reuse or move an existing release tag.
+AI Usage live quotas, compact/grid layouts and the Power plan picker are integrated.
+Focused tests: 29 passed. JavaScript syntax, diff checks and demo build passed.
+Full suite: 3,466 tests, 3,451 passed, 5 failed and 10 skipped. All five failures
+(stopwatch, update-handoff and three update-half-update tests) reproduce on the
+previous production commit 7f7aca35; they are existing source-extraction failures.
+The running native app displayed all five power plans and three dashboard pages;
+its persisted settings matched the recovered backup, excluding the revision.
 
 ## Initial baseline: xenon-local-2026.09.14.1
 
@@ -107,34 +111,3 @@ The release manifest records the final executable build and checksums. The
 source archive contains tracked files, not credentials, local settings, helper
 downloads or node_modules. This is a reproducible code checkpoint, not a complete
 machine backup.
-
-## Upstream and remote publishing
-
-The upstream update remains deferred. When ready, fetch upstream, create a
-codex/upstream-<version> branch from dev, merge the selected upstream tag/commit
-there, resolve conflicts and validate before promotion. Do not merge upstream
-directly into production. Keep main and the original branches unchanged.
-
-Do not apply an upstream release through the app's updater to this custom source
-installation when intending to keep local features. Use the branch workflow.
-Updater signature checks remain unchanged.
-
-The initial branch setup and release tag are local. Publish production, dev and
-the chosen tag to origin explicitly when ready; do not push to upstream.
-
-## Recover a known baseline
-
-Inspect a release without moving the daily-use branch:
-
-~~~powershell
-rtk git worktree add --detach .worktrees/recovery xenon-local-2026.09.14.1
-~~~
-
-For a production regression, revert the offending commit on production, validate
-and merge that correction back into dev. Reverting a merge requires selecting
-its mainline parent. Avoid resetting away commits that may contain later work.
-
-To restore the archived native executable, close Xenon normally first, verify the
-manifest's SHA-256, and copy the archived executable to the normal launch path.
-Keep its matching PDB for crash analysis. Restore compatible source alongside it;
-configuration and external helper data are not rolled back by a Git tag.
