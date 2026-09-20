@@ -1,11 +1,21 @@
 # Changelog
 
+## Unreleased — live AI quotas and dynamic layout
+
+- Compact List rows now expand to reveal charts and details, while preserving the full ring and usage overview.
+- Add per-widget Auto, Grid (1–4 columns) and horizontal List layouts, with responsive fallback and local persistence.
+- Add OpenCode Go live session, weekly and monthly quotas when an existing Go login is found; keep unavailable history explicit.
+- AI Usage now checks Claude and Codex subscription APIs using existing local logins, with shared requests, five-minute caching, rate-limit backoff and local fallback.
+- Show quota source and login/network warnings without exposing credentials or changing provider logins.
+
+
 All notable changes to Xenon are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
 ### Added
+- Restore the System power-plan picker alongside live AI Usage while retaining the existing dashboard data store.
 - **Turning the crosshair ON in Xenon opens its Game Bar widget automatically.** Xenon waits for connection, applies pending edits, and confirms the overlay before showing ON. Duplicate clicks share one launch; startup failures stay visible and can be retried.
 - **The crosshair side-menu panel supports custom shapes, images and animated GIFs.** Preview and adjust the aim, save persistent presets, and control the pinned Game Bar widget with confirmed two-way updates. PNG/GIF/JPG remain local; WebP imports as a still PNG. See the [crosshair guide](docs/game-bar-crosshair.md).
 - **Xenon can control a crosshair pinned in Xbox Game Bar.** The System FPS card has an ON/OFF button and settings for color, size, and centering. The standalone Windows widget acknowledges changes and detects stale connections. See [setup and local installation](docs/game-bar-crosshair.md).

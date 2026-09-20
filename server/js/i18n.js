@@ -30222,6 +30222,22 @@ Object.assign(i18n.en, {
   aiu_copy_failed: 'Could not copy the image. Allow clipboard access and try again.',
   aiu_copy_unavailable: 'Image copying is unavailable here. Open Xenon on localhost or HTTPS in a supported browser.',
   aiu_claude_cache: 'Claude account cache',
+  aiu_provider_api: 'Account API',
+  aiu_layout: 'Layout',
+  aiu_monthly: 'Monthly · 30d',
+  aiu_layout_auto: 'Auto',
+  aiu_layout_1: 'Grid · 1 per row',
+  aiu_layout_2: 'Grid · 2 per row',
+  aiu_layout_3: 'Grid · 3 per row',
+  aiu_layout_4: 'Grid · 4 per row',
+  aiu_layout_list: 'List · horizontal rows',
+  aiu_layout_save_failed: 'Layout changed, but could not be saved on this device.',
+  aiu_opencode_hint: 'Sign in to OpenCode Go on this computer to read plan limits.',
+  aiu_history_unavailable: 'Plan quotas only. OpenCode spending and token history are not imported.',
+
+  aiu_live_sign_in_required: 'Live quota needs a renewed login. Open the provider app or CLI, then Refresh.',
+  aiu_live_rate_limited: 'Live quota is rate limited. Keeping the last reading; retrying later.',
+  aiu_live_unavailable: 'Live quota is unavailable. Showing the last available reading.',
   aiu_connection_not_linked: 'No Claude quota report yet', aiu_connection_waiting: 'Connected · waiting for Claude',
   aiu_connection_unavailable: 'Could not check the Claude connection', aiu_connection_retry: 'Press Refresh to check the connection again.',
   aiu_connect_claude: 'Connect Claude quotas', aiu_connecting: 'Connecting…',
@@ -30314,6 +30330,25 @@ Object.assign(i18n.en, {
 });
 
 Object.assign(i18n.en, { youtube_player_hidden: 'Show the Player section in Edit Layout before playing a link.' });
+
+Object.assign(i18n.en, {
+  sys_powerplan: 'Power plan',
+  sys_powerplan_short: 'Power plan',
+  perf_plan_title: 'Power plan',
+  perf_plan_loading: 'Loading…',
+  perf_plan_error: 'Could not read power plans.',
+  perf_plan_changed: 'Power plan changed',
+  perf_plan_failed: 'Could not change power plan',
+});
+Object.assign(i18n.it, {
+  sys_powerplan: 'Piano di alimentazione',
+  sys_powerplan_short: 'Piano energia',
+  perf_plan_title: 'Piano di alimentazione',
+  perf_plan_loading: 'Caricamento…',
+  perf_plan_error: 'Impossibile leggere i piani di alimentazione.',
+  perf_plan_changed: 'Piano di alimentazione cambiato',
+  perf_plan_failed: 'Impossibile cambiare il piano di alimentazione',
+});
 
 function t(key) {
   // Fallback: selected language → English → key name (never silently shows Italian to non-Italian users)

@@ -11726,7 +11726,7 @@ let _claudeLastFetch = 0;
 // the two things the filesystem cannot — the real subscription quota, and a
 // blocking permission request the user answers from the touchscreen.
 const _claudeBridge = claudeBridge.createBridge({ onChange: () => _claudeBridgeChanged() });
-const _aiUsage = aiUsage.createService({ claudeReader: _claudeReader, bridge: () => _claudeBridge.snapshot(), connection: () => claudeLink.status(DATA_DIR, PORT), quotaCache: aiUsage.createClaudeQuotaReader() });
+const _aiUsage = aiUsage.createService({ claudeReader: _claudeReader, bridge: () => _claudeBridge.snapshot(), connection: () => claudeLink.status(DATA_DIR, PORT), quotaCache: aiUsage.createClaudeQuotaReader(), liveQuota: require('./ai-usage-live').createLiveQuotaReader() });
 let _claudeBridgeToken = '';        // resolved once at boot from DATA_DIR
 let _claudeBridgePushTimer = null;
 
@@ -13447,6 +13447,12 @@ const handleRequest = async (req, res) => {
     // Performance Mode: read the active Windows power scheme so the client can
     // remember it before switching, then restore it on exit. Fully reversible.
     try   { json(await runPowerShellScript(PERFORMANCE_SCRIPT, ['get'], 6000)); }
+    catch (e) { json({ ok: false, error: e.message }); }
+
+  } else if (reqPath === '/api/performance/powerplans' && req.method === 'GET') {
+    // Every installed Windows power scheme + the active one, for the System-tile
+    // power-plan picker. Read-only; switching still goes through the POST below.
+    try   { json(await runPowerShellScript(PERFORMANCE_SCRIPT, ['list'], 7000)); }
     catch (e) { json({ ok: false, error: e.message }); }
 
   } else if (reqPath === '/api/performance/powerplan' && req.method === 'POST') {
