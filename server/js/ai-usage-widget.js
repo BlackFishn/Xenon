@@ -2,8 +2,40 @@
 (function () {
   const el = makeEl;
   const t = key => window.t(key);
-  const names = { claude: 'Claude', codex: 'Codex' };
+  const names = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode' };
   const states = new WeakMap();
+  const layouts = ['auto', '1', '2', '3', '4', 'list'];
+  function layoutKey(mount) {
+    return 'xenon.aiusage.layout.' + (mount.closest('[data-dashboard-widget]')?.dataset.dashboardInstance || 'aiusage');
+  }
+  function readLayout(mount) {
+    try { const v = localStorage.getItem(layoutKey(mount)); return layouts.includes(v) ? v : 'auto'; } catch { return 'auto'; }
+  }
+  function layoutControls(mount, state) {
+    const box = el('details', 'aiu-layout');
+    box.open = !!state.layoutOpen;
+    box.addEventListener('toggle', () => { state.layoutOpen = box.open; });
+    const summary = el('summary', 'aiu-icon-btn', '⋯');
+    summary.setAttribute('aria-label', t('aiu_layout'));
+    summary.dataset.aiuFocus = 'layout-menu';
+    const panel = el('div', 'aiu-layout-options');
+    const label = el('label', '', t('aiu_layout'));
+    const select = el('select', 'aiu-layout-select');
+    select.setAttribute('aria-label', t('aiu_layout'));
+    select.dataset.aiuFocus = 'layout-select';
+    for (const mode of layouts) {
+      const option = el('option', '', t('aiu_layout_' + mode));
+      option.value = mode; option.selected = state.layout === mode; select.append(option);
+    }
+    select.value = state.layout;
+    select.addEventListener('change', () => {
+      if (!layouts.includes(select.value)) return;
+      state.layout = select.value;
+      try { localStorage.setItem(layoutKey(mount), state.layout); state.saveFailed = false; } catch { state.saveFailed = true; }
+      render(mount);
+    });
+    label.append(select); panel.append(label); box.append(summary, panel); return box;
+  }
   let payload = null, loading = false, failed = false, lastFetch = 0;
   let activeTrend = null, trendId = 0;
   let connecting = false, connectionFailed = false;
@@ -162,7 +194,7 @@
     card.setAttribute('aria-label', names[provider.id] + ' usage');
     const data = provider.periods[state.period];
     const head = el('div', 'aiu-provider-head');
-    const mark = el('span', 'aiu-mark', provider.id === 'claude' ? '✳' : '⌘');
+    const mark = el('span', 'aiu-mark', provider.id === 'claude' ? '✳' : provider.id === 'codex' ? '⌘' : '›_');
     mark.setAttribute('aria-hidden', 'true');
     const title = el('div', 'aiu-provider-title');
     const name = el('div', 'aiu-line');
@@ -172,23 +204,32 @@
     const observed = Math.max(0, ...provider.limits.map(l => l.observedAt || 0));
     const source = el('span', 'aiu-source aiu-muted', observed ? t('aiu_observed') + ' ' + age(Date.now() - observed) + ' ' + t('aiu_ago') : t('aiu_local_history'));
     if (provider.connection?.source === 'local_cache') source.textContent = t('aiu_claude_cache') + ' · ' + source.textContent;
+    if (provider.connection?.source === 'provider_api') source.textContent = t('aiu_provider_api') + ' · ' + source.textContent;
     if (observed) source.title = new Date(observed).toLocaleString();
     title.append(name, source);
-    head.append(mark, title, el('strong', 'aiu-provider-cost aiu-number', data.unpriced && !data.cost ? '—' : (data.unpriced ? '≥ ' : '≈ ') + money(data.cost)));
+    head.append(mark, title, el('strong', 'aiu-provider-cost aiu-number', provider.historyUnavailable || (data.unpriced && !data.cost) ? '—' : (data.unpriced ? '≥ ' : '≈ ') + money(data.cost)));
     card.append(head);
     const windows = provider.limits.flatMap(limit => limit.windows.map(w => ({ ...w, bucket: limit.id, bucketName: limit.name })));
-    const main = windows.filter(w => ['claude', 'codex'].includes(w.bucket));
+    const main = windows.filter(w => w.bucket === provider.id);
+    const quotas = el('div', 'aiu-quotas');
     for (const minutes of [300, 10080]) {
       const window = main.find(w => w.windowMinutes === minutes);
-      card.append(quota(window, t(minutes === 300 ? 'aiu_session' : 'aiu_weekly')));
+      quotas.append(quota(window, t(minutes === 300 ? 'aiu_session' : 'aiu_weekly')));
     }
     // Windows are classified by their duration, never by primary/secondary order.
     for (const w of main.filter(w => ![300, 10080].includes(w.windowMinutes))) {
-      card.append(quota(w, w.windowMinutes ? age(w.windowMinutes * 60000) + ' ' + t('aiu_window') : t('aiu_other_window')));
+      quotas.append(quota(w, w.windowMinutes ? age(w.windowMinutes * 60000) + ' ' + t('aiu_window') : t('aiu_other_window')));
     }
-    if (!main.length) card.append(provider.id === 'claude' ? claudeConnection(provider) : el('p', 'aiu-hint', t('aiu_codex_hint')));
+    card.append(quotas);
+    if (!main.length) card.append(provider.id === 'claude' ? claudeConnection(provider) : el('p', 'aiu-hint', t(provider.id === 'opencode' ? 'aiu_opencode_hint' : 'aiu_codex_hint')));
+    const liveStatus = provider.connection?.liveStatus;
+    if (['sign_in_required', 'rate_limited', 'unavailable'].includes(liveStatus)) card.append(el('p', 'aiu-warning', t('aiu_live_' + liveStatus)));
     if (provider.incomplete) card.append(el('p', 'aiu-warning', t('aiu_incomplete')));
     if (!provider.found) card.append(el('p', 'aiu-hint', t('aiu_not_found')));
+    if (provider.historyUnavailable) {
+      card.append(el('p', 'aiu-hint', t('aiu_history_unavailable')));
+      return card;
+    }
     card.append(trend(provider));
     const details = el('details', 'aiu-details');
     details.open = !!state.open[provider.id];
@@ -200,7 +241,7 @@
     metrics.append(stat(t('aiu_input'), count(data.input)), stat(t('aiu_output'), count(data.output)),
       stat(t('aiu_cache_read'), count(data.cacheRead)), stat(t('aiu_cache_write'), count(data.cacheWrite)));
     details.append(metrics);
-    for (const w of windows.filter(w => !['claude', 'codex'].includes(w.bucket))) {
+    for (const w of windows.filter(w => w.bucket !== provider.id)) {
       details.append(quota(w, w.bucketName + (w.windowMinutes ? ' · ' + age(w.windowMinutes * 60000) : '')));
     }
     const extra = el('div', 'aiu-line aiu-extra');
@@ -220,6 +261,51 @@
     if (data.unpriced) details.append(el('p', 'aiu-warning', t('aiu_unpriced')));
     card.append(details);
     return card;
+  }
+  function compactCard(provider, state) {
+    const expanded = providerCard(provider, state);
+    const row = el('details', 'aiu-provider aiu-' + provider.id + ' aiu-compact');
+    row.open = !!state.open['list-' + provider.id];
+    row.addEventListener('toggle', () => { state.open['list-' + provider.id] = row.open; });
+    const summary = el('summary', 'aiu-compact-summary');
+    summary.dataset.aiuFocus = 'list-' + provider.id;
+    summary.setAttribute('aria-label', names[provider.id] + ' · ' + t('aiu_details'));
+    const head = expanded.querySelector('.aiu-provider-head');
+    const cost = head.querySelector('.aiu-provider-cost');
+    cost.remove();
+    summary.append(head);
+    const windows = provider.limits.filter(l => l.id === provider.id).flatMap(l => l.windows);
+    for (const [minutes, key] of [[300, 'aiu_session'], [10080, 'aiu_weekly'], [43200, 'aiu_monthly']]) {
+      const value = windows.find(w => w.windowMinutes === minutes);
+      const cell = quota(value, t(key));
+      cell.classList.add('aiu-compact-quota');
+      const reset = cell.querySelector('.aiu-reset');
+      if (value && value.resetsAt * 1000 > Date.now()) {
+        reset.dataset.aiuCompact = 'true';
+        reset.textContent = '↻ ' + age(value.resetsAt * 1000 - Date.now());
+      }
+      summary.append(cell);
+    }
+    summary.append(cost, el('span', 'aiu-chevron', '›'));
+    const warnings = expanded.querySelectorAll('.aiu-warning');
+    if (warnings.length) {
+      const warning = el('span', 'aiu-compact-alert', '!');
+      warning.title = Array.from(warnings, n => n.textContent).join(' ');
+      warning.setAttribute('aria-label', warning.title);
+      head.append(warning);
+    }
+    const body = el('div', 'aiu-compact-body');
+    for (const child of Array.from(expanded.children)) {
+      if (child === head) continue;
+      if (child.classList.contains('aiu-quotas') && !windows.some(w => ![300, 10080, 43200].includes(w.windowMinutes))) continue;
+      if (child.classList.contains('aiu-details')) {
+        for (const detail of Array.from(child.children)) if (detail.tagName !== 'SUMMARY') body.append(detail);
+        continue;
+      }
+      body.append(child);
+    }
+    row.append(summary, body);
+    return row;
   }
   // Only this widget's local text and CSS are captured, including scrolled content.
   async function capturePng(mount) {
@@ -295,10 +381,11 @@
   function render(mount) {
     if (activeTrend && mount.contains(activeTrend.wrap)) closeTrend();
     let state = states.get(mount);
-    if (!state) { state = { period: 'today', open: {} }; states.set(mount, state); }
+    if (!state) { state = { period: 'today', open: {}, layout: readLayout(mount) }; states.set(mount, state); }
     const scroll = mount.scrollTop;
     const focus = mount.contains(document.activeElement) ? document.activeElement.dataset.aiuFocus : null;
     const wrap = el('div', 'aiu-wrap');
+    wrap.dataset.layout = state.layout;
     const head = el('div', 'aiu-header');
     const title = el('div', 'aiu-title');
     title.append(el('span', 'aiu-eyebrow', 'WORKSPACE / INSIGHTS'), el('h2', '', 'AI Usage'));
@@ -315,7 +402,7 @@
     copy.title = t(state.copying ? 'aiu_copying' : 'aiu_copy_image');
     copy.setAttribute('aria-label', copy.title);
     copy.dataset.aiuFocus = 'copy-image'; copy.disabled = !payload || !!state.copying;
-    controls.append(copy, refresh); head.append(title, controls); wrap.append(head);
+    controls.append(copy, refresh, layoutControls(mount, state)); head.append(title, controls); wrap.append(head);
     if (state.copying || state.copyResult) {
       const feedback = el('div', 'aiu-copy-result' + (state.copyResult && state.copyResult !== 'aiu_copied' ? ' is-failed' : ''),
         t(state.copying ? 'aiu_copying' : state.copyResult));
@@ -330,6 +417,7 @@
       periods.append(b);
     }
     wrap.append(periods);
+    if (state.saveFailed) wrap.append(el('p', 'aiu-warning', t('aiu_layout_save_failed')));
     if (failed) {
       const error = el('div', 'aiu-warning', t(payload ? 'aiu_refresh_failed' : 'aiu_load_failed'));
       error.setAttribute('role', 'status'); wrap.append(error);
@@ -341,13 +429,18 @@
       const tokens = providers.reduce((sum, p) => sum + p.periods[state.period].tokens, 0);
       const cached = providers.reduce((sum, p) => sum + p.periods[state.period].cacheRead, 0);
       const input = providers.reduce((sum, p) => { const d = p.periods[state.period]; return sum + d.input + d.cacheRead + d.cacheWrite; }, 0);
-      const partial = providers.some(p => p.periods[state.period].unpriced || p.incomplete);
+      const partial = providers.some(p => p.historyUnavailable || p.periods[state.period].unpriced || p.incomplete);
       const grid = el('div', 'aiu-grid');
       const overview = el('section', 'aiu-overview');
       const cost = el('div', 'aiu-cost-view');
       const ring = el('div', 'aiu-ring');
-      const claudeShare = total ? providers[0].periods[state.period].cost / total * 100 : 0;
-      ring.style.setProperty('--aiu-share', claudeShare + '%');
+      let share = 0;
+      const stops = providers.map(p => {
+        const start = share;
+        share += total ? p.periods[state.period].cost / total * 100 : 0;
+        return 'var(--aiu-' + p.id + ') ' + start + '% ' + share + '%';
+      });
+      if (total) ring.style.background = 'conic-gradient(from -90deg, ' + stops.join(', ') + ')';
       if (!total) ring.classList.add('is-empty');
       ring.setAttribute('role', 'img'); ring.setAttribute('aria-label', t('aiu_equivalent') + ': ' + (partial ? t('aiu_partial') + ' ' : '') + money(total));
       const center = el('div', 'aiu-ring-center');
@@ -362,7 +455,7 @@
       for (const p of providers) {
         const line = el('div', 'aiu-legend-row aiu-' + p.id);
         const d = p.periods[state.period];
-        line.append(el('i', 'aiu-dot'), el('span', '', names[p.id]), el('strong', 'aiu-number', d.unpriced && !d.cost ? '—' : money(d.cost)));
+        line.append(el('i', 'aiu-dot'), el('span', '', names[p.id]), el('strong', 'aiu-number', p.historyUnavailable || (d.unpriced && !d.cost) ? '—' : money(d.cost)));
         legend.append(line);
       }
       cost.append(ring, legend); overview.append(cost);
@@ -370,7 +463,10 @@
       metrics.append(stat(t('aiu_tokens'), count(tokens)), stat(t('aiu_cache_hit'), input ? Math.round(cached / input * 100) + '%' : '—'));
       overview.append(metrics, el('p', 'aiu-estimate-note', t('aiu_estimate_note')));
       grid.append(overview);
-      for (const p of providers) grid.append(providerCard(p, state));
+      const cards = el('div', 'aiu-providers');
+      cards.style.setProperty('--aiu-columns', state.layout === 'auto' ? '4' : state.layout === 'list' ? '1' : state.layout);
+      for (const p of providers) cards.append(state.layout === 'list' ? compactCard(p, state) : providerCard(p, state));
+      grid.append(cards);
       wrap.append(grid);
       const foot = el('div', 'aiu-footer');
       foot.append(el('span', '', t('aiu_checked') + ' ' + new Date(payload.checkedAt || payload.generatedAt).toLocaleTimeString([], timeParts({ second: '2-digit' }))),
@@ -411,7 +507,7 @@
       const response = await fetch('/api/ai-usage' + (manual ? '?refresh=1' : ''), { signal: controller.signal, cache: 'no-store' });
       if (!response.ok) throw new Error('Usage unavailable');
       const data = await response.json();
-      if (!Array.isArray(data.providers) || data.providers.length !== 2) throw new Error('Invalid usage');
+      if (!Array.isArray(data.providers) || !data.providers.length || data.providers.some(p => !p || !Object.hasOwn(names, p.id)) || new Set(data.providers.map(p => p.id)).size !== data.providers.length) throw new Error('Invalid usage');
       payload = data; failed = false;
     } catch { failed = true; }
     finally { clearTimeout(timeout); loading = false; paint(); }
@@ -427,7 +523,7 @@
     for (const tile of tiles()) for (const reset of tile.querySelectorAll('[data-aiu-reset]')) {
       const left = Number(reset.dataset.aiuReset) * 1000 - Date.now();
       if (left <= 0 && reset.textContent !== t('aiu_wait_update')) { paint(); return; }
-      reset.textContent = left > 0 ? t('aiu_resets') + ' ' + age(left) : t('aiu_wait_update');
+      reset.textContent = left > 0 ? (reset.dataset.aiuCompact ? '↻' : t('aiu_resets')) + ' ' + age(left) : t('aiu_wait_update');
     }
   }, 15000);
   document.addEventListener('visibilitychange', () => { if (visible()) renderWidgets(); });

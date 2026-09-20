@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — live AI quotas and dynamic layout
+
+- Compact List rows now expand to reveal charts and details, while preserving the full ring and usage overview.
+- Add per-widget Auto, Grid (1–4 columns) and horizontal List layouts, with responsive fallback and local persistence.
+- Add OpenCode Go live session, weekly and monthly quotas when an existing Go login is found; keep unavailable history explicit.
+- AI Usage now checks Claude and Codex subscription APIs using existing local logins, with shared requests, five-minute caching, rate-limit backoff and local fallback.
+- Show quota source and login/network warnings without exposing credentials or changing provider logins.
+
+
 All notable changes to Xenon are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
