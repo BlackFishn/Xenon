@@ -245,7 +245,6 @@
 
     // Big album cover — a DIRECT child of the hero so the layout can place it
     // ABOVE the controls (tall/portrait tiles) or BESIDE them (wide/short tiles).
-    // It also drives the ambient blurred backdrop via the --sp-cover custom prop.
     const art = el('div', 'sp-now-art');
     const artPh = el('span', 'sp-now-art-ph'); artPh.innerHTML = ICONS.note;   // static, trusted SVG
     art.appendChild(artPh);
@@ -467,11 +466,6 @@
     const img = has ? (player.track.image || '') : '';
     art.style.backgroundImage = img ? 'url("' + encodeURI(img) + '")' : '';
     art.classList.toggle('has-cover', !!img);
-    // Feed the ambient blurred backdrop (a ::before layer reads --sp-cover) so the
-    // whole hero takes on the album's colours — the immersive "now playing" look.
-    now.classList.toggle('has-cover', !!img);
-    now.style.setProperty('--sp-cover', img ? 'url("' + encodeURI(img) + '")' : 'none');
-
     mount.querySelector('.sp-now-title').textContent = has ? (player.track.name || '—') : '';
     mount.querySelector('.sp-now-title').title = has ? (player.track.name || '') : '';
     const sub = has ? [player.track.artist, player.track.album].filter(Boolean).join(' · ') : '';
