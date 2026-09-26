@@ -107,6 +107,9 @@
 .sp-range:hover::-webkit-slider-thumb, .sp-range:focus-visible::-webkit-slider-thumb, .sp-range:active::-webkit-slider-thumb { opacity: 1; }
 .sp-range:hover::-moz-range-thumb, .sp-range:focus-visible::-moz-range-thumb { opacity: 1; }
 .sp-range:disabled { opacity: .5; cursor: default; }
+/* Keep the volume handle visible when the pointer leaves after a release. */
+.sp-vol-range::-webkit-slider-thumb { opacity: 1; }
+.sp-vol-range::-moz-range-thumb { opacity: 1; }
 .sp-vol { grid-area: volume; display: flex; align-items: center; gap: 8px; }
 .sp-vol-ico { display: inline-flex; flex: 0 0 auto; color: var(--muted-text); }
 .sp-vol-ico svg { width: 15px; height: 15px; }

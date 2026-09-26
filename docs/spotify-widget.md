@@ -22,7 +22,7 @@ instead of recoloring the player surface.
   other copies cannot send a conflicting play/pause command. Failed commands
   restore the previous state.
 - Seek and volume have larger input targets. Seek previews the selected time;
-  volume displays its percentage. Short tiles omit the volume row.
+  volume displays its percentage with a persistent handle. Short tiles omit the volume row.
 - Queue rows are numbered. The existing approximate-order notice remains when
   Spotify cannot provide a reliable queue.
 - Arrow Left/Right and Home/End navigate the tabs. Controls expose accessible names
@@ -38,6 +38,28 @@ remains at its existing six-second cadence while visible. Rate-limit backoff,
 hidden-page polling guards, and the local Windows media fallback remain in place.
 A control action requests fresh player state instead of immediately displaying
 the previous cached snapshot.
+
+Volume previews are shared across copies without pausing the track clock. On
+release, the selected value stays visible until a new player response confirms it
+(or an eight-second confirmation window expires). A failed write restores the
+last confirmed value. Rapid releases/keyboard steps send one write at a time and
+retain only the newest queued value; older player reads cannot undo newer state.
+Changing playback devices clears the previous device's pending volume.
+
+## Volume regression validation (2026-09-26)
+
+- Reproduced the original 37% → 64% snapback after a stale response and the frozen
+  seek ticker during volume input; both now pass.
+- Spotify UI and provider tests: 42 passed, including rapid writes, rejection,
+  confirmation/expiry, device switching, duplicate widgets, and out-of-order reads.
+- Isolated Chrome checks passed for mouse drag/release, keyboard steps, and
+  emulated touch against stale fixture data; the seek clock continued during
+  volume dragging. Edge, portrait, compact and desktop content had no horizontal
+  overflow. No live Spotify playback command was sent.
+- Syntax, whitespace and demo build checks passed. Full suite: 3,477 tests,
+  3,458 passed, 9 failed, 10 skipped; the same nine baseline failures described below.
+- Layout/album-blur exploration remains a standalone mockup; this fix only changes
+  volume synchronization and persistent handle visibility.
 
 ## Validation (2026-09-26)
 

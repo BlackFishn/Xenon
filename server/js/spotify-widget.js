@@ -73,7 +73,11 @@
   let seeded = false;
   let pollTimer = null;
   let tickTimer = null;
-  let dragging = false;      // true while a seek/volume slider is being dragged
+  let seeking = false;       // Volume adjustment must not freeze the playback clock.
+  let volumeDrag = null;     // Preview shared by duplicate widgets while dragging.
+  let volumeIntent = null;   // Released value awaiting Spotify's confirmation.
+  let volumeSending = false;
+  let playerLoadId = 0;
   let localProgressMs = 0;   // client-advanced progress between polls (smooth bar)
   let lastTrackId = null;    // to detect a track change and reset the seek bar
   // After a control that moves playback (next/prev/seek), Spotify keeps reporting
@@ -171,6 +175,8 @@
     }
     if (btn) { btn.classList.add(ok ? 'ok' : 'err'); setTimeout(() => { btn.classList.remove('ok', 'err'); btn.disabled = btn.classList.contains('sp-play') && playbackPending; }, 1000); }
     if (!ok) controlToast(r);
+    // Volume writes are serialized below; resync once after the latest write.
+    if (action.type === 'spotifyVolume') return r;
     const changesTrack = ok && TRACK_CHANGE_ACTIONS.has(action.type);
     const fromTid = lastTrackId;   // the track we're skipping AWAY from
     if (changesTrack) {
@@ -268,11 +274,11 @@
     range.min = '0'; range.max = '1000'; range.value = '0'; range.step = '1';
     range.setAttribute('aria-label', t('spotify_w_seek', 'Seek'));
     const tot = el('span', 'sp-time sp-tot', '0:00');
-    range.addEventListener('input', () => { dragging = true; previewSeek(mount); });
-    range.addEventListener('pointercancel', () => { dragging = false; paintSeek(mount); });
-    range.addEventListener('blur', () => { dragging = false; });
+    range.addEventListener('input', () => { seeking = true; previewSeek(mount); });
+    range.addEventListener('pointercancel', () => { seeking = false; paintSeek(mount); });
+    range.addEventListener('blur', () => { seeking = false; });
     range.addEventListener('change', () => {
-      dragging = false;
+      seeking = false;
       const dur = (player && player.durationMs) || 0;
       if (dur > 0) {
         const ms = Math.round(Number(range.value) / 1000 * dur);
@@ -322,10 +328,19 @@
     vol.min = '0'; vol.max = '100'; vol.value = '50'; vol.step = '1';
     vol.setAttribute('aria-label', t('spotify_w_volume', 'Volume'));
     const volValue = el('span', 'sp-vol-value');
-    vol.addEventListener('input', () => { dragging = true; setRangeFill(vol); volValue.textContent = vol.value + '%'; });
-    vol.addEventListener('pointercancel', () => { dragging = false; paintHero(mount); });
-    vol.addEventListener('blur', () => { dragging = false; });
-    vol.addEventListener('change', () => { dragging = false; runAction(null, { type: 'spotifyVolume', mode: 'set', value: vol.value }); });
+    vol.addEventListener('input', () => {
+      volumeDrag = { input: vol, value: Number(vol.value), device: player && player.device };
+      repaintAll(paintVolume);
+    });
+    const cancelVolumeDrag = () => {
+      if (volumeDrag && volumeDrag.input === vol) { volumeDrag = null; repaintAll(paintVolume); }
+    };
+    vol.addEventListener('pointercancel', cancelVolumeDrag);
+    vol.addEventListener('blur', cancelVolumeDrag);
+    vol.addEventListener('change', () => {
+      volumeDrag = null;
+      commitVolume(Number(vol.value));
+    });
     volRow.append(volIco, vol, volValue);
     panel.appendChild(volRow);
 
@@ -407,6 +422,53 @@
     input.style.setProperty('--sp-fill', pct + '%');
   }
 
+  function paintVolume(mount) {
+    const show = !!(player && player.track && player.supportsVolume && player.volume != null);
+    mount.querySelector('.sp-vol').hidden = !show;
+    if (volumeDrag && (!show || volumeDrag.device !== player.device)) volumeDrag = null;
+    if (volumeIntent && (!show || volumeIntent.device !== player.device
+      || (!volumeIntent.pending && Date.now() >= volumeIntent.until))) {
+      volumeIntent = null;
+    }
+    if (!show) return;
+    const vol = mount.querySelector('.sp-vol-range');
+    vol.value = String(volumeDrag ? volumeDrag.value : volumeIntent ? volumeIntent.value : player.volume);
+    setRangeFill(vol);
+    mount.querySelector('.sp-vol-value').textContent = vol.value + '%';
+    vol.setAttribute('aria-valuetext', vol.value + '%');
+  }
+
+  async function commitVolume(value) {
+    if (!player || !player.supportsVolume || !Number.isFinite(value)) return;
+    volumeIntent = { value: Math.max(0, Math.min(100, Math.round(value))), device: player.device, pending: true, sent: false };
+    repaintAll(paintVolume);
+    if (volumeSending) return;
+    volumeSending = true;
+    try {
+      // Only one write in flight. Rapid clicks/keys replace the queued value,
+      // so an older request cannot finish last and undo the latest adjustment.
+      while (volumeIntent && !volumeIntent.sent) {
+        const intent = volumeIntent;
+        intent.sent = true;
+        let result = null;
+        try { result = await runAction(null, { type: 'spotifyVolume', mode: 'set', value: String(intent.value) }); }
+        catch { /* Keep the last confirmed value if the transport fails. */ }
+        if (volumeIntent === intent) {
+          if (result && result.ok) {
+            intent.pending = false;
+            // One normal poll can confirm the write even if the immediate read
+            // still contains Spotify's pre-action volume.
+            intent.until = Date.now() + 8000;
+          } else volumeIntent = null;
+        }
+        repaintAll(paintVolume);
+      }
+    } finally {
+      volumeSending = false;
+      if (tiles().length) { await loadPlayer(true); paint(); }
+    }
+  }
+
   // Live preview while dragging the seek bar (time text follows the thumb).
   function previewSeek(mount) {
     const range = mount.querySelector('.sp-seek-range');
@@ -441,7 +503,7 @@
 
   // Update just the seek bar + times (called by the local ticker and on paint).
   function paintSeek(mount) {
-    if (dragging) return;
+    if (seeking) return;
     const dur = (player && player.durationMs) || 0;
     const range = mount.querySelector('.sp-seek-range');
     const cur = mount.querySelector('.sp-cur');
@@ -520,15 +582,7 @@
     paintTransport(mount);
     paintSeek(mount);
 
-    // Volume row — only when the active device reports it supports volume.
-    const volRow = mount.querySelector('.sp-vol');
-    const showVol = has && player.supportsVolume && player.volume != null;
-    volRow.hidden = !showVol;
-    if (showVol && !dragging) {
-      const vol = mount.querySelector('.sp-vol-range');
-      vol.value = String(player.volume); setRangeFill(vol);
-      mount.querySelector('.sp-vol-value').textContent = vol.value + '%';
-    }
+    paintVolume(mount);
 
     // Device chip (where playback lives).
     const chip = mount.querySelector('.sp-dev-chip');
@@ -691,7 +745,9 @@
   }
   async function loadPlayer(fresh) {
     if (connected !== true) { player = null; spotifyOpen = null; return; }
+    const loadId = ++playerLoadId;
     const p = await api('/stream/spotify/player' + (fresh ? '?fresh=1' : ''));
+    if (loadId !== playerLoadId) return; // An older poll must not undo a newer post-control snapshot.
     // Rate-limited (429): Spotify is briefly refusing us. Keep the last known state
     // and don't fire the extra devices call — hammering only extends the cooldown.
     if (p && p.error === 'rate_limited') { rateLimited = true; return; }
@@ -699,6 +755,10 @@
     playbackForbidden = !!(p && p.error === 'forbidden');
     if (p && p.ok) {
       player = p;
+      // Only a new read can confirm a write; the previous snapshot may already
+      // equal the target after the user rapidly lowers and restores the volume.
+      if (volumeIntent && !volumeIntent.pending && volumeIntent.device === p.device
+        && Number(p.volume) === volumeIntent.value) volumeIntent = null;
       // Sync the local progress from this FRESH snapshot — but guard the "playing
       // track at 100%" artifact. A track that is PLAYING can never sit at (or past)
       // its full length: it would have advanced to the next song. Spotify reports
@@ -860,7 +920,7 @@
     // zero polling (quota), so its painted state may be minutes old.
     if (vis && !wasVisible) refresh();
     wasVisible = vis;
-    if (!vis || dragging) return;
+    if (!vis || seeking) return;
     // One SMTC read per tick: the local Spotify session (if any), its play state,
     // and whether it shows the very track the hero shows. A LOCAL session is only
     // proof about the hero's playback when it's the same track — the API also

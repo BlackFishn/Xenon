@@ -15,6 +15,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Changed
+- **Spotify volume no longer snaps back to stale readings.** Keep the released value while Spotify confirms it, serialize rapid adjustments, ignore older player responses, and restore confirmed values after failures. Volume dragging no longer pauses the track clock, and its handle remains visible.
 - **Spotify follows the active dashboard theme.** Replace the album-colored backdrop and bright green controls with shared surfaces, text colors, accent states, compact buttons, and flat library tabs matching the neighbouring media widgets.
 - **Spotify has a cleaner, responsive player.** Wide widgets place the library beside playback; small and portrait widgets retain access to every tab. Larger touch targets, visible volume percentages, numbered queue rows, and a device shortcut make controls easier to use.
 - **Spotify interactions respond immediately.** Tabs reveal loading states without waiting for requests, playback feedback stays in sync across widget copies, and the local progress bar follows elapsed time every 250 ms without extra Spotify polling. Keyboard tabs, screen-reader states, and reduced-motion support are included. See the [Spotify widget guide](docs/spotify-widget.md).
