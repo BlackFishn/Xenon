@@ -28,7 +28,7 @@
   const ACTION_CATEGORIES = {
     media: ['media', 'mediaSeek'],
     volume: ['volume', 'appVolume', 'appMute'],
-    audioDevice: ['audioDevice'],
+    audioDevice: ['audioDevice', 'audioDeviceToggle'],
     mic: ['micMute'],
     lighting: ['lighting', 'lightPower', 'lightColor', 'lightAuto', 'lightEffect', 'lightDevice'],
     chroma: ['chromaColor', 'chromaOff'],
@@ -48,6 +48,7 @@
     browser: ['browserOpen'],
     watch: ['twitchWatchPlay', 'ytWatchPlay'],
     youtubePlayer: ['ytPlayer'],
+    pages: ['dashboardPage'],
   };
   // The only playSound.file shape an SDK widget may use — an installed sound
   // pack's clip, never an arbitrary local path (that stays a Deck-key-only
@@ -128,6 +129,8 @@
   const STREAM_LABELS = {
     status: ['cw_stream_status', 'System status (mic, game mode)'],
     system: ['cw_stream_system', 'System sensors (CPU, GPU, RAM)'],
+    network: ['cw_stream_network', 'Network adapters and how much each one is moving'],
+    diskIo: ['cw_stream_diskio', 'Which disks are busy, and how busy'],
     processes: ['cw_stream_processes', 'Which apps are using your CPU, memory and GPU'],
     media: ['cw_stream_media', 'Now playing'],
     audio: ['cw_stream_audio', 'Volume & audio devices'],
@@ -200,6 +203,33 @@
   // it can never supply a URL. This keeps the iframe's network kill-switch
   // intact while making private notification content a separate visible grant.
   const LOCAL_STREAM_LOADERS = Object.freeze({
+    // Network adapters, one entry each, with per-adapter throughput. A LOADER
+    // rather than a push stream on purpose: the reading costs a collector run
+    // (a PowerShell round trip on Windows, with its ping), and pushing it to
+    // every dashboard every few seconds would make every install pay for a
+    // widget almost nobody has. Pulled, it runs only while a granted widget is
+    // on screen and asking — which is also the cadence its own graph wants.
+    // Per-disk throughput and IOPS. Pulled for the same reason `network` is —
+    // the reading costs a collector run, here three CIM queries on Windows, and
+    // nobody who has not asked for it should pay for it. A slightly longer TTL
+    // than the network one because that is what it costs.
+    diskIo: Object.freeze({ ttl: 2000, load: async () => {
+      const d = await api('/api/disks/io');
+      if (!d || typeof d !== 'object') return { ok: false, disks: [] };
+      return { ok: d.ok !== false, disks: Array.isArray(d.disks) ? d.disks : [] };
+    } }),
+    network: Object.freeze({ ttl: 1500, load: async () => {
+      const d = await api('/network');
+      if (!d || typeof d !== 'object') return { ok: false, interfaces: [] };
+      return {
+        ok: true,
+        downloadBps: d.downloadBps ?? null,
+        uploadBps: d.uploadBps ?? null,
+        ping: d.ping ?? null,
+        latency: d.latency ?? null,
+        interfaces: Array.isArray(d.interfaces) ? d.interfaces : [],
+      };
+    } }),
     discordChannels: Object.freeze({ ttl: 5000, load: async () => {
       const [catalog, roster] = await Promise.all([
         api('/stream/discord/channels'),
@@ -208,7 +238,16 @@
       const byId = new Map();
       if (catalog && Array.isArray(catalog.channels)) {
         catalog.channels.forEach((c) => {
-          if (c && c.id != null) byId.set(String(c.id), { id: String(c.id), name: c.name || '', guild: c.guild || '', members: [] });
+          // guildId rides along with the guild NAME so an SDK widget can group
+          // and remember servers the way the built-in Channels tab does — by
+          // something that survives a rename and tells two servers with the
+          // same name apart.
+          if (c && c.id != null) {
+            byId.set(String(c.id), {
+              id: String(c.id), name: c.name || '', guild: c.guild || '',
+              guildId: String(c.guildId || ''), members: [],
+            });
+          }
         });
       }
       if (roster && Array.isArray(roster.channels)) {
@@ -459,6 +498,22 @@
     return hs.styleMode === 'retro' ? 'retro' : 'glass';
   }
 
+  // --accent and --bg are registered <color>s (@property in global.css, so a
+  // theme change animates), and a registered colour computes to rgb(...), not
+  // the hex it was set as. normalizeHex only reads hex, so a tile's own accent
+  // or background fell back to the global one before reaching the widget.
+  // Turned back into #rrggbb here; anything else passes through unchanged.
+  function computedHex(value) {
+    const raw = String(value || '').trim();
+    const m = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)\s*(?:[,/]\s*([\d.]+%?))?\s*\)$/i.exec(raw);
+    if (!m) return raw;
+    // Fully transparent has no colour to hand over: let the fallback apply.
+    if (m[4] != null && parseFloat(m[4]) === 0) return '';
+    return '#' + [m[1], m[2], m[3]]
+      .map((v) => Math.max(0, Math.min(255, Math.round(Number(v)))).toString(16).padStart(2, '0'))
+      .join('');
+  }
+
   function themePayload(entry) {
     const hs = (typeof hubSettings === 'object' && hubSettings) ? hubSettings : {};
     // Resolved 12h/24h preference (auto/12/24 → boolean) so a widget rendering
@@ -487,7 +542,7 @@
     if (entry && entry.frame && window.ThemePalette) {
       try {
         const cs = getComputedStyle(entry.frame);
-        const read = (name, fallback) => ThemePalette.normalizeHex(cs.getPropertyValue(name), fallback);
+        const read = (name, fallback) => ThemePalette.normalizeHex(computedHex(cs.getPropertyValue(name)), fallback);
         const base = p || ThemePalette.derive({
           accent: hs.accent, background: hs.background, text: hs.text,
           contrastGuard: hs.contrastGuard,
@@ -1050,6 +1105,40 @@
     // looking at — not a cookie-bearing browser aimed at an address the widget
     // chose. A tile that is not on the dashboard answers 'unavailable', never a
     // silent success.
+    // Turn the dashboard to another of its own pages — the same move the global
+    // page shortcuts make. Browser-dispatched for the obvious reason: the pages
+    // belong to THIS screen's layout, and no other screen should turn because a
+    // widget on this one asked.
+    //
+    // No confirm dialog, like `watch` and unlike `browserOpen`: what travels is
+    // one of the user's own page ids or a relative move, it reaches nothing off
+    // the dashboard, and it is visible the instant it happens — the grant is
+    // what the user agreed to and the turning page is its own receipt. A page id
+    // this screen does not have is refused rather than redirected somewhere
+    // arbitrary, because a widget guessing wrong should do nothing, not
+    // something else.
+    if (msg.action.type === 'dashboardPage') {
+      const pager = window.DashboardPager;
+      if (!pager || typeof pager.goToPage !== 'function') {
+        post(entry, { type: 'action_result', id: reqId, ok: false, error: 'unavailable' });
+        return;
+      }
+      const target = String(msg.action.page == null ? '' : msg.action.page).trim().slice(0, 64);
+      let ok = false;
+      if (target === 'next') { pager.goByDelta(1); ok = true; }
+      else if (target === 'prev') { pager.goByDelta(-1); ok = true; }
+      else if (target === 'back') { ok = pager.goBack() === true; }
+      else if (target) {
+        const before = pager.getCurrentPage();
+        pager.goToPage(target);
+        // goToPage refuses an id it does not have (and a hidden page) silently,
+        // so "did anything happen" is the only honest test — and asking for the
+        // page you are already on is a success, not a miss.
+        ok = target === before || pager.getCurrentPage() === target;
+      }
+      post(entry, { type: 'action_result', id: reqId, ok, error: ok ? undefined : (target ? 'not_found' : 'bad_page') });
+      return;
+    }
     if (msg.action.type === 'twitchWatchPlay' || msg.action.type === 'ytWatchPlay') {
       const tw = msg.action.type === 'twitchWatchPlay';
       const host = tw ? window.TwitchWatchWidget : window.YouTubeWidget;

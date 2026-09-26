@@ -174,6 +174,26 @@ test('parseMountTypes: maps mount points to filesystems and ignores automount ro
 
 // --- netstat ----------------------------------------------------------------
 
+// Every adapter is listed, physical or not — the totals are what stays
+// physical-only. Asked for on Discord by someone who wants a VMnet on its own
+// graph, which the old "filter and sum" shape threw away before anyone could.
+test('parseNetstatIb: lists every interface, and marks which are physical', () => {
+  const { interfaces } = dc.parseNetstatIb(fixture('darwin-netstat-ib.txt'));
+  assert.ok(interfaces.length > 0, 'the breakdown is gone');
+  for (const n of interfaces) {
+    assert.ok(n.id && n.name, 'an interface with no id cannot be graphed or remembered');
+    assert.ok(n.kind === 'physical' || n.kind === 'virtual');
+    assert.equal(typeof n.rxBytes, 'number');
+    assert.equal(typeof n.txBytes, 'number');
+    assert.doesNotMatch(n.id, /^lo\d*$/, 'loopback is never listed');
+  }
+  // The totals are exactly the physical entries, so the two can never disagree.
+  const { rx, tx } = dc.parseNetstatIb(fixture('darwin-netstat-ib.txt'));
+  const phys = interfaces.filter((n) => n.kind === 'physical');
+  assert.equal(rx, phys.reduce((a, n) => a + n.rxBytes, 0));
+  assert.equal(tx, phys.reduce((a, n) => a + n.txBytes, 0));
+});
+
 test('parseNetstatIb: sums the link rows of physical interfaces only', () => {
   const { rx, tx } = dc.parseNetstatIb(fixture('darwin-netstat-ib.txt'));
   // en0's <Link#6> row alone. lo0/awdl0/utun0 are virtual, and en0's per-address
@@ -184,10 +204,12 @@ test('parseNetstatIb: sums the link rows of physical interfaces only', () => {
 
 test('parseNetstatIb: an interface with no hardware address never shifts a column', () => {
   // lo0's link row has an empty Address field, so whitespace splitting moves
-  // Ibytes one field left. It is filtered as virtual, which is what keeps the
-  // shorter row from being read as an ordinary one.
+  // Ibytes one field left. Loopback is skipped outright — the one interface
+  // that is dropped rather than listed, since the machine talking to itself is
+  // not bandwidth — and that is what keeps the shorter row from being read as
+  // an ordinary one.
   const out = dc.parseNetstatIb('Name  Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll\nlo0   16384 <Link#1>                          6234     0     512340     6234     0     512340     0\n');
-  assert.deepEqual(out, { rx: 0, tx: 0 });
+  assert.deepEqual(out, { rx: 0, tx: 0, interfaces: [] });
 });
 
 // --- macmon -----------------------------------------------------------------
@@ -469,4 +491,20 @@ test('parseHelperWindows: garbage returns null, so the osascript path still gets
     assert.equal(dc.parseHelperWindows(raw, false), null, String(raw));
   }
   assert.deepEqual(dc.parseHelperWindows('{"windows":[]}', false), []);
+});
+
+// The default output, fresh. system_profiler's list is cached for 30s because it
+// costs a second, so an output switched from the menu bar reached the dashboard
+// (and an Output device Deck key's face) up to half a minute late. The name
+// SwitchAudioSource reports wins when it is one of the listed outputs; any other
+// answer leaves the list as it was.
+test('withCurrentOutput: the current output from SwitchAudioSource wins, when it is a listed one', () => {
+  const devices = { outputs: [{ name: 'LG UltraFine Display Audio', isDefault: true }, { name: 'HIFI USB AUDIO', isDefault: false }], inputs: [{ name: 'Mic', isDefault: true }] };
+  const fresh = dc.withCurrentOutput(devices, 'HIFI USB AUDIO\n');
+  assert.deepEqual(fresh.outputs.map((o) => o.isDefault), [false, true]);
+  assert.deepEqual(fresh.inputs, devices.inputs, 'inputs untouched');
+  assert.deepEqual(devices.outputs.map((o) => o.isDefault), [true, false], 'the cached list is not mutated');
+  for (const unknown of [null, '', 'AirPods Pro', undefined]) {
+    assert.equal(dc.withCurrentOutput(devices, unknown), devices, JSON.stringify(unknown));
+  }
 });

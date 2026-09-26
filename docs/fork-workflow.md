@@ -147,3 +147,34 @@ installing over the running app. The Windows helper and Game Bar sources did not
 change in this main update, so they need no rebuild. Backend JavaScript changes
 require restarting the production backend; frontend changes require a reload.
 Source sync, binary installation and runtime restart remain separate operations.
+
+### Follow-up: main v4.11.10
+
+Integrated origin/main at `3402a63a`. This sync uses only the fork remote;
+no refs are published to upstream. Production is merged first and develop is
+synchronized from the tested result.
+
+The upstream Claude Code/Codex CLI providers coexist with the fork's private
+ChatGPT subscription profile. Model selections remain separate; subscription
+voice keeps local Whisper, Thai autodetection, Edge TTS and visible failures.
+Spotify keeps its reviewed layout/volume behavior while adding list-failure
+resilience and rate-limit duration messages. Ambient editing, the power-plan
+picker, YouTube playback/Focus and specific login recovery remain intact.
+
+Validation:
+- Full merged suite: 4,205 tests, 4,191 passed, zero failed, 14 skipped.
+- Unmodified main baseline: 3,972 tests, 3,958 passed, zero failed, 14 skipped.
+- 97 changed JavaScript files pass syntax checks; demo build and platform-API
+  checks pass.
+- Spotify mouse, keyboard and emulated touch volume plus Edge, portrait,
+  compact, desktop and long-title layouts pass in the isolated browser.
+
+Native source changes in this update are only v4.11.9 → v4.11.10 metadata.
+The existing v4.11.9 shell can load the new dashboard; another native build is
+optional for its version label. Windows Helper changes HotkeyHost and IndexHost,
+so it must be rebuilt to use multi-page shortcuts and the new index behavior.
+Its merged 0.14.0 build also retains the fork's event-driven audio-control host.
+The Windows publish build passed using an isolated .NET 10 SDK; the system SDK
+and running helper were not replaced.
+Game Bar has no source changes. Builds remain separate from installing binaries,
+restarting the production backend and reloading the native page.

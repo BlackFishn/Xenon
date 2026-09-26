@@ -138,3 +138,5 @@ docs/demo/
 .tmp/
 .worktrees/
 .local-releases/
+# Playwright MCP screenshots and snapshots taken while checking UI work
+.playwright-mcp/

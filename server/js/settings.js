@@ -37,6 +37,10 @@ const WEATHER_REFRESH_CHOICES = Object.freeze([10, 15, 30, 60, 120, 180]);
 // so on that provider the forecast simply shows what's available.
 const WEATHER_FORECAST_DAY_CHOICES = Object.freeze([1, 2, 3, 4, 5, 6, 7]);
 const WEATHER_TILE_SECTIONS = Object.freeze(['metrics', 'hourly', 'forecast']);
+// How the tile draws current conditions: the big animated card, or one line
+// (icon, temperature, feels-like) so hours and days get the space (GitHub #130).
+// Mirrored in server.js normalizeSettingsWeather.
+const WEATHER_TILE_HEROES = Object.freeze(['full', 'compact']);
 // Individually toggleable weather fields: the 3 hero chips + the 8 detail
 // metrics. Hiding one removes it from both the dashboard tile and the modal.
 const WEATHER_FIELD_IDS = Object.freeze([
@@ -358,7 +362,9 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   // idleMinutes 0 = never auto-start; sceneId 'builtin' = the native scene
   // (lockscreen.js, configured by lockWidgets) or an installed SDK package id
   // whose manifest declares surface:'ambient'.
-  ambientMode: Object.freeze({ enabled: true, idleMinutes: 0, sceneId: 'builtin' }),
+  // openOnStartup: boot straight into the scene and keep it up (a home screen,
+  // not a screensaver: nothing dismisses it but the user).
+  ambientMode: Object.freeze({ enabled: true, idleMinutes: 0, sceneId: 'builtin', openOnStartup: false }),
   // Native canvas Ambient scenes the user composed (or imported). Client-owned
   // (like customThemes): referenced by ambientMode.sceneId as "canvas:<id>".
   ambientScenes: Object.freeze([]),
@@ -369,7 +375,8 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
     // Which extra sections the standalone Weather tile shows below the hero card
     // (the topbar chip + modal are unaffected). All on by default. `fields`
     // toggles individual detail chips/metrics and applies to the tile AND modal.
-    tile: Object.freeze({ metrics: true, hourly: true, forecast: true, fields: WEATHER_FIELDS_ALL_ON }),
+    // `hero` is 'full' (the big card) or 'compact' (a single line).
+    tile: Object.freeze({ hero: 'full', metrics: true, hourly: true, forecast: true, fields: WEATHER_FIELDS_ALL_ON }),
   }),
   tempUnit: 'c', // 'c' | 'f' — weather temperature display unit
   // The Media tile's waveform: 'off' | 'minimal' | 'wave'. An ADDITION to that
@@ -410,7 +417,14 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   discordInviteSeen: false,
   // Voice channels pinned to the top of the Discord widget. Mirror of server.js;
   // see the note there for why this one is NOT per-device.
+  // Which servers the user has collapsed in the Discord widget's Channels tab,
+  // by guild id. Remembered rather than reset per visit: someone with a dozen
+  // servers collapses the ones they never join once, and a list that forgets
+  // makes them do it again at every sign-in (asked for on Discord, Sep 2026 —
+  // "so your not forever scrolling"). Guild ids, not names, so a renamed server
+  // stays collapsed and two servers with the same name are told apart.
   discordFavChannels: Object.freeze([]),
+  discordCollapsedGuilds: Object.freeze([]),
   // Opt-in ad-blocker for the Browser tile (Settings → Browser). OFF by default.
   browserAdblock: false,
   // Stock-market (Borsa) widget + ticker. Keys are server-only (redacted); the
@@ -487,6 +501,10 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   anthropicApiKey: '',
   anthropicApiKeySet: false,
   anthropicModel: 'auto',
+  // Claude Code / Codex (the user's own subscription, ai-cli.js). 'default'
+  // lets the program choose; no key, the program has its own sign-in.
+  claudeCodeModel: 'default',
+  codexModel: 'default',
   geminiModel: 'auto',
   geminiModelPro: 'auto',
   geminiModelTts: 'auto',
@@ -577,6 +595,7 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   // absent is what lets the SERVER supply the platform's default, which is
   // where that decision already belongs (see normalizeSearchSettings).
   searchSettings: Object.freeze({ hotkeyEnabled: false, hotkeyCombo: 'alt+space', aiFullContext: false }),
+  pageHotkeys: Object.freeze([]),
   diskSettings: Object.freeze({ devFolders: Object.freeze([]), installerAgeDays: 30 }),
   // Third-party widget SDK (the Custom widget tile). OFF by default — community
   // packages run in a sandboxed, network-less iframe and each one gets an
@@ -823,6 +842,10 @@ const BG_CUSTOM_CODE_MAX = 60000;
 // An older build normalizes an unknown kind to 'auto', which is the safe
 // direction — the window stays visible rather than disappearing.
 const SURFACE_KINDS = ['auto', 'screen', 'phone', 'both'];
+// Every provider id Xenon AI knows, mirrored from ai-local.js AI_PROVIDERS.
+// Up here because normalizeSettings reads them at load (see SURFACE_KINDS).
+const AI_PROVIDER_IDS = ['gemini', 'ollama', 'openai', 'anthropic', 'claudecode', 'codex'];
+const AI_CLI_PROVIDERS = ['claudecode', 'codex'];
 // How often the sensor readings refresh, in ms. Mirrors SENSOR_RATE_MS in
 // server.js — the server clamps to this same set, so an out-of-range value
 // saved by anything else lands back on the default rather than being honoured.
@@ -833,6 +856,8 @@ const SURFACE_KINDS = ['auto', 'screen', 'phone', 'both'];
 // throws — which boots the dashboard empty. settings-load-order.test.mjs is the
 // guard, and it caught exactly that.
 const SENSOR_RATE_MS = [5000, 2000, 1000];
+// Here for that same reason: normalizePageHotkeys reads it during that init.
+const MAX_PAGE_HOTKEYS = 8;
 // normalizeNewsClient() runs during that same init too, and reaches this table
 // through defaultNewsFeedsClient() when there is no saved feed list — a fresh
 // install, or a settings blob that predates the key. It sat beside that function
@@ -871,8 +896,8 @@ const NEWS_DEFAULT_TOPIC = Object.freeze({
 // — a grant carrying a stream/action the server allows but this list omits gets
 // silently stripped on save, so the widget is granted a capability it can never
 // use. server/test/sdk-grant-cats-sync guards that half.
-const SDK_WIDGET_STREAMS = Object.freeze(['status', 'system', 'media', 'audio', 'audioLevels', 'wavelink', 'voicemeeter', 'stocks', 'football', 'news', 'claude', 'obs', 'discord', 'discordChannels', 'discordSoundboard', 'discordNotifications', 'streamerbot', 'homeassistant', 'twitchWatch', 'twitchChat', 'youtubeLive', 'youtube', 'tasks', 'notes', 'agenda', 'weather', 'battery', 'processes', 'spotify', 'scriptStates']);
-const SDK_WIDGET_ACTION_CATS = Object.freeze(['media', 'volume', 'audioDevice', 'mic', 'lighting', 'chroma', 'wavelink', 'voicemeeter', 'spotify', 'steam', 'obs', 'discord', 'homeassistant', 'twitch', 'youtube', 'youtubePlayer', 'streamerbot', 'url', 'tasks', 'soundboard', 'browser', 'watch']);
+const SDK_WIDGET_STREAMS = Object.freeze(['status', 'system', 'network', 'diskIo', 'media', 'audio', 'audioLevels', 'wavelink', 'voicemeeter', 'stocks', 'football', 'news', 'claude', 'obs', 'discord', 'discordChannels', 'discordSoundboard', 'discordNotifications', 'streamerbot', 'homeassistant', 'twitchWatch', 'twitchChat', 'youtubeLive', 'youtube', 'tasks', 'notes', 'agenda', 'weather', 'battery', 'processes', 'spotify', 'scriptStates']);
+const SDK_WIDGET_ACTION_CATS = Object.freeze(['media', 'volume', 'audioDevice', 'mic', 'lighting', 'chroma', 'wavelink', 'voicemeeter', 'spotify', 'steam', 'obs', 'discord', 'homeassistant', 'twitch', 'youtube', 'youtubePlayer', 'streamerbot', 'url', 'tasks', 'soundboard', 'browser', 'watch', 'pages']);
 const SDK_PACKAGE_ID_RE = /^[a-z0-9][a-z0-9-]{1,40}$/;
 // Grant-side mirrors of the server manifest rules (sdk-widgets.js is the
 // authority; a grant can never widen what the manifest declared, so a loose
@@ -969,6 +994,7 @@ function normalizeAmbientMode(value) {
     enabled: source.enabled !== undefined ? !!source.enabled : defaults.enabled,
     idleMinutes: AMBIENT_IDLE_MINUTES.includes(idle) ? idle : defaults.idleMinutes,
     sceneId,
+    openOnStartup: source.openOnStartup === true,
   };
 }
 
@@ -1001,7 +1027,7 @@ function sanitizeWeatherCity(value) {
 function normalizeWeatherTile(value) {
   const src = value && typeof value === 'object' ? value : {};
   const def = DEFAULT_HUB_SETTINGS.weather.tile;
-  const out = {};
+  const out = { hero: WEATHER_TILE_HEROES.includes(src.hero) ? src.hero : def.hero };
   WEATHER_TILE_SECTIONS.forEach(k => { out[k] = typeof src[k] === 'boolean' ? src[k] : def[k]; });
   const srcFields = src.fields && typeof src.fields === 'object' ? src.fields : {};
   const fields = {};
@@ -1127,10 +1153,20 @@ function normalizeDashboardSize(value, allowedSizes, fallback) {
 
 // Grid geometry for a widget (drag&drop model): {x,y,w,h,visible} in cells.
 // Shared per-tile style normalizer (client global / server require of the same
-// pure module), guarded so a missing dependency degrades to "no style".
+// pure module).
+//
+// Before DashboardInstances loads — which is the parse-time loadHubSettings(),
+// every boot — this must NOT degrade to "no style". That was the same data loss
+// as the copies fallback below (GitHub #130: every per-card opacity reset after
+// an update): the stripped style is harmless until a server-bound save lands
+// before the hydrate, bumps the local rev, and makes the stripped copy win the
+// merge. So pass a plain object through untouched; getDashboardLayout()
+// normalizes again on every read, and the server on every POST.
 function normTileStyle(src) {
-  return (typeof DashboardInstances !== 'undefined' && DashboardInstances.normalizeTileStyle)
-    ? DashboardInstances.normalizeTileStyle(src) : null;
+  if (typeof DashboardInstances !== 'undefined' && DashboardInstances.normalizeTileStyle) {
+    return DashboardInstances.normalizeTileStyle(src);
+  }
+  return (src && typeof src === 'object' && !Array.isArray(src)) ? src : null;
 }
 
 function normalizeDashboardGeom(sourceItem, fallbackItem) {
@@ -1600,6 +1636,13 @@ function normalizeFanLabels(value) {
 // field writes. So the case fold matters most here — `AUTO` stored as a pin from
 // this function is what the server then dutifully sends to the provider. The four
 // others repeat the rule; test/ai-model-sentinel-sync.test.mjs holds them level.
+// Mirror of ai-cli.js sanitizeModel: 'default' (the program chooses) or a
+// model name that starts with a letter or digit, so it can never read as a flag.
+function normalizeCliModel(value) {
+  const v = typeof value === 'string' ? value.trim() : '';
+  return v && v !== 'default' && /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,63}$/.test(v) ? v : 'default';
+}
+
 function normalizeModelChoice(value) {
   const v = typeof value === 'string' ? value.trim() : '';
   const low = v.toLowerCase();
@@ -1707,6 +1750,7 @@ function normalizeSettings(source) {
     supportAskSeen: value.supportAskSeen === true,
     shareNudgeSeen: value.shareNudgeSeen === true,
     discordFavChannels: normalizeSnowflakeList(value.discordFavChannels),
+    discordCollapsedGuilds: normalizeSnowflakeList(value.discordCollapsedGuilds),
     catalogStats: value.catalogStats === true,
     browserAdblock: value.browserAdblock === true,
     dashboardLayout: resetLayout
@@ -1731,7 +1775,7 @@ function normalizeSettings(source) {
     // every readiness check reads (see `geminiKeyReady`).
     geminiApiKey: String(value.geminiApiKey || '').trim().slice(0, 200),
     geminiApiKeySet: value.geminiApiKeySet === true || !!String(value.geminiApiKey || '').trim(),
-    aiProvider: ['ollama', 'openai', 'anthropic'].includes(value.aiProvider) ? value.aiProvider : 'gemini',
+    aiProvider: AI_PROVIDER_IDS.includes(value.aiProvider) ? value.aiProvider : 'gemini',
     ollamaModel: (typeof value.ollamaModel === 'string'
       && /^[a-z0-9._:-]+$/.test(value.ollamaModel)
       && value.ollamaModel.length <= 60)
@@ -1749,6 +1793,8 @@ function normalizeSettings(source) {
     anthropicApiKey: String(value.anthropicApiKey || '').trim().slice(0, 200),
     anthropicApiKeySet: value.anthropicApiKeySet === true || !!String(value.anthropicApiKey || '').trim(),
     anthropicModel: normalizeModelChoice(value.anthropicModel),
+    claudeCodeModel: normalizeCliModel(value.claudeCodeModel),
+    codexModel: normalizeCliModel(value.codexModel),
     // Gemini, one per role. Same shape as the two above: `auto` / `auto:<family>`
     // follows the provider's releases, a concrete id is a pin. The server
     // resolves them (ai-models.js); the client only stores the choice.
@@ -1780,6 +1826,7 @@ function normalizeSettings(source) {
     phone: normalizePhoneClient(value.phone),
     wakeWord: normalizeWakeWord(value.wakeWord),
     searchSettings: normalizeSearchSettings(value.searchSettings),
+    pageHotkeys: normalizePageHotkeys(value.pageHotkeys),
     diskSettings: normalizeDiskSettings(value.diskSettings),
     sdkWidgets: normalizeSdkWidgets(value.sdkWidgets),
     bgAurora: normalizeBgAurora(value.bgAurora),
@@ -2177,6 +2224,37 @@ function normalizeSearchSettings(value, defaultRoot) {
 }
 
 // Disk widget knobs — mirrors the server's normalizeDiskSettings.
+// Global shortcuts that flip the dashboard to a page while another app has
+// focus — the whole point of a second screen you are not clicking on. Each
+// entry is a combo and what it goes to: a page id, or one of the relative
+// moves, which are what "toggle between my two pages" is actually asking for.
+//
+// The page id is NOT validated against the current pages here. Pages live in
+// the dashboard layout, which is per device, and this list is shared by all of
+// them: dropping an id the saving device happens not to have would delete
+// another screen's shortcut every time the user saved anything. The client
+// resolves the id when the shortcut fires and does nothing if it is not there.
+function normalizePageHotkeys(value) {
+  if (!Array.isArray(value)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object') continue;
+    const combo = String(raw.combo || '').toLowerCase().trim().slice(0, 40);
+    // The same shape the Spotlight combo is held to, and the same reason: the
+    // helpers parse it themselves and report a combo they cannot read, so this
+    // only has to keep the argument list free of anything shell-shaped.
+    if (!/^[a-z0-9+ ]{3,40}$/.test(combo)) continue;
+    if (seen.has(combo)) continue;            // two actions on one combo: the desktop fires neither
+    const target = String(raw.target || '').trim().slice(0, 64);
+    if (!target) continue;
+    seen.add(combo);
+    out.push({ combo, target });
+    if (out.length >= MAX_PAGE_HOTKEYS) break;
+  }
+  return out;
+}
+
 function normalizeDiskSettings(value) {
   const v = value && typeof value === 'object' ? value : {};
   const folders = Array.isArray(v.devFolders)
@@ -2838,6 +2916,7 @@ function normalizeLightingProviders(value) {
         optedIn: !(dev && dev.optedIn === false),
       };
       if (dev && dev.token) out.token = String(dev.token);
+      if (dev && dev.bridgeId) out.bridgeId = String(dev.bridgeId).toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 32);
       return out;
     }).filter(Boolean);
     if (devices.length) out[id] = { devices };
@@ -4932,6 +5011,7 @@ function syncSettingsControls() {
   syncSdkWidgetsControls();
   syncPerformanceControls();
   syncContextProfileControls();
+  renderPageHotkeyRows();
   syncSecondScreenControls();
   syncDynamicAlbumControls();
   refreshGameModeStatus();
@@ -5218,6 +5298,7 @@ function applySurfaceKind(kind, state) {
 let _settingsCat = 'appearance';
 function settingsSetCategory(cat) {
   _settingsCat = cat;
+  if (cat === 'appearance') refreshMediaVizStatus();
   const content = document.getElementById('settings-content');
   if (content) {
     content.dataset.cat = cat;
@@ -5226,7 +5307,8 @@ function settingsSetCategory(cat) {
     });
     content.scrollTop = 0;
   }
-  document.querySelectorAll('.settings-nav-btn').forEach(b => {
+  // The footer's Supporta button is the Sostieni Xenon category's entry too.
+  document.querySelectorAll('.settings-nav-btn, .settings-nav-support-btn[data-settings-cat]').forEach(b => {
     b.classList.toggle('active', b.dataset.settingsCat === cat);
   });
   // Slideshow thumbnails paint when its pane opens (and update live via applyHubSettings).
@@ -5244,6 +5326,45 @@ function settingsSetCategory(cat) {
   // request, and the answer only changes when this same pane or an unlock
   // changes it.
   if (cat === 'sdk') syncSupporterCodeBox();
+  packSettingsColumns();
+}
+
+// ── Two-column pages pack like a mosaic ─────────────────────────────────────
+// A CSS grid places cards in rows: a short card beside a tall one leaves a
+// hole under it. With 1px row tracks and each card spanning its own height,
+// auto-placement puts every card in the first free room instead. Re-run when
+// a card changes height (a section unfolds, a list grows) and on resize;
+// setting a span never changes the card's own size, so there is no loop.
+const PACK_GAP = 10;
+let _packRaf = 0;
+let _packObserver = null;
+function packSettingsColumns() {
+  const content = $('settings-content');
+  if (!content) return;
+  const twoCol = getComputedStyle(content).gridTemplateColumns.split(' ').length >= 2;
+  const cards = Array.from(content.children);
+  if (!twoCol) {
+    content.classList.remove('is-packed');
+    cards.forEach((c) => c.style.removeProperty('grid-row-end'));
+    return;
+  }
+  content.classList.add('is-packed');
+  for (const c of cards) {
+    if (c.hidden) { c.style.removeProperty('grid-row-end'); continue; }
+    const h = c.getBoundingClientRect().height;
+    c.style.setProperty('grid-row-end', 'span ' + (Math.ceil(h) + PACK_GAP), 'important');
+  }
+  if (!_packObserver && typeof ResizeObserver === 'function') {
+    _packObserver = new ResizeObserver(() => {
+      if (_packRaf) return;
+      _packRaf = requestAnimationFrame(() => { _packRaf = 0; packSettingsColumns(); });
+    });
+    cards.forEach((c) => _packObserver.observe(c));
+    window.addEventListener('resize', () => {
+      if (_packRaf) return;
+      _packRaf = requestAnimationFrame(() => { _packRaf = 0; packSettingsColumns(); });
+    });
+  }
 }
 
 // ── Supporter pass ───────────────────────────────────────────────────────────
@@ -5427,9 +5548,23 @@ function renderSearchDiskSettings() {
         // waiting for `ready` would keep saying "learning your disk" over an
         // index that has finished growing.
         const roots = (st.cappedRoots || []).filter(Boolean);
-        const capNote = !st.capped ? '' : ' '
+        // Said BEFORE the cap too. "Limit reached" arrives when a whole drive
+        // is already missing; at 85% of the way there the user still has time
+        // to trim the list, and an index that quietly stops growing next week
+        // is the "looks alive, does nothing" failure. The cap is per machine
+        // (the helper derives it from the RAM), so the number is read, never
+        // assumed.
+        const files = Number(st.files) || 0;
+        const maxEntries = Number(st.maxEntries) || 0;
+        const nearCap = !st.capped && maxEntries > 0 && files >= maxEntries * 0.85;
+        const capNote = st.capped ? ' '
           + t('settings_search_idx_capped', 'Limite raggiunto: Xenon ha smesso di aggiungere file, quindi la ricerca non li vede tutti. Togli una cartella dall’elenco qui sopra, oppure indica cartelle precise invece di interi dischi.')
-          + (roots.length ? ' ' + t('settings_search_idx_capped_roots', 'Rimasto fuori:') + ' ' + roots.join(', ') : '');
+          + (roots.length ? ' ' + t('settings_search_idx_capped_roots', 'Rimasto fuori:') + ' ' + roots.join(', ') : '')
+          : nearCap ? ' '
+            + t('settings_search_idx_near_cap', 'L’indice è al {pct}% del suo limite ({max} file): se i file crescono ancora, Xenon smetterà di aggiungerli e la ricerca non li vedrà tutti. Togli una cartella dall’elenco qui sopra, oppure indica cartelle precise invece di interi dischi.')
+              .replace('{pct}', String(Math.min(99, Math.floor((files / maxEntries) * 100))))
+              .replace('{max}', maxEntries.toLocaleString())
+            : '';
         idxStatus.textContent = !st.on || !st.helper
           ? t('settings_search_idx_helper', 'L’indice vivo non è disponibile: aggiungi una cartella qui sopra, oppure rilancia l’installer di Xenon.')
           : st.building
@@ -7329,6 +7464,179 @@ function resetContextProfiles() {
   setSettingsStatus('settings_saved', 'ok');
 }
 
+
+// ── Global page shortcuts ───────────────────────────────────────────────────
+// A dashboard on a second screen is something you look at while working in
+// something else, so the way to turn its page cannot be "click the dashboard".
+// Each row is a key combination and where it goes: one of this layout's pages,
+// or a relative move — `back` is what "toggle between my two pages" is really
+// asking for, and it keeps meaning something once there are three.
+//
+// The combo is registered on the PC running the server (Xenon Helper on
+// Windows and macOS, a desktop shortcut on GNOME); the press is broadcast and
+// every dashboard watching turns its own page.
+const PAGE_HOTKEY_MOVES_UI = ['next', 'prev', 'back'];
+
+// A row whose combo has not been typed yet cannot be saved — the normalizer
+// drops it, and rightly: an empty combination is not a shortcut. So the list
+// being edited is held HERE while that is true, and not in the closure of the
+// rendered rows: anything that re-renders Settings (a hydrate arriving from
+// the server, a language switch) would otherwise make a half-finished row
+// vanish under the user's hands. Cleared the moment the list is saved.
+let _pendingPageHotkeys = null;
+
+function getPageHotkeys() {
+  if (_pendingPageHotkeys) return _pendingPageHotkeys.map((b) => ({ ...b }));
+  return Array.isArray(hubSettings.pageHotkeys) ? hubSettings.pageHotkeys.map((b) => ({ ...b })) : [];
+}
+
+// Save the rows that ARE finished and keep the whole list on screen. Holding
+// the finished ones back until every row is complete would mean an empty row
+// somebody clicked "Add" on and wandered away from silently swallows the next
+// edit they make to a different row.
+function savePageHotkeys(list) {
+  const complete = list.filter((b) => b.combo);
+  _pendingPageHotkeys = complete.length === list.length ? null : list;
+  hubSettings = normalizeSettings({ ...hubSettings, pageHotkeys: complete });
+  saveHubSettings();
+  renderPageHotkeyRows();
+}
+
+function addPageHotkey() {
+  const list = getPageHotkeys();
+  if (list.length >= MAX_PAGE_HOTKEYS) return;
+  const pages = dashboardPagesForHotkeys();
+  // A new row lands on a page rather than on nothing, so it does something the
+  // moment a combo is typed into it. Nothing to save yet — an empty combo is
+  // not a shortcut — so this only puts the row on screen.
+  list.push({ combo: '', target: (pages[0] && pages[0].id) || 'next' });
+  _pendingPageHotkeys = list;
+  renderPageHotkeyRows();
+}
+
+function removePageHotkey(index) {
+  const list = getPageHotkeys();
+  list.splice(index, 1);
+  savePageHotkeys(list);
+}
+
+function updatePageHotkey(index, patch) {
+  const list = getPageHotkeys();
+  if (!list[index]) return;
+  list[index] = { ...list[index], ...patch };
+  savePageHotkeys(list);
+}
+
+function dashboardPagesForHotkeys() {
+  const pages = (hubSettings.dashboardLayout && Array.isArray(hubSettings.dashboardLayout.pages))
+    ? hubSettings.dashboardLayout.pages : [];
+  return pages;
+}
+
+function renderPageHotkeyRows() {
+  const mount = $('settings-pagehk-rows');
+  if (!mount) return;
+  const tr = (k) => (typeof t === 'function' ? t(k) : k);
+  const list = getPageHotkeys();
+  const pages = dashboardPagesForHotkeys();
+  const pageLabel = (p) => p.name || (p.nameKey ? tr(p.nameKey) : '') || p.id;
+  const options = pages.map((p) => ({ value: p.id, label: pageLabel(p) }))
+    .concat(PAGE_HOTKEY_MOVES_UI.map((m) => ({ value: m, label: tr('settings_pagehk_move_' + m) })));
+
+  mount.textContent = '';
+  let savedIndex = 0;
+  list.forEach((binding, index) => {
+    const row = document.createElement('div');
+    row.className = 'settings-pagehk-row';
+
+    const combo = document.createElement('input');
+    combo.type = 'text';
+    combo.className = 'settings-text-input settings-pagehk-combo';
+    combo.autocomplete = 'off';
+    combo.spellcheck = false;
+    combo.placeholder = 'ctrl+alt+1';
+    combo.value = binding.combo || '';
+    combo.setAttribute('aria-label', tr('settings_search_combo'));
+    combo.addEventListener('change', () => updatePageHotkey(index, { combo: combo.value }));
+    row.appendChild(combo);
+
+    const sel = document.createElement('select');
+    sel.className = 'settings-select settings-pagehk-target';
+    sel.setAttribute('data-custom-select', '');
+    sel.setAttribute('data-cs-fixed', '');   // Settings body scrolls; anchor the panel
+    sel.setAttribute('aria-label', tr('settings_pagehk_target'));
+    let known = false;
+    for (const o of options) {
+      const opt = document.createElement('option');
+      opt.value = o.value;
+      opt.textContent = o.label;
+      if (o.value === binding.target) { opt.selected = true; known = true; }
+      sel.appendChild(opt);
+    }
+    // A page this device does not have — the list is shared by every screen —
+    // stays selectable so it can be seen and changed rather than silently
+    // snapping to another page.
+    if (!known && binding.target) {
+      const opt = document.createElement('option');
+      opt.value = binding.target;
+      opt.textContent = binding.target;
+      opt.selected = true;
+      sel.appendChild(opt);
+    }
+    sel.addEventListener('change', () => updatePageHotkey(index, { target: sel.value }));
+    row.appendChild(sel);
+
+    const state = document.createElement('span');
+    state.className = 'settings-pagehk-state';
+    // The server numbers its slots over the SAVED shortcuts, which skip any row
+    // still being filled in — so a row's slot is its position among the rows
+    // that have a combo, not its position on screen.
+    if (binding.combo) state.dataset.slot = 'page-' + savedIndex++;
+    row.appendChild(state);
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'settings-btn subtle settings-pagehk-del';
+    del.textContent = '\u00d7';
+    del.setAttribute('aria-label', tr('settings_pagehk_remove'));
+    del.addEventListener('click', () => removePageHotkey(index));
+    row.appendChild(del);
+
+    mount.appendChild(row);
+  });
+  const add = $('settings-pagehk-add');
+  if (add) add.disabled = list.length >= MAX_PAGE_HOTKEYS;
+  if (typeof initAllCustomSelects === 'function') initAllCustomSelects(mount);
+  refreshPageHotkeyStatus();
+}
+
+// Per-row state from the server: 'listening', or why not. A combo another app
+// already owns is the common case and it is a property of ONE row, so it is
+// reported on that row instead of as a verdict over the whole feature.
+async function refreshPageHotkeyStatus() {
+  const mount = $('settings-pagehk-rows');
+  if (!mount || !mount.children.length) return;
+  let slots = {};
+  try {
+    const r = await fetch('/pages/hotkey-status');
+    if (!r.ok) return;
+    slots = (await r.json()).slots || {};
+  } catch { return; }
+  mount.querySelectorAll('.settings-pagehk-state').forEach((el) => {
+    const state = el.dataset.slot ? (slots[el.dataset.slot] || '') : '';
+    const key = state === 'listening' ? 'settings_pagehk_ok'
+      : state === 'taken' ? 'settings_pagehk_taken'
+        : state === 'starting' ? 'settings_pagehk_starting'
+          : state === 'unsupported_de' ? 'settings_pagehk_unsupported'
+            : state ? 'settings_pagehk_error' : '';
+    el.textContent = key ? (typeof t === 'function' ? t(key) : key) : '';
+    el.classList.toggle('is-ok', state === 'listening');
+    el.classList.toggle('is-bad', !!state && state !== 'listening' && state !== 'starting');
+  });
+}
+
+window.addPageHotkey = addPageHotkey;
+
 function syncContextProfileControls() {
   const c = normalizeContextProfiles(hubSettings.contextProfiles);
   const en = $('settings-ctxprof-enabled');
@@ -7897,6 +8205,8 @@ function syncAmbientSettings() {
   const cfg = normalizeAmbientMode(hubSettings.ambientMode);
   const enabled = $('settings-ambient-enabled');
   if (enabled) enabled.checked = cfg.enabled;
+  const onStartup = $('settings-ambient-startup');
+  if (onStartup) onStartup.checked = cfg.openOnStartup;
   const idle = $('settings-ambient-idle');
   if (idle) {
     const want = String(cfg.idleMinutes);
@@ -7995,16 +8305,18 @@ window.addEventListener('xenon:sdk-packages', () => {
 });
 
 function updateAmbientSetting(key, value) {
-  if (!['enabled', 'idleMinutes', 'sceneId'].includes(key)) return;
+  if (!['enabled', 'idleMinutes', 'sceneId', 'openOnStartup'].includes(key)) return;
   const cur = normalizeAmbientMode(hubSettings.ambientMode);
   const next = { ...cur };
   if (key === 'enabled') next.enabled = !!value;
   else if (key === 'idleMinutes') next.idleMinutes = Number(value);
+  else if (key === 'openOnStartup') next.openOnStartup = !!value;
   else next.sceneId = String(value || 'builtin');
   // Guarded: syncAmbientSettings dispatches 'change' on the idle custom-select to
   // re-sync its visible label — an unchanged value must be a no-op, not a save
   // (and must not re-fire the scene grant prompt below).
-  if (next.enabled === cur.enabled && next.idleMinutes === cur.idleMinutes && next.sceneId === cur.sceneId) return;
+  if (next.enabled === cur.enabled && next.idleMinutes === cur.idleMinutes && next.sceneId === cur.sceneId
+      && next.openOnStartup === cur.openOnStartup) return;
   hubSettings = normalizeSettings({ ...hubSettings, ambientMode: next });
   saveHubSettings();
   syncAmbientSettings();
@@ -8186,6 +8498,39 @@ function syncMediaVisualizerControl() {
     btn.setAttribute('aria-pressed', String(active));
   });
   if (window.MediaViz) window.MediaViz.setStyle(mode);
+  // Only while the line can be seen: this sync also runs on every settings
+  // hydrate, and a status nobody is looking at is a request for nothing.
+  const group = $('settings-media-viz-status') && $('settings-media-viz-status').closest('[data-settings-cat]');
+  if (group && !group.hidden) refreshMediaVizStatus();
+}
+
+// Whether the wave CAN be drawn here, said next to the switch. Without Xenon
+// Helper there is no measurement and no fallback, and the strip simply stayed
+// empty: asked on Discord as "how do I install xenon helper for media
+// visualization?" by someone who had turned it on and seen nothing happen.
+// /audio/levels/status already knew why; nothing on screen was asking it.
+let _mediaVizStatusSeq = 0;
+async function refreshMediaVizStatus(recheck) {
+  const el = $('settings-media-viz-status');
+  if (!el) return;
+  const seq = ++_mediaVizStatusSeq;
+  let st = null;
+  try { const r = await fetch('/audio/levels/status'); st = r.ok ? await r.json() : null; } catch { st = null; }
+  if (seq !== _mediaVizStatusSeq) return;
+  const on = mediaVisualizerMode() !== 'off';
+  let key = '', state = 'warn';
+  if (!st) key = '';
+  else if (st.platform && st.platform !== 'win32') key = 'settings_media_viz_st_platform';
+  else if (!st.available || st.failure === 'no-helper') { key = 'settings_media_viz_st_missing'; state = 'bad'; }
+  else if (st.failure === 'helper-too-old') { key = 'settings_media_viz_st_old'; state = 'bad'; }
+  else if (st.failure === 'helper-failed') { key = 'settings_media_viz_st_failed'; state = 'bad'; }
+  else if (on) { key = 'settings_media_viz_st_ok'; state = 'ok'; }
+  el.textContent = key ? t(key).replace('{version}', (st && st.minVersion) || '') : '';
+  el.dataset.state = state;
+  el.hidden = !key;
+  // A helper too old for metering is only found out once it is started, which
+  // switching the wave on has just asked for: look again in a moment.
+  if (on && !recheck && st && st.available && !st.failure) setTimeout(() => refreshMediaVizStatus(true), 4000);
 }
 
 function updateMediaVisualizer(mode) {
@@ -8720,6 +9065,11 @@ function syncWeatherSettingsControls() {
     // Guarded updateWeatherForecastDays neutralizes this label-sync 'change' dispatch.
     daysSelect.dispatchEvent(new Event('change', { bubbles: true }));
   }
+  document.querySelectorAll('.settings-weather-hero[data-weather-hero]').forEach(btn => {
+    const active = btn.dataset.weatherHero === weather.tile.hero;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', String(active));
+  });
   WEATHER_TILE_SECTIONS.forEach(key => {
     const cb = $('settings-weather-tile-' + key);
     if (cb) cb.checked = weather.tile[key] !== false;
@@ -8823,6 +9173,22 @@ function updateWeatherForecastDays(value) {
   syncWeatherSettingsControls();
   if (typeof renderWeatherTile === 'function') renderWeatherTile();
   if (typeof renderWeatherDetails === 'function') renderWeatherDetails();
+  setSettingsStatus('settings_weather_saved', 'ok');
+}
+
+// Big card or one line for the tile's current conditions. Tile only: the
+// modal always has the room for the full hero.
+function updateWeatherTileHero(hero) {
+  if (!WEATHER_TILE_HEROES.includes(hero)) return;
+  const tile = normalizeWeatherTile(hubSettings.weather && hubSettings.weather.tile);
+  if (tile.hero === hero) return;
+  hubSettings = normalizeSettings({
+    ...hubSettings,
+    weather: { ...hubSettings.weather, tile: { ...tile, hero } },
+  });
+  commitWeatherChange();
+  syncWeatherSettingsControls();
+  if (typeof renderWeatherTile === 'function') renderWeatherTile();
   setSettingsStatus('settings_weather_saved', 'ok');
 }
 
@@ -10278,6 +10644,7 @@ function _reflectAiProviderRows(provider) {
   if (mode) mode.value = subscription ? 'chatgpt' : 'api';
   if (provider === 'openai' && subscription) refreshChatgptStatus();
   show('settings-anthropic-panel', provider === 'anthropic');
+  show('settings-cli-panel', AI_CLI_PROVIDERS.includes(provider));
 }
 
 // Reflect the persisted provider settings into the AI controls. Safe to call
@@ -10288,7 +10655,7 @@ function syncAiProviderControls() {
   if (!panel || !modelSel) return;
 
   const cfg = hubSettings || {};
-  const provider = ['ollama', 'openai', 'anthropic'].includes(cfg.aiProvider) ? cfg.aiProvider : 'gemini';
+  const provider = AI_PROVIDER_IDS.includes(cfg.aiProvider) ? cfg.aiProvider : 'gemini';
   document.querySelectorAll('input[name="aiProvider"]').forEach((r) => {
     r.checked = (r.value === provider);
   });
@@ -10303,6 +10670,7 @@ function syncAiProviderControls() {
   const oReset = $('settings-openai-reset'); if (oReset) oReset.hidden = !cfg.openaiApiKeySet;
   const aReset = $('settings-anthropic-reset'); if (aReset) aReset.hidden = !cfg.anthropicApiKeySet;
   if (provider === 'openai' || provider === 'anthropic' || provider === 'gemini') _aiLoadProviderModels(provider);
+  if (AI_CLI_PROVIDERS.includes(provider)) aiCliRefresh(provider, false);
 
   const urlInput = $('ai-ollama-url');
   if (urlInput) urlInput.value = cfg.ollamaUrl || 'http://localhost:11434';
@@ -10348,7 +10716,7 @@ function persistAiProviderSettings() {
     : modelSel.value;
   hubSettings = normalizeSettings({
     ...hubSettings,
-    aiProvider: (checked && ['ollama', 'openai', 'anthropic'].includes(checked.value)) ? checked.value : 'gemini',
+    aiProvider: (checked && AI_PROVIDER_IDS.includes(checked.value)) ? checked.value : 'gemini',
     ollamaModel: model,
     ollamaUrl: (urlInput && urlInput.value.trim()) || 'http://localhost:11434',
   });
@@ -10550,6 +10918,7 @@ function initAiProviderSettings() {
       _reflectAiProviderRows(r.value);
       persistAiProviderSettings();
       if (r.value === 'ollama') { await aiLocalScan(); await aiLocalRefreshStatus(); await aiLocalSyncAutostart(); }
+      else if (AI_CLI_PROVIDERS.includes(r.value)) aiCliRefresh(r.value, true);
       else _aiLoadProviderModels(r.value);
     });
   });
@@ -10901,6 +11270,117 @@ function onAiModelSelect(key, value) {
 }
 
 function onOpenaiModelSelect(v) { onAiModelSelect('openaiModel', v); }
+
+// ── Claude Code / Codex (the user's own subscription) ───────────────────────
+// One panel for both. It says whether the program is installed and signed in,
+// with what to run when it is not, and offers the models the program itself
+// lists. Nothing here handles a credential: sign-in happens in the program.
+const AI_CLI_INFO = {
+  claudecode: { app: 'Claude Code', login: 'claude auth login', guide: 'https://code.claude.com/docs/en/setup', key: 'claudeCodeModel' },
+  codex: { app: 'Codex', login: 'codex login', guide: 'https://developers.openai.com/codex/cli', key: 'codexModel' },
+};
+let _aiCliSeq = 0;
+function _aiCliText(k, info, extra) {
+  let s = t(k).replace(/\{app\}/g, info.app).replace(/\{cmd\}/g, info.login);
+  if (extra && extra.version != null) s = s.replace(/\{ver\}/g, extra.version ? ' ' + extra.version : '');
+  return s;
+}
+async function aiCliRefresh(provider, fresh) {
+  const info = AI_CLI_INFO[provider];
+  if (!info) return;
+  const seq = ++_aiCliSeq;
+  const intro = $('settings-cli-intro');
+  if (intro) intro.textContent = _aiCliText('settings_cli_intro', info);
+  const guide = $('settings-cli-guide');
+  if (guide) { guide.href = info.guide; guide.textContent = _aiCliText('settings_cli_guide', info); }
+  const statusEl = $('settings-cli-status');
+  const detailEl = $('settings-cli-detail');
+  if (statusEl) { statusEl.textContent = t('settings_cli_checking'); statusEl.dataset.state = 'checking'; }
+  if (detailEl) { detailEl.textContent = ''; detailEl.hidden = true; }
+  _aiCliRenderModels(provider, null);   // "loading" until the program answers
+  const q = (fresh ? '&fresh=1' : '');
+  // Independent: the list shows as soon as it arrives, whatever the status does.
+  const getJson = (url) => fetch(url).then(r => (r.ok ? r.json() : null)).catch(() => null);
+  getJson('/api/ai/cli/models?provider=' + provider + q).then((list) => {
+    if (seq !== _aiCliSeq) return;
+    _aiCliRenderModels(provider, (list && Array.isArray(list.models)) ? list.models : []);
+  });
+  const st = await getJson('/api/ai/cli/status?provider=' + provider + q);
+  if (seq !== _aiCliSeq) return;   // the user switched provider meanwhile
+  if (!statusEl) return;
+  let k = 'settings_cli_unknown', state = 'warn', detail = '';
+  if (!st || st.ok === false) {
+    // No answer at all: most often a dashboard newer than the Xenon running it.
+    k = 'settings_cli_no_server';
+  } else if (!st.installed) { k = 'settings_cli_not_installed'; state = 'bad'; }
+  else if (st.loggedIn === false) { k = 'settings_cli_not_logged_in'; state = 'bad'; }
+  else if (st.loggedIn === true && /api.?key/i.test(String(st.method || ''))) { k = 'settings_cli_api_key'; state = 'warn'; }
+  else if (st.loggedIn === true) { k = 'settings_cli_ready'; state = 'ok'; }
+  else if (st.detail) detail = t('settings_cli_detail').replace('{detail}', String(st.detail));
+  if (st && st.loggedIn === true && st.plan) detail = t('settings_cli_plan').replace('{plan}', String(st.plan));
+  statusEl.textContent = _aiCliText(k, info, { version: (st && st.version) || '' });
+  statusEl.dataset.state = state;
+  if (detailEl) { detailEl.textContent = detail; detailEl.hidden = !detail; }
+}
+// `models` null = still loading. Each entry is { id, label, version?, resolved? }
+// exactly as the program described it; nothing here invents a model.
+let _aiCliModels = [];
+function _aiCliRenderModels(provider, models) {
+  const info = AI_CLI_INFO[provider];
+  const sel = $('settings-cli-model');
+  if (!sel || !info) return;
+  const cur = normalizeCliModel(hubSettings && hubSettings[info.key]);
+  sel.replaceChildren();
+  const add = (value, label) => { const o = document.createElement('option'); o.value = value; o.textContent = label; sel.appendChild(o); return o; };
+  if (models === null) {
+    add(cur, t('settings_cli_models_loading')).disabled = true;
+    sel.value = cur;
+    _aiCliShowUsed(null);
+    return;
+  }
+  _aiCliModels = models.filter(m => m && typeof m.id === 'string');
+  const ids = new Set();
+  // "Opus" + "Opus 5.5" reads as "Opus 5.5"; the default keeps its own name.
+  const withVersion = (label, version) => {
+    const l = String(label), v = String(version || '');
+    if (!v || v.toLowerCase() === l.toLowerCase()) return l;
+    return v.toLowerCase().startsWith(l.toLowerCase()) ? v : l + ' · ' + v;
+  };
+  // The program's own "default" (Claude Code lists it) reads as ours, localized.
+  const def = _aiCliModels.find(m => m.id === 'default');
+  add('default', withVersion(t('settings_cli_model_default'), def && def.version));
+  ids.add('default');
+  for (const m of _aiCliModels) {
+    if (ids.has(m.id)) continue;
+    ids.add(m.id);
+    add(m.id, withVersion(m.label || m.id, m.version));
+  }
+  // A saved model the program no longer lists stays selectable, marked as such.
+  if (!ids.has(cur)) add(cur, t('settings_cli_model_saved').replace('{model}', cur));
+  sel.value = cur;
+  _aiCliShowUsed(cur);
+}
+// "In use: claude-opus-5-5": the exact model the chosen entry resolves to today.
+function _aiCliShowUsed(id) {
+  const el = $('settings-cli-model-used');
+  if (!el) return;
+  const m = id ? _aiCliModels.find(x => x.id === id) : null;
+  const resolved = m && m.resolved && m.resolved !== m.id ? m.resolved : '';
+  el.textContent = resolved ? t('ai_model_resolved').replace('{model}', resolved) : '';
+  el.hidden = !resolved;
+}
+function onAiCliModelSelect(value) {
+  const provider = hubSettings && hubSettings.aiProvider;
+  const info = AI_CLI_INFO[provider];
+  if (!info) return;
+  hubSettings = normalizeSettings({ ...hubSettings, [info.key]: normalizeCliModel(value) });
+  saveHubSettings();
+  _aiCliShowUsed(normalizeCliModel(value));
+}
+function aiCliRecheck() {
+  const provider = hubSettings && hubSettings.aiProvider;
+  if (AI_CLI_PROVIDERS.includes(provider)) aiCliRefresh(provider, true);
+}
 function onAnthropicModelSelect(v) { onAiModelSelect('anthropicModel', v); }
 
 // Remove a saved OpenAI/Anthropic key. Sends key='' with *Set=false, which the

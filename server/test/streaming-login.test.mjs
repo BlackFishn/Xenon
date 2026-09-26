@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 const source = readFileSync(new URL('../js/streaming-page.js', import.meta.url), 'utf8');
-const start = source.indexOf('  async function startLogin(');
+const start = source.indexOf('  async function postLogin(');
 const end = source.indexOf('  // Called by settings.js', start);
 assert.ok(start >= 0 && end > start);
 
@@ -34,6 +34,11 @@ function panel(responses) {
     stopPoll() { timers.delete(context.pollTimer); context.pollTimer = null; },
     setTimeout(fn, ms) { timers.set(++nextTimer, { fn, ms }); return nextTimer; },
     render() { renders++; },
+    fetch: async (url, options) => {
+      const result = await context.api(url, options);
+      if (result instanceof Error) throw result;
+      return { status: typeof result === 'string' ? 500 : 200, text: async () => typeof result === 'string' ? result : JSON.stringify(result) };
+    },
     api: async (url, options) => {
       calls.push({ url, options });
       assert.ok(responses.length, 'Unexpected request: ' + url);
@@ -113,4 +118,21 @@ test('closing settings stops polling without another authorization request', asy
   await ui.tick();
   assert.equal(ui.calls.length, 1);
   assert.equal(ui.timers.size, 0);
+});
+
+test('initial login failures retain YouTube guidance and expose new server reasons', async () => {
+  for (const [result, message] of [
+    [{ ok: false, error: 'invalid_client' }, /Client ID.*Client Secret.*same.*TVs and Limited Input devices/],
+    [{ ok: false, error: 'new_error', detail: 'why it failed' }, /new_error.*why it failed/],
+    [new TypeError('Failed to fetch'), /Xenon did not answer/],
+    ['Backend unavailable', /http_500.*Backend unavailable/],
+  ]) {
+    const ui = panel([result]);
+    await ui.start();
+    assert.match(ui.card.querySelector('.streaming-err')?.textContent || '', message);
+    assert.equal(ui.button.disabled, false);
+    assert.equal(ui.timers.size, 0);
+    assert.equal(ui.calls.length, 1);
+    assert.equal(ui.renders, 0);
+  }
 });

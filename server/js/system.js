@@ -95,7 +95,7 @@ function applySystemInto(root, data) {
   set('cpu-value', cpu + '%'); fillEl('cpu-fill', cpu, cpu, '%'); set('cpu-name', data.cpuName || '--');
   set('cpu-name-head', shortHwName(data.cpuName));
   const cpuTemp = Number(data.cpuTemp);
-  set('cpu-head-temp', (Number.isFinite(cpuTemp) && cpuTemp > 0) ? Math.round(cpuTemp) + '°C' : '');
+  set('cpu-head-temp', (Number.isFinite(cpuTemp) && cpuTemp > 0) ? toDisplayTemp(cpuTemp) + '°' + tempUnitSuffix() : '');
 
   const ram = data.memory ? data.memory.percent : 0;
   set('ram-value', ram + '%');
@@ -132,7 +132,7 @@ function applySystemInto(root, data) {
   set('gpu-name', data.gpuName || t('gpu_loading'));
   set('gpu-name-head', shortHwName(data.gpuName));
   const gpuTemp = Number(data.gpuTemp);
-  set('gpu-head-temp', (Number.isFinite(gpuTemp) && gpuTemp > 0) ? Math.round(gpuTemp) + '°C' : '');
+  set('gpu-head-temp', (Number.isFinite(gpuTemp) && gpuTemp > 0) ? toDisplayTemp(gpuTemp) + '°' + tempUnitSuffix() : '');
 
   if (data.disks && data.disks.length > 0) {
     systemDisks = data.disks;
@@ -155,10 +155,11 @@ function applySystem(data) {
   }
 }
 
-// Weather values arrive from the server in Celsius; the display unit is a
-// client-side preference (hubSettings.tempUnit). Convert + round on render so
-// switching the unit needs no re-fetch. Returns null/'' unchanged so callers'
-// "--" placeholder still works.
+// EVERY temperature inside Xenon is Celsius — the weather API, the hardware
+// collectors, Guardian's alert thresholds, the briefing history. Only the
+// display converts, against a client-side preference (hubSettings.tempUnit),
+// so switching the unit needs no re-fetch and no stored value is ever ambiguous.
+// Returns null/'' unchanged so callers' "--" placeholder still works.
 function toDisplayTemp(celsius) {
   if (celsius === null || celsius === undefined || celsius === '') return celsius;
   const c = Number(celsius);
@@ -168,6 +169,21 @@ function toDisplayTemp(celsius) {
 }
 function tempUnitSuffix() {
   return (typeof hubSettings === 'object' && hubSettings && hubSettings.tempUnit === 'f') ? 'F' : 'C';
+}
+
+// Fill the temperature placeholders of a translated string: each named token
+// holds a Celsius number to convert, and every `{u}` becomes the unit letter.
+// The alternative was a .replace() chain at each call site, which is how the
+// hardware headers and the Guardian/briefing toasts ended up printing a hard
+// "°C" to someone who had picked °F — the preference is labelled "Temperature
+// unit", not "Weather temperature unit", so it has to reach all of them.
+// Every token is replaced globally: an anomaly line names two temperatures.
+function fillTemps(text, values) {
+  let out = String(text == null ? '' : text);
+  for (const token of Object.keys(values || {})) {
+    out = out.split('{' + token + '}').join(String(toDisplayTemp(values[token])));
+  }
+  return out.split('{u}').join(tempUnitSuffix());
 }
 
 // A forecast that failed now says WHICH link broke. The server answers ok:false
@@ -420,6 +436,7 @@ function weatherTileSections() {
   const w = (typeof hubSettings === 'object' && hubSettings && hubSettings.weather) || {};
   const src = w.tile && typeof w.tile === 'object' ? w.tile : {};
   return {
+    compact: src.hero === 'compact',
     metrics: src.metrics !== false,
     hourly: src.hourly !== false,
     forecast: src.forecast !== false,
@@ -495,6 +512,78 @@ function buildWeatherHeroCard(data) {
     if (chips.children.length) card.appendChild(chips);
   }
   return card;
+}
+
+// The one-line alternative to the hero card (GitHub #130: "I just want the next
+// hours/days, with a summary of the current temp/feels like"). Icon and
+// temperature, then the condition with feels-like under it (the one number the
+// request named, so it sits with the temperature rather than among the extras),
+// wind and rain quieter on the right, each behind its field toggle. It is still
+// the button that opens the full weather view, and the chevron says so: a
+// one-line strip does not look tappable the way the big card did.
+function buildWeatherCompactBar(data) {
+  const bar = document.createElement('button');
+  bar.type = 'button';
+  bar.className = 'weather-tile-card weather-tile-compact';
+  bar.addEventListener('click', () => { if (typeof toggleWeatherDetails === 'function') toggleWeatherDetails(); });
+
+  const ok = !!(data && data.ok);
+  const state = ok ? classifyWeatherState(data) : 'state-offline';
+  const night = ok && isWeatherNight(data.sunrise, data.sunset);
+  setWeatherStateClass(bar, state);
+  bar.classList.toggle('is-night', !!night);
+  bar.classList.toggle('weather-tile--stale', ok && !!data.stale);
+  const place = ok ? ([data.location, data.region, data.country].filter(Boolean).join(', ') || t('weather_local')) : '';
+  bar.title = place ? `${t('weather_open')} (${place})` : t('weather_open');
+
+  const icon = document.createElement('span');
+  icon.className = 'weather-compact-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  const glyph = document.createElement('span');
+  glyph.className = `weather-mini-icon ${state}`;
+  icon.appendChild(glyph);
+  const temp = document.createElement('span');
+  temp.className = 'weather-compact-temp';
+  temp.textContent = ok ? `${toDisplayTemp(data.tempC)}°` : '--°';
+
+  const text = document.createElement('span');
+  text.className = 'weather-compact-text';
+  const cond = document.createElement('span');
+  cond.className = 'weather-compact-condition';
+  cond.textContent = ok ? (data.condition || t('weather_title')) : weatherErrorLabel(data);
+  text.appendChild(cond);
+  if (ok && weatherFieldEnabled('feels')) {
+    const feels = document.createElement('span');
+    feels.className = 'weather-compact-feels';
+    feels.textContent = `${t('weather_metric_feels')} ${data.feelsC != null ? `${toDisplayTemp(data.feelsC)}°` : '--'}`;
+    text.appendChild(feels);
+  }
+  bar.append(icon, temp, text);
+
+  if (ok) {
+    const stats = document.createElement('span');
+    stats.className = 'weather-compact-stats';
+    [
+      ['wind', displayWind(data.windKph), 'weather_metric_wind'],
+      ['rain', displayPrecip(data.precipMM), 'weather_metric_rain'],
+    ].forEach(([id, value, key]) => {
+      if (!weatherFieldEnabled(id)) return;
+      const chip = createWeatherHeroChip(value, key);
+      chip.className = `weather-compact-stat weather-compact-stat--${id}`;
+      stats.appendChild(chip);
+    });
+    if (stats.children.length) bar.appendChild(stats);
+  }
+
+  const chevron = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  chevron.setAttribute('class', 'weather-compact-chevron');
+  chevron.setAttribute('viewBox', '0 0 16 16');
+  chevron.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M6 3.5 10.5 8 6 12.5');
+  chevron.appendChild(path);
+  bar.appendChild(chevron);
+  return bar;
 }
 
 // The 8 detail metrics as [id, element] pairs, filtered by the per-field
@@ -600,7 +689,8 @@ function renderWeatherTile() {
     // tint matching the hero's sky — the whole widget reads as one scene.
     setWeatherStateClass(root, state);
     root.classList.toggle('is-night', !!night);
-    root.appendChild(buildWeatherHeroCard(data));
+    root.classList.toggle('weather-tile-root--compact', sec.compact);
+    root.appendChild(sec.compact ? buildWeatherCompactBar(data) : buildWeatherHeroCard(data));
 
     if (ok) {
       const body = document.createElement('div');

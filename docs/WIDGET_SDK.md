@@ -81,7 +81,7 @@ not need to do anything to support it.
 | `name` | yes | ≤ 60 chars. |
 | `version`, `author`, `description` | no | Shown to the user (description ≤ 200 chars). |
 | `entry` | no | HTML entry document, defaults to `index.html`. Must live in the package root. |
-| `streams` | no | Data streams you request: `status`, `system`, `media`, `audio`, `audioLevels`, `wavelink`, `voicemeeter`, `stocks`, `football`, `news`, `claude`, `obs`, `discord`, `discordChannels`, `discordSoundboard`, `discordNotifications`, `streamerbot`, `homeassistant`, `twitchWatch`, `twitchChat`, `youtubeLive`, `youtube`, `tasks`, `notes`, `agenda`, `weather`, `battery`. *Capability reference* below is generated from the code and is the list that cannot go stale. See *Hardware sensors* for fans/power/battery. |
+| `streams` | no | Data streams you request: `status`, `system`, `network`, `media`, `audio`, `audioLevels`, `wavelink`, `voicemeeter`, `stocks`, `football`, `news`, `claude`, `obs`, `discord`, `discordChannels`, `discordSoundboard`, `discordNotifications`, `streamerbot`, `homeassistant`, `twitchWatch`, `twitchChat`, `youtubeLive`, `youtube`, `tasks`, `notes`, `agenda`, `weather`, `battery`. *Capability reference* below is generated from the code and is the list that cannot go stale. See *Hardware sensors* for fans/power/battery. |
 | `surface` | no | `"tile"` (default) or `"ambient"` — an ambient package renders fullscreen as an Ambient/screensaver scene instead of a dashboard tile (see *Ambient scenes*). |
 | `actions` | no | Action categories you request: `media`, `volume`, `audioDevice`, `mic`, `lighting`, `chroma`, `wavelink`, `voicemeeter`, `spotify`, `steam`, `obs`, `discord`, `homeassistant`, `twitch`, `youtube`, `youtubePlayer`, `streamerbot`, `url`, `browser`, `watch`, `tasks`, `soundboard`. *Capability reference* below is generated from the code and is the list that cannot go stale. |
 | `hosts` | no | Up to 8 exact hostnames the widget may reach **through the host-mediated fetch proxy** (see *Network*). Loopback/link-local names are rejected at install time. |
@@ -279,8 +279,10 @@ The payloads are the dashboard's own SSE events, unmodified:
 
 - `status` — mic mute, game mode/activity, foreground process
 - `system` — `cpu` (%), `gpu` (%|null), `memory.percent`, temperatures, clock speeds, `fps` / `presentFps` / `displayFps`, uptime… see *Clock speeds and frame rate* below
+- `diskIo` — `{ ok, disks:[…] }`: **per physical disk** throughput, IOPS, model and the volumes on it. See *Per-disk I/O* below. A **pull** stream, like `network`
+- `network` — `{ ok, downloadBps, uploadBps, ping, latency, interfaces:[…] }`: **every network adapter the machine has, one entry each**, so a monitoring widget can graph a 10GbE NAS link, the internet link and a VMware VMnet separately. See *Per-adapter network* below. A **pull** stream: send a `refresh` message for it at whatever cadence your graph wants (900ms floor)
 - `media` — `title`, `artist`, `album`, playback state, source, plus `position` and `duration` in seconds. A zero/absent `duration` means the current source has no seekable timeline
-- `audio` — volume, mute, output device, and `speakerApps[]` / `micApps[]`: the per-application mixer (one entry per active session, with `proc`, `volume`, `muted` and a resolved `icon`). Polled, so it updates about every 8 seconds
+- `audio` — volume, mute, output device (`speaker` is the current default output; `speakers[]` lists every connected one, each with an `id` and `isDefault`), and `speakerApps[]` / `micApps[]`: the per-application mixer (one entry per active session, with `proc`, `volume`, `muted` and a resolved `icon`). Polled, so it updates about every 8 seconds
 - `audioLevels` — **how loud each app actually is right now**: `{ "discord": 0.42, "spotify": 0.81 }`, peak per process in `0..1`, roughly 12 times a second. See *Real audio levels* below — this one has conditions
 - `stocks` — the quotes/indices the user follows (same payload the Stocks tile gets)
 - `football` — followed teams' fixtures, live scores and results
@@ -288,7 +290,7 @@ The payloads are the dashboard's own SSE events, unmodified:
 - `claude` — local Claude Code usage aggregate (the "Xenon Pulse" data)
 - `obs` — OBS state (current scene, recording/streaming flags, audio sources)
 - `discord` — Discord voice state (connected, mute/deafen, current channel, speaking) plus `members[]` for the channel the user is in: `{ id, name, mute, deaf, speaking, volume, localMute }`. `mute`/`deaf` are that person's own mic state; `volume` (0-200, `null` if unreported) and `localMute` are what THIS machine hears — the pair `discordUserVol` writes
-- `discordChannels` — `{ ok, channels:[{ id, name, guild, members:[] }] }`; Discord voice-channel catalog merged with the live roster (same `members[]` shape)
+- `discordChannels` — `{ ok, channels:[{ id, name, guild, guildId, members:[] }] }`; Discord voice-channel catalog merged with the live roster (same `members[]` shape). `guild` is the server's name and `guildId` its snowflake — group by the id, not the name: it survives a rename and tells two servers that share a name apart
 - `discordSoundboard` — `{ ok, sounds:[{ id, guildId, name, guild }] }`; the soundboard catalog available to the connected Discord account
 - `discordNotifications` — `{ ok, enabled, hide, state, items:[...] }`; private DM/mention notifications, with the user's privacy setting preserved. Request this grant only when the widget genuinely displays notification content
 - `streamerbot` — Streamer.bot connection state, globals, and activity events
@@ -600,6 +602,129 @@ those. `sources` tells you whether each backend answered at all, so you can
 distinguish "no devices" from "iCUE is off". Peripherals on a proprietary
 2.4GHz dongle (Logitech Unifying/Lightspeed and most custom keyboards) report no
 battery to Windows and cannot appear.
+
+### 3b-bis. Per-adapter network (v4.11.10)
+
+Asked for on Discord by someone building a workstation monitor: *"list all system
+network adapters instead of only the currently active/global traffic"* — a 10GbE
+NAS link, the internet link and a VMware VMnet, each on its own graph.
+
+`streams: ["network"]` is its own grant, separate from `system`: it is traffic,
+not a sensor, and the permission dialog says so in those words.
+
+```js
+{
+  ok: true,
+  downloadBps: 1340221,   // the PHYSICAL adapters, summed — what the Network tile draws
+  uploadBps: 88104,
+  ping: 12, latency: 3,
+  interfaces: [
+    {
+      id: '{9F2A…}',            // stable across reboots; key your per-adapter settings on it
+      name: 'NAS 10GbE',        // what the adapter is CALLED — your rename in Windows shows up here
+      description: 'Intel(R) X550-T1',
+      kind: 'physical',         // 'physical' | 'virtual'
+      up: true,                 // null where the platform does not say
+      speedBps: 10000000000,    // link speed, null when unknown
+      rxBytesPerSec: 1220110,   // null until this adapter has two readings of its own
+      txBytesPerSec: 41002,
+      rxBytes: 84120334455,     // the raw cumulative counters, if you would rather do your own maths
+      txBytes: 2210554,
+    },
+  ],
+}
+```
+
+- **Every adapter is listed, virtual ones included** — that is the point of the
+  request. `downloadBps`/`uploadBps` stay the sum of the **physical** ones,
+  because a VPN or a VMnet carries the same packets a second time and adding
+  them to the total would double-count.
+- **`id` is what you remember, `name` is what you show.** On Windows `id` is the
+  adapter GUID and `name` is the label the user typed in *Network Connections*;
+  on Linux and macOS both are the interface name, since there is no second one
+  to have. Do not key saved settings on `name` — renaming an adapter would lose
+  them.
+- **`rxBytesPerSec`/`txBytesPerSec` are `null`, not `0`, until there is something
+  to measure**: an adapter needs two readings of its own before it has a rate,
+  and one that appears mid-session (a VPN coming up) starts at `null` rather
+  than reporting a spike the size of its lifetime counter. `Number(null)` is
+  `0`, so guard with `v != null` or an unknown will draw as idle.
+- **It is a PULL stream.** Send a `refresh` message at the cadence your graph
+  wants — the floor is 900ms — and the answer arrives as an ordinary `data`
+  frame, followed by a `refresh_result`:
+
+  ```js
+  window.parent.postMessage({ xenonSdk: 1, type: 'refresh', id: 1, stream: 'network' }, '*');
+  ```
+
+  It is the same message the lazy Discord streams use (see *`data`* above), so
+  the same rules apply: the grant is required, and a hidden tile or a background
+  service frame is refused — refresh while `visibility` says you are seen, and
+  stop when it says you are not. It is pulled rather than pushed because the reading costs a
+  collector run (a PowerShell round trip on Windows), and pushing it to every
+  dashboard would make every install pay for a widget almost nobody has. While
+  no granted widget is on screen asking, nothing runs at all.
+- **The list is the machine's, live.** Unplug a dock and the entry is gone on the
+  next refresh; plug it back and it returns with its rates at `null` for one
+  tick. Draw from `id`, not from an index.
+
+### 3b-ter. Per-disk I/O (v4.11.10)
+
+The other half of the same request: *"let a widget list all detected disks and
+allow the user to select which ones to display individually."* `streams:
+["diskIo"]`.
+
+```js
+{
+  ok: true,
+  disks: [
+    {
+      id: 'phys0',               // 'nvme0n1' on Linux, 'disk0' on macOS
+      model: 'Samsung SSD 990 PRO 2TB',
+      serial: 'S6Z1NJ0T...',     // '' where the platform will not say
+      kind: 'ssd',               // 'ssd' | 'hdd' | '' when not known
+      sizeBytes: 2000398934016,  // null when not known
+      volumes: [{ mount: 'C:', label: 'System', fstype: '' }],
+      temperature: 41,           // °C, or null — see below
+      readBytesPerSec: 104857600,
+      writeBytesPerSec: 2097152,
+      readIops: 812,
+      writeIops: 44,
+      readBytes: 88120334455,    // cumulative, if you would rather do your own maths
+      writeBytes: 22105548812,
+    },
+  ],
+}
+```
+
+- **Physical disks, not volumes.** A partition's counters are already inside its
+  parent's, so listing both would double every number on screen. The volumes
+  that live on a disk ride along in `volumes[]` so a row can say *"Samsung 990 —
+  C:, D:"* instead of `phys0`.
+- **Every rate is `null` until there is something to measure**, exactly like the
+  network ones: a disk needs two readings of its own before it has a rate.
+  `Number(null)` is `0`, so guard with `v != null` or an idle disk and an
+  unknown one will draw the same.
+- **`readBytesPerSec` and `readIops` are the same measurement in two units** —
+  bytes moved and operations completed. A disk doing many small reads shows high
+  IOPS and low throughput; one streaming a file shows the opposite. That
+  difference is usually the interesting part.
+- **`temperature` is `null` on Windows and macOS today**, and a real number on
+  Linux wherever the kernel publishes one (the `drivetemp` module for SATA,
+  nvme's own hwmon for NVMe). It is not an oversight: reading it elsewhere means
+  a SMART query, LibreHardwareMonitor's storage tree would run that on **every**
+  sensor read, and that wakes a spun-down mechanical disk every few seconds.
+  Until that can be charged only to whoever asked for it, the honest answer is
+  `null` rather than a number that costs other people their drives spinning up.
+- **It is a PULL stream.** Send `{ xenonSdk: 1, type: 'refresh', id, stream:
+  'diskIo' }` at your graph's cadence, exactly as for `network` above (900ms
+  floor; the reading is cached 2s). On Windows it is three CIM queries,
+  which is why nobody who has not asked for it pays for it — nothing runs while
+  no granted widget is on screen.
+- **`id` is stable enough to key settings on, `model` is what you show.** On
+  Windows it is the physical disk index, on Linux the kernel name, on macOS the
+  BSD name. `serial` rides along for anyone who wants to be certain across a
+  re-plug.
 
 ### 3c. Clock speeds and frame rate (v4.11.7)
 
@@ -1405,7 +1530,7 @@ the same gate Deck keys go through):
 |----------|---------|
 | `media` | `{ type: 'media', cmd: 'playpause' \| 'next' \| 'previous' }`, `{ type: 'mediaSeek', position }` — seek to an absolute position in seconds. `position` must be finite and non-negative; fractional values are rounded to the nearest whole second and the registry caps them at 24 hours before the active player may clamp them to the track. A live/non-seekable source returns `not_seekable` or `unavailable`. While dragging a timeline, preview locally and send one action on pointer release instead of fighting the bridge's 250 ms action rate limit. |
 | `volume` | `{ type: 'volume', mode: 'mute' \| 'up' \| 'down' \| 'set', value }`, `{ type: 'appVolume', app, mode, value }`, `{ type: 'appMute', app, mode }` — `app` is the `proc` field from the `audio` stream. Note `appVolume` with `mode:'set'` does **not** unmute: raise a muted app and send `appMute` too, or nothing comes out. |
-| `audioDevice` | `{ type: 'audioDevice', device }` — make an output device the default, i.e. move your sound to another set of speakers or headphones. `device` is the `id` of an entry in the `audio` stream's `speakers[]`; nothing else works. A **separate grant from `volume`** on purpose: approving "change the volume" is not approving "choose my speakers", and folding the two together would have widened every existing grant with no prompt. The server resolves the id against the live output enumeration before acting, so an id that is merely well-formed — or that names a microphone — is refused. There is no action to change the *input* device. |
+| `audioDevice` | `{ type: 'audioDevice', device }` — make an output device the default, i.e. move your sound to another set of speakers or headphones. `device` is the `id` of an entry in the `audio` stream's `speakers[]`; nothing else works. A **separate grant from `volume`** on purpose: approving "change the volume" is not approving "choose my speakers", and folding the two together would have widened every existing grant with no prompt. The server resolves the id against the live output enumeration before acting, so an id that is merely well-formed — or that names a microphone — is refused. There is no action to change the *input* device. `{ type: 'audioDeviceToggle', deviceA, deviceB }` (v4.11.10) flips between two of them in one call: see *Moving the sound between two outputs* below. |
 | `mic` | `{ type: 'micMute', mode: 'toggle' \| 'mute' \| 'unmute' }` |
 | `lighting` | `{ type: 'lightPower', state: 'toggle' \| 'on' \| 'off' }`, `{ type: 'lightColor', color: '#rrggbb' }`, `{ type: 'lightAuto' }`, `{ type: 'lightEffect', style, color }`, `{ type: 'lightDevice', device, mode, color }` — the whole RGB system (iCUE + WLED/Hue/Nanoleaf/OpenRGB/Home Assistant lights/Chroma). `style`: `none\|solid\|breathing\|cycle\|wave\|aurora\|candle\|palette`; `mode`: `follow\|color\|animation\|temperature\|album\|off`; `color`: `#rrggbb`. `lightColor` sets a fixed colour across the whole rig, `lightAuto` clears it back to your configured lighting. Requires lighting configured in Settings → Illuminazione. |
 | `chroma` | `{ type: 'chromaColor', device, color }`, `{ type: 'chromaOff', device }` — Razer Chroma per-device lighting (`device`: `all` \| `keyboard` \| `mouse` \| `mousepad` \| `headset` \| `keypad` \| `chromalink`; `color`: `#rrggbb`). Requires the user to enable Razer Chroma in Settings. |
@@ -1568,6 +1693,53 @@ action: { type: 'ytWatchPlay', video: 'dQw4w9WgXcQ' }
 
 Listed to the user as "Play a channel or a video in the Twitch and YouTube tiles".
 
+### 5c-bis. Turning the dashboard's page: `pages` (v4.11.10)
+
+The same move the global page shortcuts make (Settings → General → Page
+shortcuts), reachable from a widget: a control-room tile with a button per page,
+or one that brings the media page up when something starts playing.
+
+```js
+action: { type: 'dashboardPage', page: 'work' }   // one of THIS dashboard's page ids
+action: { type: 'dashboardPage', page: 'next' }   // 'next' | 'prev' | 'back'
+// { ok: true } — or { ok: false, error: 'not_found' | 'unavailable' | 'bad_page' }
+```
+
+```json
+{ "actions": ["pages"] }
+```
+
+- `page` is a **page id from the layout this widget is running on**, or one of the
+  three relative moves. `back` returns to the page the user was on before this
+  one — which is what "flip between my two pages" means, and it keeps meaning it
+  once there are three.
+- **Only the screen your widget is on turns.** Pages belong to a device's own
+  layout, so a phone and a desk PC do not have the same ones and neither should
+  follow the other's widget. If your widget is open on two screens, each copy
+  turns its own.
+- `not_found` means this screen has no such page, or it is hidden. **A page id is
+  not portable** — the same profile on another device may not have it — so treat
+  that answer as normal and not as a failure to report loudly.
+- Asking for the page you are already on is `ok: true`. `back` with nowhere to go
+  back to is `ok: false`: the action did nothing and says so.
+- There is **no confirm dialog**, for the same reason `watch` has none: what
+  travels is one of the user's own page ids, it reaches nothing outside the
+  dashboard, and the result is visible the instant it happens. The grant is what
+  the user agreed to and the turning page is its own receipt.
+- It is its **own grant**, not part of any other. A widget that can turn the page
+  can take the screen away from what its owner was reading, which is a different
+  kind of act from drawing inside your own tile.
+- **Do not fire it on a timer.** A page that turns by itself while someone is
+  reading is the one thing this capability can do that nobody wants. Tie it to a
+  tap, or to something the user would expect to change the view.
+- **You cannot read the page list**, and there is no event when the page turns.
+  Use `visibility` (§4c) to know whether your own tile is the one being looked at.
+- **Not available in manifest Deck macros**, for the same reason as `browserOpen`
+  and `watch`: the Deck action validator does not know the type, so a macro
+  declaring one fails at install instead of shipping a dead key.
+
+Listed to the user as "Turn the dashboard to another page".
+
 ### 5d. Turning one person up or down: `discordUserVol` (v4.11)
 
 Two actions in the `discord` category act on ONE member of the voice channel the
@@ -1678,6 +1850,43 @@ action: { type: 'vmMacro', index: '3', mode: 'toggle' }
 Windows only, and only while Voicemeeter is running. There is no setting to
 switch on: having it installed is the whole opt-in.
 
+### 5f. Moving the sound between two outputs: `audioDeviceToggle` (v4.11.10)
+
+The Deck's *Switch between two outputs* key, reachable from a widget:
+speakers and headphones, a monitor's speakers and a DAC, one button.
+
+```js
+action: { type: 'audioDeviceToggle', deviceA: speakersId, deviceB: headsetId }
+// { ok: true } — or { ok: false, error: 'unknown_device' | 'no_device' | 'audio_unavailable' | … }
+```
+
+```json
+{ "actions": ["audioDevice"], "streams": ["audio"] }
+```
+
+- **Which way it goes is decided by the host**, against the live list at the
+  moment of the call: to `deviceB` when `deviceA` is the current default, to
+  `deviceA` in every other case, including when the sound is on a third
+  device. You do not need to know the current output to send it, which is the
+  point: a widget that decides from its own last `audio` payload can be up to
+  8 seconds out of date and go the wrong way.
+- **Both ids are `speakers[].id` values** from the `audio` stream, exactly as
+  for `audioDevice`, and both go through the same check against the live
+  output list. If either one is not connected right now, nothing is switched
+  and the answer is `unknown_device`: the toggle never quietly falls back to
+  the one device that is left.
+- **Same grant as `audioDevice`**, not a new one. It moves the sound to one of
+  two devices your widget could already choose one at a time, so it does not
+  ask the user for anything they have not already approved.
+- To show which one is on, read `speaker.id` from the `audio` stream (or the
+  entry in `speakers[]` with `isDefault: true`). The stream is polled about
+  every 8 seconds, so a change made from the OS (the Windows sound settings,
+  the Mac menu bar) shows within that. After your own action succeeds, expect
+  the next `audio` push to carry the new device.
+- On macOS, switching needs `SwitchAudioSource` (`brew install
+  switchaudio-osx`), the same as the `audioDevice` action; without it the
+  answer names what is missing.
+
 <!-- SDK-REFERENCE:START (auto-generated by tools/gen-sdk-reference.mjs — do not edit by hand) -->
 ### Capability reference (auto-generated)
 
@@ -1685,13 +1894,13 @@ The exact set the SDK exposes today, generated from the code. Request
 these in your manifest `streams` / `actions`; the host only forwards what
 the user granted, and every action is re-validated server-side.
 
-**Data streams** (`streams`): `agenda`, `audio`, `audioLevels`, `battery`, `claude`, `discord`, `discordChannels`, `discordNotifications`, `discordSoundboard`, `football`, `homeassistant`, `media`, `news`, `notes`, `obs`, `processes`, `scriptStates`, `spotify`, `status`, `stocks`, `streamerbot`, `system`, `tasks`, `twitchChat`, `twitchWatch`, `voicemeeter`, `wavelink`, `weather`, `youtube`, `youtubeLive`
+**Data streams** (`streams`): `agenda`, `audio`, `audioLevels`, `battery`, `claude`, `discord`, `discordChannels`, `discordNotifications`, `discordSoundboard`, `diskIo`, `football`, `homeassistant`, `media`, `network`, `news`, `notes`, `obs`, `processes`, `scriptStates`, `spotify`, `status`, `stocks`, `streamerbot`, `system`, `tasks`, `twitchChat`, `twitchWatch`, `voicemeeter`, `wavelink`, `weather`, `youtube`, `youtubeLive`
 
 **Action categories** (`actions`) → the action `type`s each unlocks:
 
 | Category | Action types |
 |----------|--------------|
-| `audioDevice` | `audioDevice` |
+| `audioDevice` | `audioDevice`, `audioDeviceToggle` |
 | `browser` | `browserOpen` |
 | `chroma` | `chromaColor`, `chromaOff` |
 | `discord` | `discordMute`, `discordDeafen`, `discordPtt`, `discordJoin`, `discordLeave`, `discordInputVol`, `discordOutputVol`, `discordUserVol`, `discordUserMute`, `discordAudioToggle`, `discordSoundboard` |
@@ -1700,6 +1909,7 @@ the user granted, and every action is re-validated server-side.
 | `media` | `media`, `mediaSeek` |
 | `mic` | `micMute` |
 | `obs` | `obsScene`, `obsSceneNext`, `obsRecord`, `obsStream`, `obsMute`, `obsInputVolume` |
+| `pages` | `dashboardPage` |
 | `soundboard` | `playSound`, `soundStopAll` |
 | `spotify` | `spotifyPlay`, `spotifyNext`, `spotifyPrev`, `spotifySave`, `spotifyLike`, `spotifyShuffle`, `spotifyRepeat`, `spotifyVolume`, `spotifySeek`, `spotifyPlaylist`, `spotifyPlayUri`, `spotifyDevice` |
 | `steam` | `launchSteamGame` |

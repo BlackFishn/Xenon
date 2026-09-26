@@ -46,6 +46,7 @@ test('subscription microphone preflight rejects missing Whisper but allows a cap
     readBody: async () => JSON.stringify({ provider: 'openai' }),
     readHubSettings: async () => ({ aiProvider: 'openai', openaiAuthMode: 'chatgpt' }),
     usesChatgpt: s => s.openaiAuthMode === 'chatgpt',
+    aiCli: { isCliProvider: p => ['claudecode', 'codex'].includes(p) },
     aiLocal: { sanitizeProvider: p => p, whisperExe: () => null, whisperPaths: () => ({ model: '/server/model.bin' }) },
     fs: { existsSync: () => false },
   });
@@ -55,6 +56,10 @@ test('subscription microphone preflight rejects missing Whisper but allows a cap
   context.fs.existsSync = () => true;
   assert.equal(await vm.runInContext(gate, context), true);
   context.aiLocal.whisperExe = () => null;
+  for (const provider of ['claudecode', 'codex', 'anthropic']) {
+    context.readBody = async () => JSON.stringify({ provider });
+    await assert.rejects(vm.runInContext(gate, context), /whisper_not_installed/, provider);
+  }
   context.readBody = async () => JSON.stringify({ mode: 'test' });
   assert.equal(await vm.runInContext(gate, context), true);
 });
@@ -89,4 +94,53 @@ test('recorder start errors leave visible setup guidance instead of an orphaned 
   await context._aiStartServerRecorder();
   assert.equal(context._aiServerRecordingId, 'recording');
   assert.equal(states.includes('listening'), true);
+});
+
+test('recorded voice keeps subscription transcription local while API mode uses its own key', async () => {
+  const route = server.indexOf("reqPath === '/api/stt/stop'");
+  const start = server.indexOf('      let sttText;', route);
+  const end = server.indexOf('\n    } catch (e) {', start);
+  assert.ok(route > 0 && start > route && end > start);
+  for (const [provider, mode, expected] of [
+    ['openai', 'chatgpt', 'local'], ['openai', 'api', 'openai'],
+    ['claudecode', 'api', 'local'], ['codex', 'api', 'local'],
+    ['anthropic', 'api', 'local'], ['gemini', 'api', 'gemini'],
+  ]) {
+    const calls = [];
+    let response;
+    const context = vm.createContext({
+      sttProvider: provider, sttLang: 'en', apiKey: 'fixture-gemini', __dirname: '/server',
+      wavData: Buffer.from('fixture-audio'),
+      readHubSettings: async () => ({ openaiAuthMode: mode, openaiApiKey: 'fixture-openai' }),
+      usesChatgpt: s => s?.openaiAuthMode === 'chatgpt',
+      aiCli: { isCliProvider: p => ['claudecode', 'codex'].includes(p) },
+      aiLocal: { localStt: async (_audio, lang) => { calls.push(['local', lang]); return 'สวัสดี'; } },
+      aiOpenai: { stt: async ({ apiKey }) => { calls.push(['openai', apiKey]); return 'hello'; } },
+      _transcribeAudio: async () => { calls.push(['gemini']); return 'hello'; },
+      providerModelFor: () => 'fixture-model',
+      process: { stdout: { write() {} } },
+      res: { writeHead() {}, end: body => { response = JSON.parse(body); } },
+    });
+    await vm.runInContext('(async () => {' + server.slice(start, end) + '})()', context);
+    assert.equal(calls.length, 1, provider + ':' + mode);
+    assert.equal(calls[0][0], expected, provider + ':' + mode);
+    if (expected === 'local') assert.equal(calls[0][1], 'auto');
+    if (expected === 'openai') assert.equal(calls[0][1], 'fixture-openai');
+    assert.equal(response.text, expected === 'local' ? 'สวัสดี' : 'hello');
+  }
+});
+
+test('client keeps private ChatGPT and CLI model choices separate without requiring API keys', () => {
+  const context = vm.createContext({ hubSettings: {}, geminiKeyReady: () => false });
+  vm.runInContext(extract(client, '_aiProviderCfg') + '\n' + extract(client, '_aiProviderReady'), context);
+  const settings = { openaiAuthMode: 'chatgpt', chatgptModel: 'private-model', openaiModel: 'api-model',
+    codexModel: 'codex-model', claudeCodeModel: 'claude-model' };
+  for (const [provider, expected] of [['openai', 'private-model'], ['codex', 'codex-model'], ['claudecode', 'claude-model']]) {
+    context.hubSettings = { ...settings, aiProvider: provider };
+    assert.equal(context._aiProviderCfg().model, expected);
+    assert.equal(context._aiProviderReady(), true);
+  }
+  context.hubSettings = { ...settings, aiProvider: 'openai', openaiAuthMode: 'api' };
+  assert.equal(context._aiProviderCfg().model, 'api-model');
+  assert.equal(context._aiProviderReady(), false);
 });

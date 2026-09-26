@@ -299,6 +299,10 @@ if (need.audio) startVisibleAudioRefresh();
         if (window.Deck && d && d.speaker && Number.isFinite(Number(d.speaker.volume))) {
           window.Deck.refreshStates({ masterVolume: Number(d.speaker.volume) });
         }
+        // ...and output-device keys follow which output is the default.
+        if (window.Deck && d && !d.unavailable) {
+          window.Deck.refreshStates({ outputDevice: (d.speaker && d.speaker.id) || '' });
+        }
         if (window.CustomWidget) window.CustomWidget.onData('audio', d);
       } catch {}
     });
@@ -496,8 +500,13 @@ if (need.audio) startVisibleAudioRefresh();
         if (typeof aiFeatureEnabled === 'function' && !aiFeatureEnabled('guardian')) return;
         const d = JSON.parse(e.data);
         const key = d.type === 'gpu' ? 'guardian_alert_gpu' : d.type === 'mem' ? 'guardian_alert_mem' : 'guardian_alert_cpu';
-        if (typeof showHubToast === 'function') showHubToast('Guardian', t(key).replace('{v}', d.value), '');
-        if (window.Ambient && typeof window.Ambient.onGuardianAlert === 'function') window.Ambient.onGuardianAlert(t(key).replace('{v}', d.value));
+        // The RAM alert's {v} is a percentage, not a temperature: only the two
+        // thermal ones go through the unit conversion.
+        const text = d.type === 'mem'
+          ? t(key).replace('{v}', String(d.value))
+          : fillTemps(t(key), { v: d.value });
+        if (typeof showHubToast === 'function') showHubToast('Guardian', text, '');
+        if (window.Ambient && typeof window.Ambient.onGuardianAlert === 'function') window.Ambient.onGuardianAlert(text);
       } catch {}
     });
     es.addEventListener('briefing', e => {
@@ -606,6 +615,22 @@ if (need.audio) startVisibleAudioRefresh();
       // The server heard "Hey Xenon" — open the voice session (no-op when one
       // is already live; the server-side 409 guard covers multi-tab races).
       if (typeof window._aiHandleWake === 'function') window._aiHandleWake();
+    });
+    es.addEventListener('page_hotkey', (e) => {
+      // A global page shortcut was pressed on the PC. The server broadcasts the
+      // target rather than resolving it: pages belong to a device's own layout,
+      // so every dashboard watching decides for itself — a phone with different
+      // pages, or none, ignores an id it does not have instead of jumping
+      // somewhere arbitrary.
+      try {
+        const pager = window.DashboardPager;
+        if (!pager) return;
+        const target = String(JSON.parse(e.data).target || '');
+        if (target === 'next') pager.goByDelta(1);
+        else if (target === 'prev') pager.goByDelta(-1);
+        else if (target === 'back') pager.goBack();
+        else if (target) pager.goToPage(target);
+      } catch {}
     });
     es.addEventListener('spotlight_hotkey', () => {
       // Global search hotkey. Only the NATIVE kiosk can host the frameless

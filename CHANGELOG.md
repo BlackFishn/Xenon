@@ -12,9 +12,207 @@
 All notable changes to Xenon are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [v4.11.10] - 26-09-2026
+### ✨ Added
+- **Xenon AI can use your Claude or ChatGPT subscription instead of an API key.** Two new providers in **Settings → Xenon AI**: **Claude Code** and **Codex**. Xenon AI then answers through the official Claude Code or Codex program installed on your PC, signed in with your own Claude or ChatGPT plan, so there is nothing to pay per message.
+
+  Xenon never sees, stores or forwards your credentials: you sign in inside the program, through Anthropic's or OpenAI's own sign-in, and Xenon only asks the program for an answer. This is also the only way Anthropic allows a Claude subscription to be used outside its own apps, which is why Xenon does not offer a "Sign in with Claude" button.
+
+  The settings panel tells you whether the program is installed and signed in, with your plan, and if not, exactly what to run; when Xenon cannot tell, it says why. You pick the model from a menu filled by the program itself, the same list its own model picker shows for your account (today Sonnet 5, Opus 5.5, Fable 5.1 and Haiku 4.5 for Claude Code, and Codex's own catalog for Codex), so new models appear there without waiting for a Xenon update. Under the menu you see the exact model in use. Asking for the list sends no message, so it costs nothing. Codex does not need to be installed as a terminal command: Xenon also finds the copy that comes with the Codex desktop app or the ChatGPT extension for VS Code and Cursor.
+
+  The assistant can do everything it does with the other providers: change the theme, set up Deck keys, add tasks and timers, control lights and media, search the web, and the rest. Xenon's own tools reach the program through a small bridge that lives for a single answer, with a key of its own that stops working when the answer is done. The program's own tools, such as its terminal and file access, stay switched off: through Xenon it can only use Xenon's tools.
+
+  What to expect. It is slower than an API key: a few seconds for a plain answer, around ten when it uses a tool, because the program starts for each answer. It uses the same subscription limits you code with. Voice works and stays on the free local speech. The features you start yourself (AI search, the disk advisor, Performance Mode planning) use your subscription too, while Bit's automatic one-liners never do.
+
+- **One Deck key that switches between two audio outputs.** Asked for on Discord by someone who had built it by hand on a Mac: a shell script that flipped the sound between the monitor's speakers and a USB DAC, and then told Xenon which one was on so the key could change its icon.
+
+  **Switch between two outputs**, in the Audio actions, does all of it. Pick the two devices from the list of what is connected, and each press moves the sound to the other one. If the sound is on a third device, the first press goes to the first one.
+
+  The key's **Look while active** now shows up when the second device is playing, and it follows the output that is really active, not the last press. Change the output from the Windows sound settings or the Mac menu bar and the key catches up by itself within a few seconds, which the script could never do. After a press on the key itself it changes straight away. A plain **Output device** key does the same thing for its own device: it lights up while that device is the one playing. Keys you already have pick this up the next time you save them.
+
+  If one of the two devices is unplugged, the key tells you that device is not connected instead of switching to the one that is left. On a Mac, switching outputs still needs SwitchAudioSource (`brew install switchaudio-osx`), the same as the Output device key.
+
+  Widgets can do it too. `{ type: 'audioDeviceToggle', deviceA, deviceB }` is part of the existing **audioDevice** permission, so a widget that can already choose your speakers does not need to ask again, and it can ship the toggle as a Deck macro. Xenon decides which way to go at the moment of the press, so a widget never switches the wrong way because its last audio update was a few seconds old. Documented in [WIDGET_SDK.md](docs/WIDGET_SDK.md) → *Moving the sound between two outputs*.
+
+- **Ambient can be the screen Xenon starts on.** Asked for on Discord by someone whose Ambient scene is their whole dashboard: *"On startup/restart I need to press the button in the top left for ambient mode. Having the option to skip that and boot straight into what the button press would take me to would be swell."*
+
+  **Settings → Ambient → Open at startup** does exactly that. Every time Xenon starts, the PC boots or the app reloads after an update, your scene opens on its own and stays up until you close it.
+
+  The inactivity start that already existed could not do this job, and the reason is worth knowing if you use both. It is a screensaver: it waits for the whole PC to go quiet and closes the moment you use the PC anywhere, which is the opposite of a scene you look at while working on another screen. Open at startup behaves like pressing the button yourself. Moving the mouse, typing on the main screen or starting a game leaves it where it is. The scene's own buttons still do what they did before, so tapping the weather still opens the weather view.
+
+  It waits for anything you have to answer or read first, the morning greeting or a dialog, rather than landing on top of it. And a start that is still asking the first-run questions, the choice of screen or the short tour, is left to them: the tour points at parts of the dashboard a scene would cover. The next start opens as usual. If your scene is a community one you have not approved yet, it opens the classic scene instead of asking for permission the moment the PC boots.
+
+- **The Weather tile can show current conditions on one line.** Asked for on GitHub (#130): *"Is there a way to not waste that entire screen space on that blue background with a moon? I just want the next hours/days, with a summary of the current temp/feels like."*
+
+  **Settings → Weather → Current conditions → One line** swaps the big animated card for a single row: the condition icon and the temperature, the condition with feels-like right under it, and wind and precipitation a step quieter on the right. Everything below it, details, hours and days, gets the space the card used to take. On a tile shared with other widgets that is the difference that matters: in the height where the big card leaves room for today's forecast only, the row leaves the hourly strip and all three days in view with space to spare, so the tile can be made shorter and the rows handed to something else.
+
+  The obvious catch was that the big card is also the button that opens the full weather view, so shrinking it could have cost you the way in. It doesn't: the row is that button now, and a small arrow at its end says so, because a strip does not look tappable the way the big card did. Tapping opens the full weather view over the dashboard, as before; the tile itself never grows, so nothing around it moves. Wind and precipitation follow the same **Details to show** toggles as the big card, and on a narrow tile they step aside, precipitation first. Feels-like never does.
+
+  It stays a strip across the top at any size. The wide layout that puts the card beside the sections was the other way to save height, and the request was clear that it needed the width for other things, so a compact tile never switches to it. The big card stays the default, and the modal is unchanged.
+
+- **A widget can turn the dashboard's page.** The same move the new page shortcuts make, handed to the SDK: a control-room tile with a button per page, or one that brings the media page up when something starts playing.
+
+  `{ type: 'dashboardPage', page: 'work' }`, or `next` / `prev` / `back`. Only the screen the widget is on turns — pages belong to a device's own layout, so a phone and a desk PC do not have the same ones and neither should follow the other's widget — and a page this screen does not have is refused rather than redirected somewhere arbitrary.
+
+  It is its **own permission**, not a corner of an existing one: a widget that can turn the page can take the screen away from what its owner was reading, which is a different kind of act from drawing inside its own tile. There is no confirm dialog, because what travels is one of the user's own page ids and the result is visible the instant it happens.
+
+  Documented in [WIDGET_SDK.md](docs/WIDGET_SDK.md) → *Turning the dashboard's page*.
+
+- **Turn the dashboard's page without touching it.** Asked for on Discord by someone running Xenon on a second screen: *"switch or toggle dashboard pages while another app has focus."*
+
+  A second screen is something you look at while working in something else, which is exactly when reaching over to swipe it is the wrong move. **Settings → General → Page shortcuts** binds key combinations that fire while any other application has focus: one per page, **next** / **previous**, or **back to the last page** — which is what "flip between my two pages" really means, and it keeps meaning it once there are three.
+
+  Each row says for itself whether the desktop gave it out. A combination another app already owns (PowerToys Run famously owns Alt+Space) reads *already used by another app* **on that row**, and the other shortcuts still work — one clash no longer costs you the rest. The press reaches every screen watching, and each one turns to that page if it has it, so the phone in your pocket ignores a page only the desk has instead of jumping somewhere arbitrary.
+
+  Nothing new is watching your keyboard: the same helper that has always held the Spotlight shortcut now holds a list instead of one, on one message loop, and on Linux each shortcut is an entry in your desktop's own keyboard settings (GNOME) that you can see and delete like any other.
+
+- **And every disk, one by one.** The other half of the same request: *"let a widget list all detected disks and allow the user to select which ones to display individually."* Nothing per-disk was collected on any platform, so this is three implementations behind one shape.
+
+  The **`diskIo`** stream gives each **physical** disk its read and write throughput, its read and write **IOPS**, a stable id, the model, the serial, the size, and the volumes that live on it — so a row can read *"Samsung 990 — C:, D:"* rather than a device name. Partitions are folded into their parent, because a partition's counters are already inside it and listing both would double every number on screen.
+
+  **Disk temperature is `null` on Windows and macOS, and a real number on Linux** where the kernel publishes one. That is a decision, not an omission: reading it elsewhere means a SMART query, and the way to get it would run that on every sensor read — waking a spun-down mechanical drive every few seconds for everyone, including the people with no disk widget. Until it can be charged only to whoever asks for it, `null` is the honest answer.
+
+  Pulled like `network`, so on Windows its three CIM queries run only while a granted widget is on screen asking for them.
+
+- **A widget can now see every network adapter separately.** Asked for on Discord by someone building a workstation monitor on the SDK: *"list all system network adapters instead of only the currently active/global traffic"* — a 10GbE NAS link, the internet link and a VMware VMnet, each on its own graph.
+
+  The data was always there and always thrown away: all three collectors read every adapter and returned the sum. The new **`network`** stream carries them one by one — a stable id, **the name you gave the adapter in Windows**, the hardware description, whether it is up, the link speed, and read/write throughput per second, plus the raw counters if you would rather do your own maths. Virtual adapters are included, which is the point of the request; `downloadBps`/`uploadBps` stay the sum of the **physical** ones, because a VPN or a VMnet carries the same packets a second time.
+
+  It is its own grant rather than a field on `system`: this is traffic, not a sensor, and the permission dialog says which it is. It is also **pulled**, not pushed — a widget asks at the cadence its graph wants, and while none is on screen asking, nothing runs. An adapter that has only been seen once reports `null` rather than a spike the size of its lifetime counter, and one that is unplugged simply leaves the list.
+
+  Documented in [WIDGET_SDK.md](docs/WIDGET_SDK.md) → *Per-adapter network*.
+
+- **The File transfer tile now explains itself.** Asked for on Discord: *"how did you pass a file from phone to PC? It isn't written anywhere — put a button or an info in the widget that explains it on click."*
+
+  It was written down — in `FEATURES.md`, which is not where anybody is standing when the question comes up. The tile said *"drag files here, or send them from your phone"* and stopped there, and the step that matters most is the one it could never have shown you by existing: the phone has to be **paired** first, or it cannot send anything at all.
+
+  A **?** beside the title opens the steps. From the phone: pair it once (**Settings → Phone → Add device**, then the phone's camera at the QR code), which opens Xenon **in the phone's browser** — add it to the home screen and it becomes an icon you can reopen any time — then **Send to PC** in the bottom bar. From the PC: drag the files in, then download them on the phone. Under that, where arriving files land and how to move that folder — and then the limits (same network or Tailscale, one file at a time, and on an iPhone the two things iOS itself does not allow), taken from the phone sheet that has worded them since 4.11.0 rather than written a second time.
+
+  It is a button and not four permanent lines, because a tile you have used once should be a list of files and not a manual. It opens **over** the list rather than above it, so a short tile does not lose its files to it, and the phone's sheet gets the same **?** in its own bar.
+
+- **Discord servers fold away in the Channels tab.** Asked on Discord: *"It would be nice to be able to collapse the Discord servers underneath the Discord Channels feature so your not forever scrolling."*
+
+  Every server heading is now a button. Tap it and its voice channels fold away behind a caret, with a count of how many are in there while it is shut — so a server you never join costs one line instead of fifteen. **Collapse all** / **Expand all** sits above the list and does the lot in one tap; it is one button rather than two, because while anything is open it closes everything and once everything is closed it opens it again.
+
+  What you closed is **remembered** — the same request asked for it to stick "on future uses" — and remembered by the server's id rather than its name, so it survives a rename. **Favourites** never folds: pinning a channel to the top is the shortcut past the scrolling, and hiding it would work against the point.
+
+  A rename is not the only thing the id fixed. Channels used to be grouped by server *name*, so two servers that happen to share one (a "Friends" and another "Friends") were silently merged into a single list. They are now two, as they always were in Discord.
+
+  SDK widgets on the `discordChannels` stream get the `guildId` too, so they can group and remember servers the same way — see [WIDGET_SDK.md](docs/WIDGET_SDK.md).
+
+### 🐛 Fixed
+- **Bigger Store items install.** The Store accepted an item's install code only up to 2 MB, and a supporter pack with painted background images, a widget and an Ambient scene is around 3.5 MB once locked: it had to be split into separate items. The limit is now 4 MB, so a pack like that is one item and one install. On an older version those items say "Requires Xenon v4.11.10" instead of offering an install that would fail.
+- **Settings now tells you whether the Media tile's sound wave can work on your PC.** Asked on Discord: *"how do I install xenon helper for media visualization?"* The wave draws the sound the playing app is really making, and that measurement only exists through Xenon Helper on Windows. Without it the wave simply stayed empty and nothing said why. Next to the wave switch you now see whether Xenon Helper is running, missing, too old or stopped, and what to do about it: running INSTALL.bat again installs or updates it. On a Mac or Linux it says the wave is Windows only, instead of suggesting an install that cannot help.
+
+  Worth knowing if your player seems ignored: the wave, like the Media tile, follows what Windows reports as playing. Some players, Winamp among them, only report it with a small plugin.
+
+- **A streaming login that fails now says why.** Reported on Discord: connecting Discord ended in *"Could not start login. Try again"* and nothing else. That sentence was where every failure without a message of its own ended up: an error inside Xenon, a server that did not answer, or credentials that were missing. Each one now shows its reason and, where there is one, Xenon's own words about it. The same goes for Twitch, YouTube and Spotify.
+
+- **The voice orb no longer needs a Gemini key when Xenon AI runs on Claude or ChatGPT.** Push-to-talk in the chat already transcribed your voice with the matching provider, but the voice orb sent it to Gemini whatever you had chosen, so with Claude or ChatGPT and no Gemini key it could not hear you. It now uses the free local transcription with Claude, and OpenAI's own transcription with ChatGPT, exactly like the chat does.
+
+- **A custom widget follows its own tile's accent and background.** Reported by a widget author: the Accent set in a tile's customization showed on the tile, while the widget inside it kept drawing the dashboard's global accent.
+
+  Xenon hands each widget the colours of the tile it sits in, read from the tile itself. Two of those colours, accent and background, are set up so that a theme change fades smoothly, and the browser hands those two back in a different format from the others. The step that tidies the colours before sending them only understood the usual one, so it threw both away and sent the global colours instead. It now understands both formats. The tile's accent and background reach the widget, and every other colour was already arriving correctly.
+
+- **The slideshow keeps changing pictures while you play.** Reported on GitHub (#130): *"the photos changing still freeze when in game on the latest version."*
+
+  **Stop GIFs while gaming**, on by default, was meant to spare the game an animated GIF redrawing itself every frame. It did more than its name said: it also stopped the rotation, so a folder of photos sat on the same picture for the whole session. On a Xeneon Edge the screen is right next to the game and you look at it the whole time, so that was the wrong trade.
+
+  Now a game only keeps animated images still. The photos carry on changing at the time you set, each new one loading behind the current picture and taking its place when it is ready, so the tile never flashes blank. The back and forward arrows work during a game too; before, they did nothing until the game closed. The slideshow still stops completely when nobody can see it, with the dashboard hidden or Settings open over it. The hint under the option now says what it does.
+
+- **A Deck key's Hold works from a touchscreen on macOS.** Reported on Discord by someone with three AppleScripts on one key, Tap, Double and Hold, where Hold never fired.
+
+  macOS has no touch support for USB touchscreens, so apps like Touchscreen Gestures turn your touches into mouse clicks, and a long press into a right click. The Deck only counted a hold when the left button stayed down for half a second, so on that setup Hold could not happen, and the right click ran the Tap action instead. A right click on a key now runs its Hold action straight away. This also gives you a quick way to reach Hold with a mouse. Keys without a Hold action behave as before, and a long press on a touchscreen with real touch input works exactly as it did.
+
+- **An update no longer resets the style you gave each card.** Reported on GitHub (#130): *"there is a (minor) bug on update where all of the opacity settings I set per card reset."*
+
+  At startup the dashboard reads your saved layout a moment before the part of the code that checks a card's style has loaded. Until now, a style it could not check yet was treated as no style at all. Usually that did no harm, because the copy on the PC arrived straight after and put everything back. But if anything saved the layout in that short window, which the first start after an update makes more likely, the stripped version counted as the newer one and replaced the copy on the PC. After that there was nothing left to restore it from.
+
+  It hit every per card setting, not just opacity: colours, font, corner radius, glass, border, shadow, shape, background and decorations. It also explains an odd detail. A widget you had duplicated kept its style while the original next to it lost it, because copies already had this protection and originals and tab groups did not. They all have it now. The style is carried through unchecked for that one moment and checked properly on every read after it, and by the server on every save.
+
+  Styles that were already lost cannot come back from this fix, so the cards will need setting again once. After that they stay.
+
+- **Xenon now checks WHICH Hue bridge it is talking to before handing over its key.** Raised alongside a batch of local customisations asking for *"secure discovery, pairing and API communication"* with Philips Hue.
+
+  A Hue bridge's certificate is signed by Philips' own private CA, so no public trust store can verify it and certificate checking has to stay off. That is a decision about the **signature**, and it was quietly standing in for a decision about the **peer**: with nothing else checked, Xenon sent its bridge key to whatever answered the stored address. It takes something on your own network, so it is not much of an attack — but the ordinary way to get there is a DHCP lease moving the bridge's address onto another device, and then the key goes to a stranger's box because the router reshuffled.
+
+  The certificate is no longer trusted for being signed; it is checked for being **the bridge's**. A Hue bridge's certificate carries its bridge id as its name, and the bridge id is exactly what discovery and pairing already read — so pairing, the one moment the bridge is standing in front of you with its button pressed, now records it alongside the key it hands out. An install that paired before this still gets the check: the id is read from the bridge once and remembered.
+
+  A peer that cannot be identified is refused rather than waved through, and the refusal happens while the socket is being inspected — before the request that carries the key is allowed to use it, not after.
+
+- **The Playback tile no longer pushes the artist name out through its own bottom edge.** Reported with a screenshot of the line sliced in half along the frame: *"the title is limited to 2 lines and if the text is longer, ellipsis is inserted. The artist name is moved outside the frame."*
+
+  The tile rearranges itself as it is resized, and three separate steps hand the title a **second line**. Each of them was written about the tile's width, with its height taken on trust — and below roughly 200px that trust is misplaced, because the second line does not come out of empty space. It comes out of whatever is under it. Which thing got pushed out depended only on which rule had granted the line: on a wide tile the artist, on a narrow one the transport buttons, and the tile clips either without a word.
+
+  A short tile now gets one line and an ellipsis whatever its width — which is what the report itself proposed — and shorter still the provider chip steps aside before the title has to. Underneath that, two things now hold regardless of the numbers: neither the title nor the artist can be squeezed below its own line (a box shorter than a line is not a shorter title, it is a row of half-letters), and the text block can never be taller than the row it sits in.
+
+  Measured across every tile size from 220×110 to 1000×480 with three title lengths: **328 of 4560 sizes put something outside the frame, the worst by 71px. Now none of them do.**
+
+- **"Spotify is busy" now says for how long.** Reported from the same thread: *"I hit the rate limit, waited 24 hours, and the limit persists"* — against a dashboard that kept promising to retry shortly.
+
+  Spotify answers a refusal with how long to wait, and Xenon already held itself to it. It just never passed the figure on, so every message read the same whether the wait was four seconds or the rest of the afternoon — and at the long end "retrying shortly" reads as a broken integration rather than as a wait with an end. Anything from two minutes up now names the wait, everywhere the tile mentions it; below that the old wording is still the honest one.
+
+  Worth knowing if you see it often: **the quota is your own Spotify app's**, not Xenon's — the Client ID in Settings is yours, and an app still in Spotify's development mode has a much smaller allowance than one with extended quota.
+
+- **A Spotify list that failed to load is no longer shown as an empty one.** Reported as *"preserve loaded content during temporary failures and provide clearer status messages."*
+
+  The widget already rode out Spotify's brief refusals everywhere else — the player keeps its last state, the queue is kept on purpose, the transport controls fall back to Windows' own media keys. The **Devices** and **Playlists** lists did the opposite: any answer that was not a list became an empty list, which the panel then reports as **"No devices found"** — a confident statement that the account has none. The Devices tab reloads on every poll while it is open, so one refused request was enough for your speakers to disappear until a later one happened to succeed.
+
+  A list that loaded now stays put, and the panel only says something is wrong when it has nothing to show at all — and then it says which: Spotify is busy, the account is not linked, or it could not be reached. A genuinely empty account still reads as empty, which is the half of this that was worth keeping.
+
+- **A native helper crashing could take the whole server with it.** Reported as *"handling for a broken connection to the Living Index helper so Xenon can continue running and use its existing fallback behavior."* It was every helper, not that one.
+
+  Xenon talks to its native helpers over a long-lived pipe — the file index, file search, the phone host, screen capture, the PowerShell collector worker, the media host, the disk shell-delete child and the dictation recorder. Each wraps its write in a `try`/`catch` and retires the helper when it exits, which looks like enough and is not: a write that **races** the helper's death — exactly what happens when one crashes mid-request — fails with `EPIPE` **after** the call returns, reported as an event on the pipe rather than as a thrown error. Nothing was listening, and an unheard error of that kind ends the process. A helper dying, which every one of these features is written to survive, instead closed the dashboard.
+
+  All eight now listen. The long-lived hosts take themselves out of service, so the next request gets a fresh one instead of timing out against a dead one; the one-shot children are already finished with by the time it matters. Reproduced first — the crash is a race, so the test provokes it rather than describing it — and a second test walks the source for any child pipe Xenon writes to without listening.
+
+- **°F now means °F everywhere, not only in the weather.** Reported as part of a batch of local customisations: *"I extended the selected Celsius/Fahrenheit preference to CPU/GPU header temperatures and ambient notifications, including thermal warnings and session summaries."*
+
+  The setting is labelled **Temperature unit**, and it reached the forecast and nothing else. Anyone running Xenon in °F read the weather in °F and the CPU and GPU headers, the Guardian overheating toasts, the sustained-thermal warning, the unusually-hot notice and the game-session recap in °C — all on the same screen, none of them saying which was which.
+
+  Every one of those now follows the preference, in all eleven languages, down to the Settings line that quotes the thresholds the thermal alert fires at. Nothing stored changed: Celsius remains the only unit inside Xenon — the sensors, the saved history, Guardian's thresholds — and the conversion happens at the moment of drawing, so switching the unit needs no re-fetch and never reinterprets a number that was already written down.
+
+- **A Deck key set to Image Fit → Icon lost its title.** Reported from a Xeneon Edge: *"Fill or Fit: the key label is visible. Icon: the key label is not visible. I tried S, M and L for the label and it makes no difference."*
+
+  The cap lays its icon and its title out as a column. The title is one line and can be squeezed to nothing; the icon carried an explicit pixel size and could not be squeezed at all — so when the two did not both fit, the title was the only thing that gave, and it gave all of it. **Fill** and **Fit** never showed it because their title is a scrim painted over the picture rather than a row under it, and **Icon** was the worst case of the three: its picture is sized to half the cap (against 40% for a built-in vector), and as an inline image it also dragged the descent of the icon's own font along beneath it — a band of dead space as tall as a sixth of the icon, taken straight out of the title. At icon size **L** on the Edge, where 4.11.9 lets the icon keep growing with the cap, that came to more than the cap had.
+
+  The title is now the fixed part of the cap and the icon is what yields: it keeps its size wherever there is room — which is almost everywhere, so nothing moves on a normal deck — and gives room back only when the alternative is a caption cut in half. The dead band under the picture is gone. Built-in vectors got the same treatment, which also fixes a title clipped on a small cap by a key bound to a live value.
+
+- **The list of received files could be wiped at startup, and the files with it.** Reported as *"in the images widget, if I delete one photo they all get deleted and there is no way back."*
+
+  The delete was not the cause. At startup Xenon checks its list of received files against the folder holding them, and a folder it **could not read** was treated as an **empty** folder — so every entry was dropped as "the file is gone", and the emptied list was written over the good one. One unreadable moment (antivirus holding the folder, a OneDrive-backed profile not yet materialised, a half-mounted user profile) was enough. The dashboard went on showing the old list until the next request made the server answer with nothing, which is exactly why it looked like the delete did it — and the startup after that deleted the files themselves, as files nothing referenced any more.
+
+  A folder that cannot be listed now changes nothing: every entry is kept, nothing is written, and the next clean start reconciles as before. A file that cannot be inspected keeps the size it was stored with instead of being dropped. Reproduced and pinned in the tests, both ways — a blind start must lose nothing, and a real one must still notice a genuinely missing file.
+
+- **Removing a file from the list can be undone.** The other half of the same report. The bin is labelled *"remove from the list"*, but with the copy into your own folder turned off that list holds the **only** copy — so it was a permanent delete wearing a mild label. The row now leaves the list immediately and offers **Undo** for twelve seconds, with the file kept aside until the offer expires. A delete that fails says so, instead of looking like it worked.
+
+- **The Deck's "Output device" key can finally be filled in.** Asked on Discord after trying the Sound control panel name, the sound-processor name (*"NVIDIA HD Audio, Realtek HD Audio"*), both together, and the PowerShell device names — *"all do not work and give an error"*.
+
+  They could not have worked. The key's Device field was a **text box**, but the server only accepts an output device's **id** from the live enumeration — an opaque string like `Speakers\Device\High Definition Audio Device\Render`, which is not a name anybody would call their speakers. So every name anyone could reasonably type was refused. The check itself is deliberate and stays: that same id namespace also names *microphones*, and accepting an unmatched string would turn "move my sound to the other speakers" into "change my default mic".
+
+  The field is now a **picker**, like every other Deck field that chooses from a live list. It lists the output devices that are actually connected, by name, marks the one in use, and stores the id for you. A key already pointing at a device that is unplugged right now keeps it instead of being quietly blanked when you open the editor. The key is also hidden on machines with no audio control to enumerate with, rather than offered and always failing.
+
+- **The Settings sidebar gives its space back to the categories.** The block under the list held five stacked rows: Support, Community Discord, Report a bug, Check for updates and the version. On a 1600×900 desktop that was 178px of a pane 202px wide; on a Xeneon Edge it was most of the pane, and the categories scrolled through what was left. Now it is two rows of two: Support and Discord side by side, Report bug and Updates under them, then the version. Every action is still there and still labelled; the labels are short and the full wording is in the tooltip. When an update is available the Updates button gives way to the "Update available" pill as before, and Report bug takes the whole row.
+
+  The block is **pinned**, on every screen: those four are in view the moment Settings opens, without scrolling to the end of the list. 4.11.8 had let it scroll away on short screens because it was too tall to pin; small enough now, it stays. And the "Sostieni Xenon" entry at the very end of the category list is gone, a duplicate of the Support button under it, which now opens that page.
+
+- **Settings rows are rows, not boxes inside boxes.** Every on/off option in Settings, 131 of them, was drawn as a bordered, darker box inside its section card, with the label and its explanation side by side on one line, each squeezed into half the width and the text touching the edge of the box. Now an option is a plain row: checkbox, bold label, the explanation under it at full width, and a highlight only when you hover. Nothing moved and nothing was renamed; the pages just read as lists. The light and comic themes, which painted those boxes their own way, follow. Two more things the same pass measured on every page and fixed: a card that ended with a row, a note or a button had its last line 1px from its own border, and now has room under it; and on the two-column pages (Generale, Aspetto) cards were laid out in rows, so a short card beside a tall one left a hole under it. Cards now pack like a mosaic, each into the first free space.
+
+- **The bar at the bottom of Settings reads as two controls, not a paragraph.** Restart and Reset each had their explanation inline, beside the button, so the row was one long line of small print with two buttons somewhere in it, and on a narrower window the note on the left was cut to "Le preferenze restano s…". Each explanation now sits under its own button, two short lines, with the note and the saved-state message on the left and nothing truncated.
+
+- **The live file index holds its place in memory at a third of the cost, and the number Settings shows for it is the real one.** Measured on the author's PC with three drives indexed (1.98 million files): the index process held **814 MB**, while Settings said "~603 MB". The figure came from the .NET garbage collector's view of its own heap, not from the process, so it never counted what the process actually kept.
+
+  Three things changed inside the index. File names are stored once, as compact UTF-8, instead of as a full .NET string each (plus a second lowercase copy for the 40% of names that carry a capital letter). Folders are a tree instead of 280,000 full-path strings. And finding a path again goes through a table of integers instead of a dictionary entry per file. On the same 1.88 million files of C:, the index now sits at **156 MB** at rest, and search and the Disk map answer exactly what they did before (verified answer by answer against the previous build; the Disk map's folder totals now also list folders that only contain subfolders, which used to be missed).
+
+  Two more leaks are closed. After answering a burst of requests the process used to keep the garbage from those answers for as long as it sat idle (measured: 110 MB above the index for a whole hour). It now hands that memory back to Windows within seconds of going quiet. And the buffer that collects file changes was 64 KB, a ceiling that only applies to network shares: every time a build tool overflowed it, the whole drive was re-read (minutes at a full core). It is 2 MB now.
+
+- **The index's file limit follows your RAM, and Settings warns you before you hit it.** The limit was 2,000,000 files on every PC. It is now derived from the machine (2 million on 8 GB, 6 million on 32 GB), and **Settings → Search** says when the index passes 85% of it, with the percentage and the exact limit, so you can trim the list of folders before search silently stops seeing new files. The "limit reached" message still names the drive that was left out.
+
+  *The index lives in the Xenon Helper; a fresh install gets the new one, and an existing install refreshes it with the next update.*
+
 
 ### Changed
+- **Sync fork production with main v4.11.10.** Add upstream Claude Code/Codex providers without replacing private ChatGPT authentication or Thai voice behavior. Keep the custom Spotify player, Ambient editor, power-plan picker and YouTube playback while adopting retry guidance, page shortcuts and the 0.14.0 helper protocol.
 - **Sync fork production with main v4.11.9.** Keep the custom Spotify player and stable volume while adding selectable Up Next rows. Preserve PresentMon 2.5.1, swap-chain isolation and average FPS while exposing main's present/display FPS detail. Native shell updates require a rebuilt executable.
 - **Spotify volume no longer snaps back to stale readings.** Keep the released value while Spotify confirms it, serialize rapid adjustments, ignore older player responses, and restore confirmed values after failures. Volume dragging no longer pauses the track clock, and its handle remains visible.
 - **Spotify Playing uses a blurred album backdrop and clearer layout.** Fill the player card with the current cover, keep the foreground art sharp, and use a theme-aware scrim for readable controls. Tall wide players show square artwork up to 348 px, a lower title/control group, seek above playback, and a neutral volume row without a divider. Artwork adapts to available height so wrapped titles and touch controls remain visible. Library tabs, header and controls retain the dashboard theme.

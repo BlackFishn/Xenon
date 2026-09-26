@@ -59,11 +59,26 @@
   let viewport = null;     // the scroll-snap container
   let dotsHost = null;     // element that holds the dot buttons
   let currentIndex = 0;
+  // Declared with the rest of the module state, not beside goBack(): a `let`
+  // is in its temporal dead zone until its own line runs, and setCurrentIndex
+  // writes this during init.
+  let lastPageId = null;   // the page we were on before this one (see goBack)
   let scrollSettleTimer = null;
   let entered = new Set(); // ids whose onEnter has fired at least once
 
   function getCurrentPage() {
     return pages[currentIndex] ? pages[currentIndex].id : null;
+  }
+
+  // The page before this one. This is what a single "toggle between my two
+  // pages" shortcut actually wants, and it keeps working when there are three.
+  // Returns whether there WAS a previous page: an SDK widget is told whether its
+  // action did anything, and "nowhere to go back to" is a real answer rather
+  // than a silent success.
+  function goBack() {
+    if (!lastPageId) return false;
+    goToPage(lastPageId);
+    return true;
   }
 
   // ── Render parking ─────────────────────────────────────────────────────────
@@ -259,6 +274,11 @@
   function setCurrentIndex(index) {
     const next = clampPageIndex(index, pages.length);
     if (next === currentIndex) { renderDots(); return; }
+    // The page we are leaving, by ID and not by index: a page added or removed
+    // between two presses renumbers every index, and "go back" would then take
+    // you somewhere you have never been. An id that no longer exists simply
+    // does nothing, which is the honest answer.
+    lastPageId = pages[currentIndex] ? pages[currentIndex].id : null;
     const leaving = pages[currentIndex];
     if (leaving && leaving.onLeave) { try { leaving.onLeave(); } catch (e) { console.error(e); } }
     currentIndex = next;
@@ -435,7 +455,7 @@
   }
 
   if (typeof window !== 'undefined') {
-    window.DashboardPager = { init, registerPage, setLabel, goToPage, getCurrentPage, isOnCurrentPage, setActivePages, setPages, renderDots, refreshSwipe };
+    window.DashboardPager = { init, registerPage, setLabel, goToPage, goByDelta, goBack, getCurrentPage, isOnCurrentPage, setActivePages, setPages, renderDots, refreshSwipe };
     // Shared rule for the layout module so "which pages are active" lives in one
     // place. Caller supplies the current (dynamic) page-id list.
     window.computeActivePagesForLayout = (allPageIds, widgets, editing) => computeActivePages(allPageIds, widgets, editing);

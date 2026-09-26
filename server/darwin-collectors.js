@@ -480,6 +480,88 @@ async function disks() {
   }
 }
 
+// --- Per-disk I/O: ioreg ----------------------------------------------------
+// Asked for on Discord for an SDK monitoring widget. `iostat` is the obvious
+// tool and the wrong one here: on macOS it reports COMBINED transfers per disk,
+// with no read/write split, which is half of what was asked for. The IOKit
+// registry has both, as cumulative counters on each IOBlockStorageDriver:
+//
+//   +-o AppleAPFSMedia ...
+//     "Statistics" = {"Bytes (Read)"=123,"Operations (Read)"=4,
+//                     "Bytes (Write)"=567,"Operations (Write)"=8, ...}
+//     "BSD Name" = "disk0"
+//
+// server.js turns the counters into rates with the same inter-poll delta it
+// uses for the network ones.
+//
+// Pure, so the shape can be checked without a Mac. Everything is optional: a
+// registry that prints something else yields no disks rather than wrong ones.
+function parseIoregDisks(out) {
+  const text = String(out || '');
+  const disks = [];
+  // Split on the object headers ioreg prints ("+-o Name <class …>") and parse
+  // each one alone. A fixed window around the Statistics block is not enough:
+  // the identity fields of the PREVIOUS disk are inside it, and every row after
+  // the first came back wearing the first disk's name.
+  const chunks = text.split(/^\s*\+-o /m);
+  for (const chunk of chunks) {
+    const stats = /"Statistics"\s*=\s*\{([^}]*)\}/.exec(chunk);
+    if (!stats) continue;
+    const num = (key) => {
+      const g = new RegExp('"' + key.replace(/[().*+?^$|[\]{}\\]/g, '\\$&') + '"\\s*=\\s*(\\d+)').exec(stats[1]);
+      return g ? Number(g[1]) : null;
+    };
+    const pick = (key) => {
+      const g = new RegExp('"' + key + '"\\s*=\\s*"([^"]*)"').exec(chunk);
+      return g ? g[1] : '';
+    };
+    const readBytes = num('Bytes (Read)');
+    const writeBytes = num('Bytes (Write)');
+    const id = pick('BSD Name');
+    if (!id || (readBytes === null && writeBytes === null)) continue;
+    disks.push({
+      id,
+      model: (pick('Product Name') || pick('Model')).trim() || id,
+      serial: (pick('Serial Number') || '').trim(),
+      readsCompleted: num('Operations (Read)') || 0,
+      writesCompleted: num('Operations (Write)') || 0,
+      readBytes: readBytes || 0,
+      writeBytes: writeBytes || 0,
+    });
+  }
+  // One entry per BSD name: a storage stack can present the same disk twice.
+  const seen = new Set();
+  return disks.filter((d) => (seen.has(d.id) ? false : (seen.add(d.id), true)));
+}
+
+async function diskIo() {
+  const out = await runSoft('ioreg', ['-r', '-c', 'IOBlockStorageDriver', '-w0'], 5000);
+  if (out === null) return [];
+  const found = parseIoregDisks(out);
+  if (!found.length) return [];
+  // Which volumes sit on each disk, from the mount table the space collector
+  // already reads. `df` prints /dev/disk3s1s1 — the disk is the leading
+  // `diskN`.
+  let mounts = [];
+  try {
+    const df = await run('df', ['-k', '-P', '-l'], 5000);
+    mounts = splitLines(df).slice(1).map((l) => l.trim().split(/\s+/)).filter((f) => f.length >= 6)
+      .map((f) => ({ dev: f[0], mount: f.slice(5).join(' ') }))
+      .filter((r) => r.dev.startsWith('/dev/'));
+  } catch { /* no mount info: the rows simply carry none */ }
+  for (const d of found) {
+    d.volumes = mounts
+      .filter((r) => new RegExp('^/dev/' + d.id + '(s\\d|$)').test(r.dev))
+      .map((r) => ({ mount: r.mount, label: '', fstype: '' }));
+    // No temperature on this platform: SMART is not exposed to an unprivileged
+    // process, and inventing a number is worse than saying there isn't one.
+    d.temperature = null;
+    d.sizeBytes = null;
+    d.kind = '';
+  }
+  return found;
+}
+
 // --- Network: ping + netstat -ib, matching network.ps1's shape --------------
 // server.js turns the rx/tx byte counters into down/up bandwidth via its own
 // inter-poll delta, so all that is owed here is a pair of monotonic counters.
@@ -508,33 +590,46 @@ const VIRTUAL_IFACE = /^(lo|gif|stf|utun|bridge|awdl|llw|ap\d|anpi|vmenet|vnic|p
 
 // `netstat -ib` columns for a link row:
 // Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll
+// Every interface is RETURNED, not dropped: the totals still sum the physical
+// ones only (the Network tile shows those, and adding a VPN would count the same
+// traffic twice), but the list carries them all with `kind` so a widget can
+// graph one link on its own. Asked for on Discord. `lo0` is the one genuine
+// exception — loopback is the machine talking to itself.
 function parseNetstatIb(out) {
   let rx = 0;
   let tx = 0;
   const seen = new Set();
+  const interfaces = [];
   for (const line of splitLines(out)) {
     const f = line.trim().split(/\s+/);
     if (f.length < 10) continue;
     const iface = f[0];
     // One row per address family; the <Link#n> row alone carries the totals.
     if (!/^<Link#\d+>$/.test(f[2])) continue;
-    if (VIRTUAL_IFACE.test(iface)) continue;
+    if (/^lo\d*$/.test(iface)) continue;
     if (seen.has(iface)) continue;
     seen.add(iface);
-    rx += Number(f[6]) || 0;
-    tx += Number(f[9]) || 0;
+    const irx = Number(f[6]) || 0;
+    const itx = Number(f[9]) || 0;
+    const real = !VIRTUAL_IFACE.test(iface);
+    if (real) { rx += irx; tx += itx; }
+    // macOS has a friendly name per service ("Wi-Fi", "Thunderbolt Ethernet"),
+    // but it lives in networksetup, a separate process spawn per poll. The BSD
+    // device name is what netstat gives and it is stable, so that is `name` too
+    // rather than paying for a nicer one every three seconds.
+    interfaces.push({ id: iface, name: iface, description: '', kind: real ? 'physical' : 'virtual', rxBytes: irx, txBytes: itx });
   }
-  return { rx, tx };
+  return { rx, tx, interfaces };
 }
 
 async function readNetBytes() {
   const out = await runSoft('netstat', ['-ib'], 5000);
-  return out === null ? { rx: 0, tx: 0 } : parseNetstatIb(out);
+  return out === null ? { rx: 0, tx: 0, interfaces: [] } : parseNetstatIb(out);
 }
 
 async function network() {
-  const [{ ping, latency }, { rx, tx }] = await Promise.all([pingStats(), readNetBytes()]);
-  return { ping, latency, rxBytes: rx, txBytes: tx, fps: null, gpuLatency: null };
+  const [{ ping, latency }, { rx, tx, interfaces }] = await Promise.all([pingStats(), readNetBytes()]);
+  return { ping, latency, rxBytes: rx, txBytes: tx, interfaces, fps: null, gpuLatency: null };
 }
 
 // --- Open applications / app switcher: System Events -----------------------
@@ -821,6 +916,31 @@ function buildAudioRows(devices, vol) {
   return rows;
 }
 
+// Which output is the default RIGHT NOW. system_profiler knows too, but costs
+// about a second and is cached for 30s above, so a switch made from the menu
+// bar reached the dashboard (and an Output device Deck key's face) up to half a
+// minute late. SwitchAudioSource, the tool output switching already needs,
+// answers in milliseconds. Without it nothing changes: the cached answer stands.
+// A missing tool is remembered for a while rather than spawned every poll.
+const SAS_MISSING_RETRY_MS = 5 * 60 * 1000;
+let sasMissingAt = 0;
+async function currentOutputName() {
+  if (sasMissingAt && Date.now() - sasMissingAt < SAS_MISSING_RETRY_MS) return null;
+  const out = await runSoft('SwitchAudioSource', ['-c', '-t', 'output'], 3000);
+  if (out === null) { sasMissingAt = Date.now(); return null; }
+  sasMissingAt = 0;
+  return String(out).trim() || null;
+}
+// Pure: the device list with its default taken from `current`, when `current`
+// is one of the listed outputs. Anything else (no answer, a name the list does
+// not have) leaves the list exactly as system_profiler reported it.
+function withCurrentOutput(devices, current) {
+  const d = devices || { outputs: [], inputs: [] };
+  const name = typeof current === 'string' ? current.trim() : '';
+  if (!name || !Array.isArray(d.outputs) || !d.outputs.some((o) => o && o.name === name)) return d;
+  return Object.assign({}, d, { outputs: d.outputs.map((o) => Object.assign({}, o, { isDefault: o.name === name })) });
+}
+
 const AUDIO_ROWS_TTL_MS = 900;
 let audioRowsCache = { rows: null, at: 0 };
 
@@ -832,7 +952,8 @@ async function audioRows() {
   const settings = await osa('get volume settings', 5000);
   // Let a failed read surface: an empty-but-working mixer would be a lie.
   if (settings === null) throw new Error('osascript volume read failed');
-  const rows = buildAudioRows(await audioDevices(), parseVolumeSettings(settings));
+  const devices = withCurrentOutput(await audioDevices(), await currentOutputName());
+  const rows = buildAudioRows(devices, parseVolumeSettings(settings));
   audioRowsCache = { rows, at: Date.now() };
   return rows;
 }
@@ -1137,11 +1258,12 @@ function rootReachesHome(root, home) {
 }
 
 module.exports = {
-  gpu, disks, cpuTemp, memory, network, windows, audioRows, audioCommand, audioAvailable, lock,
+  gpu, disks, diskIo, cpuTemp, memory, network, windows, audioRows, audioCommand, audioAvailable, lock,
   processes, fullDiskAccess, rootReachesHome,
   // exported for unit tests
   parsePsTime, parsePsProcesses,
   parseMacmon, parseHelperTemps, parseDisplaysJson, parseDisks, parseMountTypes, parsePing,
   parseNetstatIb, parseAppList, parseHelperWindows, parseVmStat, parseVolumeSettings, parseAudioDevices,
-  buildAudioRows, isCaptureTarget, ratioToPct,
+  parseIoregDisks,
+  buildAudioRows, isCaptureTarget, ratioToPct, withCurrentOutput,
 };

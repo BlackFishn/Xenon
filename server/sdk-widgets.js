@@ -74,7 +74,7 @@ const SDK_API_VERSION = 1;
 // REACT to one but never set one: writing into that shared map from a sandbox
 // would let one package overwrite another's name, and a package already has
 // `deck.states` for states of its own, which are declared and namespaced.
-const SDK_STREAMS = Object.freeze(['status', 'system', 'media', 'audio', 'audioLevels', 'wavelink', 'voicemeeter', 'stocks', 'football', 'news', 'claude', 'obs', 'discord', 'discordChannels', 'discordSoundboard', 'discordNotifications', 'streamerbot', 'homeassistant', 'twitchWatch', 'twitchChat', 'youtubeLive', 'youtube', 'tasks', 'notes', 'agenda', 'weather', 'battery', 'processes', 'spotify', 'scriptStates']);
+const SDK_STREAMS = Object.freeze(['status', 'system', 'network', 'diskIo', 'media', 'audio', 'audioLevels', 'wavelink', 'voicemeeter', 'stocks', 'football', 'news', 'claude', 'obs', 'discord', 'discordChannels', 'discordSoundboard', 'discordNotifications', 'streamerbot', 'homeassistant', 'twitchWatch', 'twitchChat', 'youtubeLive', 'youtube', 'tasks', 'notes', 'agenda', 'weather', 'battery', 'processes', 'spotify', 'scriptStates']);
 
 // Action categories a package may request → the deck-action types each grants.
 // Deliberately a small, low-blast-radius subset of the action registry; every
@@ -86,7 +86,14 @@ const SDK_ACTION_CATEGORIES = Object.freeze({
   // approved for "raise and lower", and folding device switching in would widen
   // that grant retroactively, with no prompt. Server-side the id is checked
   // against the live OUTPUT enumeration only — see the audioDevice dep.
-  audioDevice: Object.freeze(['audioDevice']),
+  //
+  // `audioDeviceToggle` (v4.11.10) joins this EXISTING category, the call made
+  // for spotifyPlayUri and for the same reason: it is the same kind of act and
+  // no more of it. Flipping between two outputs is two `audioDevice` calls with
+  // the choice made for you, both ids go through the same live-list check, and
+  // a widget granted this could already move the sound to either device. It
+  // stays inside "choose which speakers your sound comes out of".
+  audioDevice: Object.freeze(['audioDevice', 'audioDeviceToggle']),
   mic: Object.freeze(['micMute']),
   lighting: Object.freeze(['lighting', 'lightPower', 'lightColor', 'lightAuto', 'lightEffect', 'lightDevice']),
   chroma: Object.freeze(['chromaColor', 'chromaOff']),
@@ -167,6 +174,27 @@ const SDK_ACTION_CATEGORIES = Object.freeze({
   // address, the id is re-validated against the tile's own pattern, and the
   // destination is a surface Xenon owns and the user is looking at.
   watch: Object.freeze(['twitchWatchPlay', 'ytWatchPlay']),
+  // Turn the dashboard to another of ITS OWN pages. The same move the global
+  // page shortcuts make, reachable from a widget: a control-room tile with a
+  // button per page, or one that brings the media page up when something starts
+  // playing.
+  //
+  // Browser-dispatched like `browser` and `watch` (no registry case — the page
+  // belongs to the dashboard, not to the machine), and NOT usable from a
+  // manifest Deck macro, so declaring one fails at install rather than shipping
+  // a dead key.
+  //
+  // Its own grant rather than a corner of an existing one, for the reason
+  // `audioDevice` was split out of `volume`: what it does is not a stronger
+  // version of anything already granted. A widget with this can take the screen
+  // away from whatever its owner was reading, which is a different KIND of act
+  // from drawing inside its own tile — and it is the one thing here the user
+  // cannot miss happening, so it has to be the one thing they agreed to.
+  //
+  // It reaches nothing outside the dashboard: no address, no file, no machine
+  // state. The target is one of the user's own page ids, or a relative move, and
+  // a page this screen does not have is refused rather than redirected.
+  pages: Object.freeze(['dashboardPage']),
 });
 
 // The only playSound.file shape SDK code (bridge actions AND manifest macros)

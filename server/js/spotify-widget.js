@@ -71,6 +71,9 @@
   let queueContext = '';     // the playlist/album the queue belongs to, so a tapped row can resume the rest of it
   let playlists = null;      // cached list (loaded when the Playlists tab opens)
   let devices = null;        // cached list (loaded when the Devices tab opens)
+  // Why the last load of each did not produce a list: '' when it did.
+  let playlistsProblem = '';
+  let devicesProblem = '';
   let seeded = false;
   let pollTimer = null;
   let tickTimer = null;
@@ -100,6 +103,9 @@
   // true = Spotify is rate-limiting us (429). Brief and self-clearing; we keep the
   // last known state and show a neutral "busy" note rather than flapping to empty.
   let rateLimited = false;
+  // How long Spotify said to wait. 0 when it did not say, which is most of the
+  // time and why the message has to read without it.
+  let rateLimitMs = 0;
   let backoffUntil = 0;      // while rate-limited, hold off polling until this time
   const POLL_MS = 6000;      // network refresh cadence while a tile is visible
 
@@ -136,7 +142,7 @@
     else if (e === 'forbidden') msg = t('spotify_w_reconnect', 'Reconnect Spotify in Settings → Spotify to grant permission');
     else if (e === 'no_active_device') msg = t('spotify_w_no_active', 'No active Spotify device — start playback first');
     else if (e === 'nothing_playing') msg = t('spotify_w_nothing', 'Nothing playing right now');
-    else if (e === 'rate_limited') msg = t('spotify_w_busy', 'Spotify is busy — retrying shortly');
+    else if (e === 'rate_limited') msg = busyLine();
     if (msg && typeof showHubToast === 'function') showHubToast('Spotify', msg, '');
   }
 
@@ -557,7 +563,7 @@
       const closed = !busy && !forbidden && spotifyOpen === false;
       if (busy) {
         // Rate-limited: transient, clears on its own. Don't offer an action.
-        eLbl.textContent = t('spotify_w_busy', 'Spotify is busy — retrying shortly');
+        eLbl.textContent = busyLine();
         eBtn.hidden = true;
       } else if (forbidden) {
         // The login predates the playback-read permission: Spotify can be playing and
@@ -655,7 +661,7 @@
     if (connected !== true) { panel.replaceChildren(el('div', 'sp-empty', t('spotify_w_notlinked', 'Not linked'))); return; }
     if (queue === null) {
       panel.replaceChildren(el('div', 'sp-empty', rateLimited
-        ? t('spotify_w_busy', 'Spotify is busy — retrying shortly')
+        ? busyLine()
         : t('spotify_w_loading', 'Loading…')));
       return;
     }
@@ -674,12 +680,16 @@
   function paintPlaylists(mount) {
     const panel = mount.querySelector('.sp-panel--playlists');
     if (!panel) return;
-    const sig = connected !== true ? 'x' : playlists === null ? 'l' : !playlists.length ? 'e'
+    const sig = connected !== true ? 'x' : playlists === null ? 'l' + playlistsProblem : !playlists.length ? 'e'
       : 'p' + playlists.map(p => (p.uri || p.name || '') + ':' + (p.tracks != null ? p.tracks : '')).join('|');
     if (panel.dataset.spSig === sig) return;
     panel.dataset.spSig = sig;
     if (connected !== true) { panel.replaceChildren(el('div', 'sp-empty', t('spotify_w_notlinked', 'Not linked'))); return; }
-    if (playlists === null) { panel.replaceChildren(el('div', 'sp-empty', t('spotify_w_loading', 'Loading…'))); return; }
+    if (playlists === null) {
+      panel.replaceChildren(el('div', 'sp-empty',
+        playlistsProblem ? problemLine(playlistsProblem) : t('spotify_w_loading', 'Loading…')));
+      return;
+    }
     if (!playlists.length) { panel.replaceChildren(emptyState(ICONS.note, t('spotify_w_no_playlists', 'No playlists'))); return; }
     const frag = document.createDocumentFragment();
     playlists.forEach(p => {
@@ -701,12 +711,16 @@
   function paintDevices(mount) {
     const panel = mount.querySelector('.sp-panel--devices');
     if (!panel) return;
-    const sig = connected !== true ? 'x' : devices === null ? 'l' : !devices.length ? 'e'
+    const sig = connected !== true ? 'x' : devices === null ? 'l' + devicesProblem : !devices.length ? 'e'
       : 'd' + devices.map(dv => (dv.name || '') + ':' + (dv.active ? 1 : 0) + ':' + (dv.volume != null ? dv.volume : '')).join('|');
     if (panel.dataset.spSig === sig) return;
     panel.dataset.spSig = sig;
     if (connected !== true) { panel.replaceChildren(el('div', 'sp-empty', t('spotify_w_notlinked', 'Not linked'))); return; }
-    if (devices === null) { panel.replaceChildren(el('div', 'sp-empty', t('spotify_w_loading', 'Loading…'))); return; }
+    if (devices === null) {
+      panel.replaceChildren(el('div', 'sp-empty',
+        devicesProblem ? problemLine(devicesProblem) : t('spotify_w_loading', 'Loading…')));
+      return;
+    }
     if (!devices.length) { panel.replaceChildren(emptyState(ICONS.computer, t('spotify_w_no_devices', 'No devices found'))); return; }
     const frag = document.createDocumentFragment();
     devices.forEach(dv => {
@@ -724,6 +738,25 @@
       frag.appendChild(b);
     });
     panel.replaceChildren(frag);
+  }
+
+  // The line a list that has NOTHING to show puts up. A blip once there is
+  // something on screen says nothing at all — the old list stays, which is the
+  // whole point — so this is only ever reached before a first successful load.
+  // "busy" is right for the seconds this usually lasts, and wrong for the hours
+  // Spotify imposes on an app that has burnt its daily quota — where "retrying
+  // shortly" reads as a broken integration rather than as a wait with an end.
+  // So the wait is named once it is long enough to be worth naming.
+  function busyLine() {
+    const mins = Math.round(rateLimitMs / 60000);
+    if (mins >= 2) return t('spotify_w_busy_for', 'Spotify is busy — about {m} min').replace('{m}', String(mins));
+    return t('spotify_w_busy', 'Spotify is busy — retrying shortly');
+  }
+
+  function problemLine(problem) {
+    if (problem === 'rate_limited') return busyLine();
+    if (problem === 'not_connected') return t('spotify_w_notlinked', 'Not linked');
+    return t('spotify_w_unreachable', 'Could not reach Spotify — retrying');
   }
 
   function emptyState(iconSvg, label) {
@@ -785,8 +818,9 @@
     if (loadId !== playerLoadId) return; // An older poll must not undo a newer post-control snapshot.
     // Rate-limited (429): Spotify is briefly refusing us. Keep the last known state
     // and don't fire the extra devices call — hammering only extends the cooldown.
-    if (p && p.error === 'rate_limited') { rateLimited = true; return; }
+    if (p && p.error === 'rate_limited') { rateLimited = true; rateLimitMs = Number(p.retryAfterMs) || 0; return; }
     rateLimited = false;
+    rateLimitMs = 0;
     playbackForbidden = !!(p && p.error === 'forbidden');
     if (p && p.ok) {
       player = p;
@@ -865,15 +899,37 @@
       })
       .catch(() => { /* transient — keep the last known queue */ });
   }
+  // A list that failed to load is not an empty list. loadQueue() has always
+  // kept the last known queue on a hiccup; these two did the opposite, and it
+  // showed most where it mattered least excusably: the Devices tab reloads on
+  // every tick while it is open, so one refused request — a 429 the rest of
+  // this widget already rides out, a Wi-Fi blink — replaced the user's speakers
+  // with "No devices found" until the next tick happened to succeed.
+  //
+  // So: a real answer replaces the list, and anything else leaves it alone and
+  // records WHY, which is what the panel says instead of claiming there is
+  // nothing there. Only a list that was never loaded shows the failure on its
+  // own — once there is something on screen, a blip is not worth a message.
+  function reasonFor(d) {
+    if (d && d.error === 'rate_limited') return 'rate_limited';
+    if (d && d.error === 'not_connected') return 'not_connected';
+    return 'failed';
+  }
   function loadPlaylists() {
     return api('/stream/spotify/playlists')
-      .then(d => { playlists = (d && d.ok && Array.isArray(d.playlists)) ? d.playlists : []; })
-      .catch(() => { playlists = []; });
+      .then(d => {
+        if (d && d.ok && Array.isArray(d.playlists)) { playlists = d.playlists; playlistsProblem = ''; }
+        else playlistsProblem = reasonFor(d);
+      })
+      .catch(() => { playlistsProblem = 'failed'; });
   }
   function loadDevices() {
     return api('/stream/spotify/devices')
-      .then(d => { devices = (d && d.ok && Array.isArray(d.devices)) ? d.devices : []; })
-      .catch(() => { devices = []; });
+      .then(d => {
+        if (d && d.ok && Array.isArray(d.devices)) { devices = d.devices; devicesProblem = ''; }
+        else devicesProblem = reasonFor(d);
+      })
+      .catch(() => { devicesProblem = 'failed'; });
   }
 
   // One-shot seed on mount: status + (if linked) the now-playing state, for an
@@ -882,7 +938,7 @@
     if (!tiles().length) return;
     await loadStatus();
     if (connected) { await loadPlayer(); if (activeTab === 'queue') await loadQueue(); }
-    else { player = null; queue = null; playlists = null; devices = null; }
+    else { player = null; queue = null; playlists = null; devices = null; playlistsProblem = ''; devicesProblem = ''; }
     lastRefreshAt = Date.now();   // the first tick's reveal edge must not repeat this round
     paint();
   }

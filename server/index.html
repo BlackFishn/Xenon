@@ -1019,24 +1019,30 @@
         <div class="settings-nav-label" data-i18n="settings_nav_system" aria-hidden="true">Sistema</div>
         <button type="button" class="settings-nav-btn" data-settings-cat="performance" onclick="settingsSetCategory('performance')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 19a9 9 0 1 1 14 0"/><path d="m12 13 4-4"/><circle cx="12" cy="13" r="1.2" fill="currentColor"/></svg><span data-i18n="settings_cat_performance">Performance</span></button>
         <button type="button" class="settings-nav-btn" data-settings-cat="sdk" onclick="settingsSetCategory('sdk')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 7h4a1 1 0 0 1 1 1v3.5a1.5 1.5 0 0 0 0 3V18a1 1 0 0 1-1 1h-3.5a1.5 1.5 0 0 1-3 0H8a1 1 0 0 1-1-1v-3.5a1.5 1.5 0 0 1 0-3V8a1 1 0 0 1 1-1h3.5a1.5 1.5 0 0 1 3 0Z"/></svg><span data-i18n="settings_cat_sdk">Widget e condivisione</span></button>
-        <button type="button" class="settings-nav-btn settings-nav-btn-support" data-settings-cat="support" onclick="settingsSetCategory('support')"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg><span data-i18n="settings_cat_support">Sostieni Xenon</span></button>
         </div>
+        <!-- Two rows of two: the featured pair (donate, Discord) and the quiet pair
+             (bug report, update check). Short labels on purpose - the pane is
+             202px wide - with the full wording in each control's title. -->
         <div class="settings-nav-footer">
-        <div class="settings-nav-support" id="settings-nav-support">
-          <a href="https://www.buymeacoffee.com/marcimastro98" target="_blank" rel="noopener noreferrer" class="settings-nav-support-btn is-featured is-donate" data-i18n-title="support_project">
+        <div class="settings-nav-links">
+          <!-- Opens the Sostieni Xenon category (donation tiers, perks, Discord)
+               rather than the web: it replaced the category's own list entry,
+               so it is the one way to reach that page. -->
+          <button type="button" class="settings-nav-support-btn is-featured is-donate" data-settings-cat="support" onclick="settingsSetCategory('support')" data-i18n-title="settings_cat_support">
             <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-            <span data-i18n="support_project">Supporta il progetto</span>
-          </a>
+            <span data-i18n="support_short">Supporta</span>
+          </button>
           <a data-discord href="https://discord.gg/MBVrw9kZyg" target="_blank" rel="noopener noreferrer" class="settings-nav-support-btn is-featured is-discord" data-i18n-title="discord_community">
             <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.317 4.369A19.79 19.79 0 0 0 16.885 3.1a.074.074 0 0 0-.079.037c-.34.607-.719 1.4-.984 2.02a18.27 18.27 0 0 0-5.487 0 12.6 12.6 0 0 0-.997-2.02.077.077 0 0 0-.079-.037A19.74 19.74 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.1 13.1 0 0 1-1.872-.892.077.077 0 0 1-.008-.128c.126-.094.252-.192.372-.291a.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.009c.12.099.246.198.373.292a.077.077 0 0 1-.006.127 12.3 12.3 0 0 1-1.873.891.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.84 19.84 0 0 0 6.002-3.03.077.077 0 0 0 .032-.056c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028zM8.02 15.331c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>
-            <span data-i18n="discord_community">Community Discord</span>
-          </a>
-          <a href="https://github.com/marcimastro98/Xenon/issues/new?template=bug_report.md" target="_blank" rel="noopener noreferrer" class="settings-nav-support-btn" data-i18n-title="report_bug">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="M12 8v4m0 4h.01"/></svg>
-            <span data-i18n="report_bug">Segnala bug</span>
+            <span>Discord</span>
           </a>
         </div>
-        <button type="button" class="settings-update-check" id="settings-update-check" onclick="checkForUpdatesNow(this)" data-i18n="update_check_btn">Controlla aggiornamenti</button>
+        <div class="settings-nav-links is-quiet">
+          <a href="https://github.com/marcimastro98/Xenon/issues/new?template=bug_report.md" target="_blank" rel="noopener noreferrer" class="settings-nav-support-btn" data-i18n-title="report_bug">
+            <span data-i18n="report_bug_short">Segnala bug</span>
+          </a>
+          <button type="button" class="settings-update-check" id="settings-update-check" onclick="checkForUpdatesNow(this)" data-i18n="update_check_short" data-i18n-title="update_check_btn">Aggiorna</button>
+        </div>
         <!-- Filled by renderPlatformBeta() in js/settings.js, and only on the two
              platforms where it is true. Empty and hidden everywhere else. -->
         <div class="settings-platform-beta" id="settings-platform-beta" hidden></div>
@@ -1338,7 +1344,8 @@
             <button class="settings-media-viz settings-segment-btn" type="button" data-media-viz="minimal" onclick="updateMediaVisualizer('minimal')" aria-pressed="false" data-i18n="settings_media_viz_minimal">Minimal</button>
             <button class="settings-media-viz settings-segment-btn" type="button" data-media-viz="wave" onclick="updateMediaVisualizer('wave')" aria-pressed="false" data-i18n="settings_media_viz_wave">Onda</button>
           </div>
-          <span class="settings-note" data-i18n="settings_media_viz_note">Disegna il suono che l'app sta davvero producendo, con i colori della copertina. Non cambia nulla del riquadro: si aggiunge sotto, e con Nessuna non viene disegnato niente. Minimal e una riga sottile che respira, Onda e la versione piena. Serve Windows con Xenon Helper installato: senza di lui il livello audio non si puo misurare e non esiste un ripiego. La misurazione parte solo quando scegli Minimal o Onda.</span>
+          <span class="settings-hint settings-media-viz-status" id="settings-media-viz-status" role="status" aria-live="polite" hidden></span>
+          <span class="settings-note" data-i18n="settings_media_viz_note">Disegna il suono che l'app sta davvero producendo, con i colori della copertina. Non cambia nulla del riquadro: si aggiunge sotto, e con Nessuna non viene disegnato niente. Minimal è una riga sottile che respira, Onda è la versione piena. Serve Windows con Xenon Helper installato: senza di lui il livello audio non si può misurare e non esiste un ripiego. La misurazione parte solo quando scegli Minimal o Onda.</span>
         </div>
       </div>
 
@@ -1393,6 +1400,16 @@
         <div class="island-source-list" id="settings-island-sources" aria-live="polite"></div>
         <span class="settings-hint" data-i18n="settings_island_reset_hint">rimette la barra com'era appena installata: stile, elementi dell'isola, bottoni, barre laterali e tutte le estensioni riaccese</span>
         <button class="settings-btn settings-btn-ghost" type="button" onclick="resetDynamicIslandSettings()" data-i18n="settings_island_reset">Ripristina tutta la barra</button>
+      </div>
+
+      <div class="settings-group settings-behavior-group" data-settings-cat="general" id="settings-pagehotkeys-group">
+        <div class="settings-group-head">
+          <span data-i18n="settings_pagehk_title">Scorciatoie pagine</span>
+          <span class="settings-hint" data-i18n="settings_pagehk_hint">cambia pagina da tastiera anche mentre stai usando un'altra app</span>
+        </div>
+        <div id="settings-pagehk-rows"></div>
+        <button type="button" class="settings-btn subtle" id="settings-pagehk-add" onclick="addPageHotkey()" data-i18n="settings_pagehk_add">Aggiungi scorciatoia</button>
+        <p class="settings-hint full" data-i18n="settings_pagehk_note">Scrivi la combinazione come ctrl+alt+1 (ctrl, alt, shift, win + una lettera, un numero o F1-F12). Se un'altra app la usa già la riga te lo dice. Richiede Xenon Helper su Windows e macOS; su Linux la scorciatoia viene aggiunta a quelle del desktop (GNOME).</p>
       </div>
 
       <div class="settings-group settings-behavior-group" data-settings-cat="general" id="settings-auto-open-row" hidden>
@@ -2005,6 +2022,11 @@
           <input class="settings-check" id="settings-ambient-enabled" type="checkbox" onchange="updateAmbientSetting('enabled', this.checked)">
           <span data-i18n="ambient_enable">Abilita la modalità Ambient</span>
         </label>
+        <label class="settings-toggle-row">
+          <input class="settings-check" id="settings-ambient-startup" type="checkbox" onchange="updateAmbientSetting('openOnStartup', this.checked)">
+          <span data-i18n="ambient_startup">Apri all'avvio</span>
+        </label>
+        <span class="settings-note" data-i18n="ambient_startup_hint">La scena si apre appena parte Xenon e resta aperta finché non la chiudi tu. Diversa da "Avvia dopo inattività", che si chiude appena usi il PC.</span>
         <div class="settings-ambient-row">
           <label class="settings-toggle-row"><span data-i18n="ambient_idle_label">Avvia dopo inattività</span></label>
           <select class="settings-select" id="settings-ambient-idle" data-custom-select data-cs-fixed onchange="updateAmbientSetting('idleMinutes', this.value)">
@@ -2104,6 +2126,13 @@
             <div class="settings-segmented" role="group" aria-label="Unità temperatura">
               <button class="settings-temp-unit settings-segment-btn" type="button" data-temp-unit="c" onclick="updateTempUnit('c')" aria-pressed="true">°C</button>
               <button class="settings-temp-unit settings-segment-btn" type="button" data-temp-unit="f" onclick="updateTempUnit('f')" aria-pressed="false">°F</button>
+            </div>
+          </div>
+          <div class="settings-row full">
+            <span class="settings-label-line"><span data-i18n="settings_weather_hero">Condizioni attuali</span><span class="settings-hint" data-i18n="settings_weather_hero_hint">solo widget dashboard</span></span>
+            <div class="settings-segmented" role="group" aria-label="Condizioni attuali" data-i18n-aria-label="settings_weather_hero">
+              <button class="settings-weather-hero settings-segment-btn" type="button" data-weather-hero="full" onclick="updateWeatherTileHero('full')" aria-pressed="true" data-i18n="settings_weather_hero_full">Scheda grande</button>
+              <button class="settings-weather-hero settings-segment-btn" type="button" data-weather-hero="compact" onclick="updateWeatherTileHero('compact')" aria-pressed="false" data-i18n="settings_weather_hero_compact">Una riga</button>
             </div>
           </div>
           <div class="settings-row full">
@@ -2396,7 +2425,7 @@
         </label>
         <label class="settings-toggle-row full">
           <input class="settings-check" id="settings-slideshow-pause-game" type="checkbox" onchange="updateSlideshowCfg({ pauseGame: this.checked })">
-          <span class="settings-label-line"><span data-i18n="settings_slideshow_pause_game">Ferma le GIF durante i giochi</span><span class="settings-hint" data-i18n="settings_slideshow_pause_game_hint">mentre sono attive la modalità gioco o quella prestazioni</span></span>
+          <span class="settings-label-line"><span data-i18n="settings_slideshow_pause_game">Ferma le GIF durante i giochi</span><span class="settings-hint" data-i18n="settings_slideshow_pause_game_hint">con la modalità gioco o prestazioni attiva le immagini animate restano ferme, le foto continuano a cambiare</span></span>
         </label>
         <p class="settings-note" data-i18n="settings_slideshow_note">Le immagini sono salvate come file su questo PC. Tocca l'immagine nel widget per mettere in pausa; usa le frecce per scorrere a mano.</p>
       </div>
@@ -2630,7 +2659,7 @@
             <input class="settings-check" id="settings-proactive-thermal" type="checkbox" onchange="updateProactive('thermal', this.checked)">
             <span class="settings-label-line">
               <span data-i18n="settings_proactive_thermal">Avvisi termici prolungati</span>
-              <span class="settings-hint" data-i18n="settings_proactive_thermal_hint">Un avviso se CPU o GPU restano sopra soglia per più di 15 minuti (max uno all'ora)</span>
+              <span class="settings-hint" data-i18n="settings_proactive_thermal_hint" data-i18n-temps="c=90,g=88">Un avviso se CPU o GPU restano sopra soglia per più di 15 minuti (max uno all'ora)</span>
             </span>
           </label>
           <label class="settings-toggle-row full">
@@ -3319,6 +3348,16 @@
                 <span class="ai-prov-name" data-i18n="ai_provider_anthropic">Claude</span>
               </label>
               <label>
+                <input type="radio" name="aiProvider" value="claudecode" id="ai-provider-claudecode">
+                <span class="ai-prov-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="#D97757" d="M12 1.6l1.9 6.9 5.1-4.9-2.9 6.6 6.7-1.4-5.9 3.6 5.9 3.6-6.7-1.4 2.9 6.6-5.1-4.9L12 22.4l-1.9-6.9-5.1 4.9 2.9-6.6-6.7 1.4 5.9-3.6-5.9-3.6 6.7 1.4-2.9-6.6 5.1 4.9L12 1.6z"/></svg></span>
+                <span class="ai-prov-name" data-i18n="ai_provider_claudecode">Claude Code</span>
+              </label>
+              <label>
+                <input type="radio" name="aiProvider" value="codex" id="ai-provider-codex">
+                <span class="ai-prov-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7495-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></svg></span>
+                <span class="ai-prov-name" data-i18n="ai_provider_codex">Codex</span>
+              </label>
+              <label>
                 <input type="radio" name="aiProvider" value="ollama" id="ai-provider-ollama">
                 <span class="ai-prov-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M8.2 3c-.9 0-1.6.8-1.6 1.7v1.9C5.6 7.3 5 8.5 5 9.9c0 .8.2 1.5.5 2.1v4.9C5.5 18.6 7 20 8.8 20h6.4c1.8 0 3.3-1.4 3.3-3.1v-4.9c.3-.6.5-1.3.5-2.1 0-1.4-.6-2.6-1.6-3.3V4.7c0-.9-.7-1.7-1.6-1.7-.8 0-1.5.6-1.6 1.4-.6-.2-1.4-.3-2.2-.3s-1.6.1-2.2.3C9.7 3.6 9 3 8.2 3zm2 8.4a1.1 1.1 0 1 1 0 2.2 1.1 1.1 0 0 1 0-2.2zm3.6 0a1.1 1.1 0 1 1 0 2.2 1.1 1.1 0 0 1 0-2.2zM12 14.5c1 0 1.9.5 1.9 1.1 0 .3-.3.5-.7.5h-2.4c-.4 0-.7-.2-.7-.5 0-.6.9-1.1 1.9-1.1z"/></svg></span>
                 <span class="ai-prov-name" data-i18n="ai_provider_local">Ollama</span>
@@ -3483,6 +3522,27 @@
             </div>
           </div>
 
+          <!-- Claude Code / Codex: the user's own subscription through the official
+               program (server/ai-cli.js). No key: the program has its own sign-in,
+               and Xenon never handles it. One panel, filled per provider by settings.js. -->
+          <div class="settings-subpanel full" id="settings-cli-panel" hidden>
+            <p class="settings-note" id="settings-cli-intro"></p>
+            <div class="settings-cli-state">
+              <span class="settings-label-line"><span data-i18n="settings_cli_status">Stato</span></span>
+              <span class="settings-hint" id="settings-cli-status" role="status" aria-live="polite"></span>
+              <span class="settings-hint" id="settings-cli-detail" hidden></span>
+              <div class="settings-cli-actions">
+                <button type="button" class="settings-btn" id="settings-cli-recheck" onclick="aiCliRecheck()" data-i18n="settings_cli_recheck">Controlla di nuovo</button>
+                <a class="settings-hint" id="settings-cli-guide" href="#" target="_blank" rel="noopener noreferrer"></a>
+              </div>
+            </div>
+            <label class="settings-row full">
+              <span class="settings-label-line"><span data-i18n="settings_cli_model">Modello</span><span class="settings-hint" data-i18n="settings_cli_model_hint">quelli che il programma mette a disposizione del tuo account</span></span>
+              <select class="settings-text-input" id="settings-cli-model" data-custom-select data-cs-fixed onchange="onAiCliModelSelect(this.value)"></select>
+              <span class="settings-hint" id="settings-cli-model-used" hidden></span>
+            </label>
+            <p class="settings-note" data-i18n="settings_cli_limits">Usa i limiti del tuo abbonamento, gli stessi che usi per programmare. Xenon AI ha gli stessi strumenti degli altri provider (Deck, luci, impostazioni, attività e il resto), mentre gli strumenti del programma, come il terminale e l'accesso ai file, restano spenti. Voce e trascrizione restano locali e gratuite.</p>
+          </div>
           <!-- Claude (Anthropic): key + model. Server-only key, same pattern. -->
           <div class="settings-subpanel full" id="settings-anthropic-panel" hidden>
             <label class="settings-row full">
@@ -3680,13 +3740,24 @@
       </div>
       </div>
     </div>
+    <!-- Each action carries its own explanation UNDER the button, small, so the
+         bar reads as two labelled controls instead of one long line of prose
+         with buttons somewhere in it. -->
     <div class="settings-foot">
-      <div class="settings-foot-note" data-i18n="settings_persist_note">Le preferenze restano salvate su questo PC.</div>
-      <div class="settings-status" id="settings-status" aria-live="polite"></div>
-      <button class="settings-btn" type="button" onclick="restartXenon()" data-i18n="settings_restart_app">Riavvia Xenon</button>
-      <div class="settings-hint" data-i18n="settings_restart_hint">Chiude e riapre l'app per ripulire eventuali blocchi, senza perdere nulla: impostazioni, widget, layout e sfondi restano.</div>
-      <button class="settings-btn danger" type="button" onclick="resetAllSettings()" data-i18n="settings_reset_all">Ripristina tutte le impostazioni</button>
-      <div class="settings-hint" data-i18n="settings_reset_all_hint">Le tile perdono il widget assegnato e i suoi permessi, insieme a elenco installazioni, preset di pagina e temi, sfondi e scene Ambient personalizzati. Il layout resta, e i widget restano installati sul PC.</div>
+      <div class="settings-foot-info">
+        <div class="settings-foot-note" data-i18n="settings_persist_note">Le preferenze restano salvate su questo PC.</div>
+        <div class="settings-status" id="settings-status" aria-live="polite"></div>
+      </div>
+      <div class="settings-foot-actions">
+        <div class="settings-foot-action">
+          <button class="settings-btn" type="button" onclick="restartXenon()" data-i18n="settings_restart_app">Riavvia Xenon</button>
+          <div class="settings-hint settings-foot-hint" data-i18n="settings_restart_hint" data-i18n-title="settings_restart_hint">Chiude e riapre l'app per ripulire eventuali blocchi, senza perdere nulla: impostazioni, widget, layout e sfondi restano.</div>
+        </div>
+        <div class="settings-foot-action">
+          <button class="settings-btn danger" type="button" onclick="resetAllSettings()" data-i18n="settings_reset_all">Ripristina tutte le impostazioni</button>
+          <div class="settings-hint settings-foot-hint" data-i18n="settings_reset_all_hint" data-i18n-title="settings_reset_all_hint">Le tile perdono il widget assegnato e i suoi permessi, insieme a elenco installazioni, preset di pagina e temi, sfondi e scene Ambient personalizzati. Il layout resta, e i widget restano installati sul PC.</div>
+        </div>
+      </div>
     </div>
   </section>
 </div>

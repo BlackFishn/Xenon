@@ -570,6 +570,14 @@ function createDiscordProvider(deps) {
   // report ("Could not start login") always has a matching server-side line with
   // Discord's real words — before this, login failures were completely silent.
   function loginFail(error, detail) {
+    // Only reason CODES travel as `error`. An unexpected exception's message
+    // (a TypeError, a disk error while saving the token) arrived here as if it
+    // were one, matched nothing on the page and was shown as the bare generic
+    // "Could not start login"; it now travels as the detail of `login_failed`.
+    if (!/^[a-z][a-z0-9_]{0,40}$/.test(String(error || ''))) {
+      detail = detail || error;
+      error = 'login_failed';
+    }
     const d = errDetail(detail);
     console.error('[discord] login failed:', error + (d ? ' — ' + d : ''));
     const out = { ok: false, error };
@@ -869,9 +877,13 @@ function createDiscordProvider(deps) {
     }
   }
 
-  // Enumerate the user's guild voice channels (id/name/guild), capped. Shared by
-  // the editor picker (listVoiceChannels) and the widget roster (voiceRoster).
-  // Best-effort: a guild we can't read is skipped.
+  // Enumerate the user's guild voice channels (id/name/guild/guildId), capped.
+  // Shared by the editor picker (listVoiceChannels) and the widget roster
+  // (voiceRoster). Best-effort: a guild we can't read is skipped.
+  //
+  // guildId rides along with the name because the widget's Channels tab remembers
+  // which servers the user collapsed, and it has to remember them by something
+  // that survives a rename — and that tells two servers with the same name apart.
   async function enumVoiceChannels(cap) {
     const g = await command('GET_GUILDS');
     const guilds = (g && Array.isArray(g.guilds)) ? g.guilds.slice(0, 30) : [];
@@ -882,7 +894,9 @@ function createDiscordProvider(deps) {
         const ch = await command('GET_CHANNELS', { guild_id: guild.id });
         const chans = (ch && Array.isArray(ch.channels)) ? ch.channels : [];
         for (const c of chans) {
-          if (c.type === GUILD_VOICE && out.length < cap) out.push({ id: String(c.id), name: c.name || '', guild: guild.name || '' });
+          if (c.type === GUILD_VOICE && out.length < cap) {
+            out.push({ id: String(c.id), name: c.name || '', guild: guild.name || '', guildId: String(guild.id || '') });
+          }
         }
       } catch { /* skip unreadable guild */ }
     }
@@ -910,8 +924,8 @@ function createDiscordProvider(deps) {
         const filled = await Promise.all(chans.slice(i, i + BATCH).map(async (vc) => {
           try {
             const full = await command('GET_CHANNEL', { channel_id: vc.id });
-            return { id: vc.id, name: vc.name, guild: vc.guild, members: channelMembers(full) };
-          } catch { return { id: vc.id, name: vc.name, guild: vc.guild, members: [] }; }
+            return { id: vc.id, name: vc.name, guild: vc.guild, guildId: vc.guildId, members: channelMembers(full) };
+          } catch { return { id: vc.id, name: vc.name, guild: vc.guild, guildId: vc.guildId, members: [] }; }
         }));
         for (const r of filled) channels.push(r);
       }

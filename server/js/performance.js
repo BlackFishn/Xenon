@@ -304,6 +304,7 @@
     if (!p.useAi || !hubSettings) return false;
     const provider = hubSettings.aiProvider;
     if (provider === 'ollama') return true;
+    if (provider === 'claudecode' || provider === 'codex') return true;
     if (provider === 'openai') return hubSettings.openaiAuthMode === 'chatgpt' || !!hubSettings.openaiApiKeySet;
     if (provider === 'anthropic') return !!hubSettings.anthropicApiKeySet;
     return geminiKeyReady(hubSettings);
@@ -395,7 +396,7 @@
           activity,
           apps: appNames,
           opts: p.opts,
-          provider: ['ollama', 'openai', 'anthropic'].includes(hubSettings.aiProvider) ? hubSettings.aiProvider : 'gemini',
+          provider: ['ollama', 'openai', 'anthropic', 'claudecode', 'codex'].includes(hubSettings.aiProvider) ? hubSettings.aiProvider : 'gemini',
           key: String(hubSettings.geminiApiKey || ''),
           model: hubSettings.ollamaModel,
           ollamaUrl: hubSettings.ollamaUrl,

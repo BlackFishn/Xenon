@@ -95,6 +95,12 @@ function createLivingIndex(opts) {
         else p.reject(new Error(env.err || 'index host error'));
       }
     });
+    // A write to a pipe whose child is already gone reports EPIPE/ECONNRESET
+    // ASYNCHRONOUSLY, as an 'error' event on the stream — the try/catch around
+    // stdin.write() never sees it, and an unhandled 'error' on a stream takes
+    // the whole server down. Route it to the same retire path the exit handler
+    // uses: the host is dead either way, and every caller already falls back.
+    proc.stdin.on('error', () => { if (host.proc === proc) retire('index host pipe error'); });
     proc.on('error', () => { if (host.proc === proc) retire('index host spawn error'); });
     proc.on('exit', () => { if (host.proc === proc) retire('index host exited'); });
     proc.unref();
@@ -195,6 +201,9 @@ function createLivingIndex(opts) {
         ready: s.ready === true, building: s.building === true,
         files: s.files || 0, dirs: s.dirs || 0, bytes: s.bytes || 0,
         ramMB: s.ramMB || 0, roots: host.roots.slice(),
+        // The entry cap this host derived from the machine's RAM, so the UI
+        // can warn BEFORE it is hit — "capped" arrives when it is too late.
+        maxEntries: Number.isFinite(s.maxEntries) && s.maxEntries > 0 ? Math.floor(s.maxEntries) : 0,
         capped: s.capped === true,
         // The roots the entry cap left incomplete. Validated the same way every
         // other value off the helper wire is: strings only, bounded, and only

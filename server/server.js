@@ -78,6 +78,7 @@ const aiOpenai = require('./ai-openai');
 const { createClient: createChatgptClient, usesChatgpt } = require('./ai-chatgpt');
 const aiChatgpt = createChatgptClient();
 const aiAnthropic = require('./ai-anthropic');
+const aiCli = require('./ai-cli');   // Claude Code / Codex: the user's own subscription
 const aiGemini = require('./ai-gemini');
 const aiModels = require('./ai-models');
 const { preserveAiProviderCreds, redactAiProviderCreds } = require('./ai-provider-creds');
@@ -92,7 +93,7 @@ const icsFeeds = require('./ics-feeds.js');
 // isBlockedOpenPath is the Deck's openFile gate. It is re-applied by every
 // surface that opens a file the user did not type the path of: the Spotlight
 // results, and the transfer widget's received files.
-const { createRegistry, resolveOutputDevice, isBlockedOpenPath } = require('./actions/registry');
+const { createRegistry, resolveOutputDevice, pickToggleDevice, isBlockedOpenPath } = require('./actions/registry');
 const { createPerfRegistry } = require('./actions/perf-registry');
 const { createObs, scenePreviewRequest } = require('./actions/obs');
 const { createStreamerbot } = require('./actions/streamerbot');
@@ -170,6 +171,7 @@ const PORT = (() => {
   const raw = parseInt(process.env.XENON_PORT, 10);
   return Number.isInteger(raw) && raw > 0 && raw <= 65535 ? raw : 3030;
 })();
+aiCli.configure({ port: PORT });   // where the Claude Code / Codex MCP bridge reaches Xenon's tools
 
 // ── Update check ──────────────────────────────────────────────────────────────
 // Soft probe of the latest GitHub release so the dashboard can show a discreet
@@ -417,6 +419,15 @@ function providerModelFor(provider, role, settings) {
   if (!key) return '';
   const apiKey = provider === 'openai' ? s.openaiApiKey : s.anthropicApiKey;
   return aiModels.resolve(provider, role, s[key], apiKey);
+}
+
+// One answer through the user's Claude Code / Codex subscription (ai-cli.js),
+// for the features a person starts themselves: a search, a button, the fold of
+// their own conversation. Automatic background ones never come here.
+async function cliOneShot(provider, systemText, userText, settings) {
+  const s = settings || (await readHubSettings().catch(() => null)) || {};
+  const model = provider === 'claudecode' ? s.claudeCodeModel : s.codexModel;
+  return aiCli.oneShot({ provider, model, systemText, userText });
 }
 
 // Core Xenon AI function declarations — the always-available tools (dashboard,
@@ -727,6 +738,7 @@ const CPU_TEMP_SCRIPT = path.join(__dirname, 'cpu-temp.ps1');
 const ENABLE_SENSORS_SCRIPT = path.join(__dirname, 'enable-sensors.ps1');
 const GPU_SCRIPT = path.join(__dirname, 'gpu.ps1');
 const NETWORK_SCRIPT = path.join(__dirname, 'network.ps1');
+const DISK_IO_SCRIPT = path.join(__dirname, 'disk-io.ps1');
 const WINDOWS_SCRIPT = path.join(__dirname, 'windows.ps1');
 const DECK_ACTIONS_SCRIPT = path.join(__dirname, 'deck-actions.ps1');
 const DECK_HOTKEY_SCRIPT = path.join(__dirname, 'deck-hotkey.ps1');
@@ -884,7 +896,49 @@ const fileSearch = createFileSearch({
 // opens/refocuses the /spotlight Edge app-mode window on the main PC. State is
 // surfaced to Settings via GET /search/hotkey-status; 'taken' means another
 // app (PowerToys Run on Alt+Space, typically) owns the combo.
-const _hotkey = { proc: null, combo: '', state: 'off', diedAt: 0 };
+const _hotkey = { proc: null, combo: '', combos: '', state: 'off', diedAt: 0, bindings: [], slots: {} };
+
+// The table the helper is handed, in the order it is handed it: the helper
+// addresses a combo by its POSITION, so this array IS the wire format and the
+// index of a press is an index into it.
+//
+// Spotlight goes first when it is on, which is also the compatibility story: a
+// helper too old to understand a list registers only the first combo and
+// reports a press with no index, which reads as index 0 — so on a stale binary
+// the search shortcut still works and the page ones are simply absent, rather
+// than the whole feature failing.
+const MAX_HOTKEY_BINDINGS = 16;
+function _hotkeyBindings() {
+  const cfg = (_serverHubSettings && _serverHubSettings.searchSettings) || {};
+  const out = [];
+  if (cfg.hotkeyEnabled === true) {
+    out.push({ slot: 'spotlight', combo: String(cfg.hotkeyCombo || 'alt+space') });
+  }
+  const pages = Array.isArray(_serverHubSettings && _serverHubSettings.pageHotkeys)
+    ? _serverHubSettings.pageHotkeys : [];
+  pages.forEach((b, i) => {
+    if (out.length >= MAX_HOTKEY_BINDINGS) return;
+    out.push({ slot: 'page-' + i, combo: String(b.combo || ''), target: String(b.target || '') });
+  });
+  return out.filter((b) => b.combo);
+}
+
+// A page shortcut fires on the PC running the server, and every dashboard
+// watching it flips. The target is resolved on the CLIENT: pages belong to a
+// device's own layout, so the server would have to guess which device's page
+// ids these are, and a phone with different pages simply ignores an id it does
+// not have.
+function routePageHotkey(binding) {
+  if (!binding || !binding.target) return;
+  broadcastSSE('page_hotkey', { target: binding.target, at: Date.now() });
+}
+
+function routeHotkeyIndex(index) {
+  const binding = _hotkey.bindings[index];
+  if (!binding) return;
+  if (binding.slot === 'spotlight') routeSpotlightHotkey();
+  else routePageHotkey(binding);
+}
 const _spotlightPopupPids = new Set();
 
 function openSpotlightPopupWindow() {
@@ -983,28 +1037,64 @@ const _linuxHotkey = process.platform === 'linux'
   ? require('./linux-hotkey').createLinuxHotkey({ port: PORT })
   : null;
 
-function refreshLinuxHotkey(want, combo) {
-  if (!want) {
+// On Linux the page shortcuts are desktop entries like the Spotlight one, one
+// per slot, and the desktop runs a command rather than pushing an event — so
+// each carries its own index in the URL it pokes. Registering is a one-shot
+// write, so this reconciles the whole set on every settings save and reports
+// per-slot state the same way the helper does.
+function refreshLinuxHotkey(want, combo, pages) {
+  if (want) {
+    if (_hotkey.state !== 'listening' || _hotkey.combo !== combo) {
+      _hotkey.state = 'starting';
+      _linuxHotkey.register(combo).then((r) => {
+        _hotkey.state = r.state || (r.ok ? 'listening' : 'error');
+        _hotkey.combo = r.ok ? combo : '';
+      }).catch(() => { _hotkey.state = 'error'; _hotkey.combo = ''; });
+    }
+  } else {
     _hotkey.state = 'off';
     _hotkey.combo = '';
     _linuxHotkey.unregister().catch(() => { /* nothing registered */ });
-    return;
   }
-  if (_hotkey.state === 'listening' && _hotkey.combo === combo) return;
-  _hotkey.state = 'starting';
-  _linuxHotkey.register(combo).then((r) => {
-    _hotkey.state = r.state || (r.ok ? 'listening' : 'error');
-    _hotkey.combo = r.ok ? combo : '';
-  }).catch(() => { _hotkey.state = 'error'; _hotkey.combo = ''; });
+  const wanted = pages.map((b, i) => ({
+    slot: b.slot,
+    combo: b.combo,
+    name: 'Xenon page ' + (i + 1),
+    // The index is the binding's position in the WHOLE table, not among the
+    // pages, so the press routes through the same _hotkey.bindings the helper
+    // path uses and there is one router rather than two.
+    route: '/pages/hotkey-press?i=' + _hotkey.bindings.indexOf(b),
+  }));
+  _linuxHotkey.syncSlots(wanted).then((r) => {
+    _hotkey.slots = {};
+    for (const [slot, res] of Object.entries((r && r.slots) || {})) {
+      _hotkey.slots[slot] = (r.ok && res) ? (res.state || (res.ok ? 'listening' : 'error')) : 'error';
+    }
+    if (r && !r.ok) for (const b of wanted) _hotkey.slots[b.slot] = r.state || 'error';
+  }).catch(() => {
+    _hotkey.slots = {};
+    for (const b of wanted) _hotkey.slots[b.slot] = 'error';
+  });
 }
 
 function refreshHotkeyListener() {
   const cfg = (_serverHubSettings && _serverHubSettings.searchSettings) || {};
-  const want = cfg.hotkeyEnabled === true;
+  const bindings = _hotkeyBindings();
+  const combos = bindings.map((b) => b.combo);
+  const want = bindings.length > 0;
+  const spotlightWanted = cfg.hotkeyEnabled === true;
   const combo = String(cfg.hotkeyCombo || 'alt+space');
-  if (_linuxHotkey) { refreshLinuxHotkey(want, combo); return; }
-  if (!want) { _cancelHotkeyRetry(); _stopHotkeyListener(); _hotkey.state = 'off'; return; }
-  if (_hotkey.proc && _hotkey.combo === combo) return;   // already right
+  // Set BEFORE dispatching: both paths read it to resolve a press, and the
+  // Linux one derives each slot's route from the index into this table.
+  const changed = combos.join('\u0000') !== _hotkey.combos;
+  _hotkey.bindings = bindings;
+  _hotkey.combos = combos.join('\u0000');
+  if (_linuxHotkey) {
+    refreshLinuxHotkey(spotlightWanted, combo, bindings.filter((b) => b.slot !== 'spotlight'));
+    return;
+  }
+  if (!want) { _cancelHotkeyRetry(); _stopHotkeyListener(); _hotkey.state = 'off'; _hotkey.slots = {}; return; }
+  if (_hotkey.proc && !changed) return;   // already right
   _stopHotkeyListener();
   let helperOk = false;
   try { helperOk = fs.existsSync(HELPER_EXE); } catch {}
@@ -1020,11 +1110,18 @@ function refreshHotkeyListener() {
     return;
   }
   let proc;
-  try { proc = spawn(HELPER_EXE, ['hotkey-serve', combo], { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] }); }
+  try { proc = spawn(HELPER_EXE, ['hotkey-serve', ...combos], { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] }); }
   catch { _hotkey.state = 'error'; _hotkey.diedAt = Date.now(); _scheduleHotkeyRetry(); return; }
   _hotkey.proc = proc;
   _hotkey.combo = combo;
   _hotkey.state = 'starting';
+  // Assume the worst per slot until the helper says otherwise: `ready` names
+  // the indices it holds, and anything it did not name stays 'taken'. A helper
+  // too old to name any of them reports a bare `ready`, which is exactly the
+  // single-combo case — so only slot 0 is claimed and the rest read as taken,
+  // which is what they in fact are on that binary.
+  _hotkey.slots = {};
+  for (const b of bindings) _hotkey.slots[b.slot] = 'starting';
   let buf = '';
   proc.stdout.setEncoding('utf8');
   proc.stdout.on('data', (chunk) => {
@@ -1035,9 +1132,30 @@ function refreshHotkeyListener() {
       buf = buf.slice(nl + 1);
       let ev;
       try { ev = JSON.parse(line); } catch { continue; }
-      if (ev.event === 'ready') _hotkey.state = 'listening';
-      else if (ev.event === 'hotkey') { try { routeSpotlightHotkey(); } catch {} }
-      else if (ev.event === 'error') { _hotkey.state = ev.error === 'hotkey_taken' ? 'taken' : 'error'; }
+      // An older helper sends no index at all, for the one combo it took.
+      const at = Number.isInteger(ev.index) ? ev.index : 0;
+      const slot = bindings[at] && bindings[at].slot;
+      if (ev.event === 'ready') {
+        _hotkey.state = 'listening';
+        const held = Array.isArray(ev.registered) ? ev.registered : [0];
+        for (const b of bindings) _hotkey.slots[b.slot] = 'taken';
+        for (const i of held) {
+          if (bindings[i]) _hotkey.slots[bindings[i].slot] = 'listening';
+        }
+        // The old single-combo state field tracks the Spotlight slot, which is
+        // what Settings' search row has always shown.
+        if (_hotkey.slots.spotlight && _hotkey.slots.spotlight !== 'listening') {
+          _hotkey.state = _hotkey.slots.spotlight;
+        }
+      } else if (ev.event === 'hotkey') {
+        try { routeHotkeyIndex(at); } catch {}
+      } else if (ev.event === 'error') {
+        const state = ev.error === 'hotkey_taken' ? 'taken' : 'error';
+        if (slot) _hotkey.slots[slot] = state;
+        // Only the Spotlight combo moves the legacy field; a page shortcut
+        // somebody else owns is not the search shortcut failing.
+        if (!slot || slot === 'spotlight') _hotkey.state = state;
+      }
     }
   });
   proc.on('error', () => {
@@ -2358,6 +2476,12 @@ function _ensureWorker() {
     }
   });
   proc.stderr.on('data', () => {}); // collectors trap their own errors; ignore
+  // A write to a pipe whose child is already gone reports EPIPE/ECONNRESET
+  // ASYNCHRONOUSLY, as an 'error' event on the stream — the try/catch around
+  // stdin.write() never sees it, and an unhandled 'error' on a stream takes the
+  // whole server down. Route it to the same retire path the exit handler uses:
+  // the host is dead either way, and every caller already falls back.
+  proc.stdin.on('error', () => _killWorker('worker pipe error'));
   proc.on('error', () => _killWorker('worker spawn error'));
   proc.on('exit', () => { if (_worker.proc === proc) _killWorker('worker exited'); });
   proc.unref(); // never keep the event loop alive on the worker's account
@@ -2515,6 +2639,12 @@ function _ensureMediaHost() {
     }
   });
   proc.stderr.on('data', () => {}); // the host traps its own errors; ignore
+  // A write to a pipe whose child is already gone reports EPIPE/ECONNRESET
+  // ASYNCHRONOUSLY, as an 'error' event on the stream — the try/catch around
+  // stdin.write() never sees it, and an unhandled 'error' on a stream takes the
+  // whole server down. Route it to the same retire path the exit handler uses:
+  // the host is dead either way, and every caller already falls back.
+  proc.stdin.on('error', () => _retireMediaHost('media host pipe error'));
   proc.on('error', () => _retireMediaHost('media host spawn error'));
   proc.on('exit', () => { if (_mediaHost.proc === proc) _retireMediaHost('media host exited'); });
   proc.unref(); // never keep the event loop alive on the host's account
@@ -4506,7 +4636,25 @@ async function getSystemInfo() {
 
 // --- Network info: bandwidth requires a delta between two readings ---
 let _netPrev = null; // { rx, tx, t }
+// Per-interface previous counters, keyed by the collector's stable id. Its own
+// map rather than a field on _netPrev: an interface can appear (a VPN comes up)
+// or vanish (a dock is unplugged) between two polls, and the totals must not
+// care. A vanished id is dropped so the map cannot grow forever on a laptop
+// that sees a new virtual adapter per container.
+let _netPrevIfaces = new Map();  // id -> { rx, tx, t }
 let _netPending = null;
+
+// Bytes-per-second from two cumulative readings. Returns null rather than 0 for
+// everything that is not a real measurement — no previous sample, no elapsed
+// time, or a counter that went BACKWARDS (an interface that was reset, or a
+// 32-bit counter wrapping), because a made-up 0 in a graph reads as "idle" when
+// the truth is "unknown".
+function bytesPerSec(now, prev, dtSec) {
+  if (!prev || !(dtSec > 0)) return null;
+  const d = now - prev;
+  if (!(d >= 0)) return null;
+  return Math.round(d / dtSec);
+}
 async function getNetworkInfo() {
   // In-flight dedup: with two dashboards open the 3s polls interleave, and two
   // concurrent runs would both rewrite _netPrev — corrupting the bandwidth
@@ -4538,6 +4686,46 @@ async function _getNetworkInfoRaw() {
   }
   _netPrev = { rx, tx, t: now };
 
+  // Per-interface throughput, the same delta one level down. Asked for on
+  // Discord by someone building a monitoring widget who wants his NAS link, his
+  // internet link and a VMware VMnet on separate graphs: the collectors have
+  // always read each adapter and thrown the breakdown away at the sum.
+  //
+  // Each interface keeps its OWN timestamp, so one that appears mid-session
+  // reports null until it has two readings of its own rather than inheriting
+  // the totals' clock and printing a spike the size of its lifetime counter.
+  const interfaces = [];
+  const seenIds = new Set();
+  for (const n of (Array.isArray(data.interfaces) ? data.interfaces : [])) {
+    const id = String((n && n.id) || '').slice(0, 120);
+    if (!id || seenIds.has(id)) continue;
+    seenIds.add(id);
+    const nrx = Number(n.rxBytes) || 0;
+    const ntx = Number(n.txBytes) || 0;
+    const prev = _netPrevIfaces.get(id);
+    const dt = prev ? (now - prev.t) / 1000 : 0;
+    interfaces.push({
+      id,
+      // The name the user sees and renames in Windows; the collectors fall back
+      // to the system id where the platform has no separate display name.
+      name: String((n && n.name) || id).slice(0, 120),
+      description: String((n && n.description) || '').slice(0, 160),
+      kind: n && n.kind === 'virtual' ? 'virtual' : 'physical',
+      up: n && typeof n.up === 'boolean' ? n.up : null,
+      speedBps: Number.isFinite(Number(n && n.speedBps)) && Number(n.speedBps) > 0 ? Number(n.speedBps) : null,
+      rxBytesPerSec: bytesPerSec(nrx, prev && prev.rx, dt),
+      txBytesPerSec: bytesPerSec(ntx, prev && prev.tx, dt),
+      rxBytes: nrx,
+      txBytes: ntx,
+    });
+    _netPrevIfaces.set(id, { rx: nrx, tx: ntx, t: now });
+  }
+  // Forget adapters that are gone, so the map tracks the machine rather than
+  // its history.
+  for (const id of Array.from(_netPrevIfaces.keys())) {
+    if (!seenIds.has(id)) _netPrevIfaces.delete(id);
+  }
+
   // Prefer PresentMon's real in-game FPS (works in exclusive fullscreen);
   // fall back to the PowerShell DWM/LHM reading when it isn't available.
   //
@@ -4562,7 +4750,89 @@ async function _getNetworkInfoRaw() {
     gpuLatency: data.gpuLatency ?? null,
     downloadBps: downBps,
     uploadBps: upBps,
+    // Every adapter the machine has, physical and virtual, each with its own
+    // throughput. `downloadBps`/`uploadBps` above stay the sum of the PHYSICAL
+    // ones and are what the Network tile draws: adding a VPN or a VMnet to that
+    // total would count the same packets twice.
+    interfaces,
   };
+}
+
+// --- Per-disk I/O ----------------------------------------------------------
+// Asked for on Discord for an SDK monitoring widget: throughput and IOPS per
+// physical disk, with a model and a volume so a person can tell which is which.
+//
+// Pulled, never polled. Every platform's counters are cumulative, so the rate
+// is the same inter-poll delta the network interfaces use — and the same rule
+// about what an unknown rate is: null, never 0.
+//
+// `_diskPrev` is keyed by the collector's id. A disk that is unplugged is
+// forgotten on the next read, and one that appears reports null until it has
+// two readings of its own.
+let _diskPrev = new Map();     // id -> { rb, wb, ro, wo, t }
+let _diskPending = null;
+const DISK_SECTOR = 512;       // /proc/diskstats' documented unit, on every device
+
+function getDiskIo() {
+  if (_diskPending) return _diskPending;
+  _diskPending = _getDiskIoRaw().finally(() => { _diskPending = null; });
+  return _diskPending;
+}
+
+async function _getDiskIoRaw() {
+  let rows = [];
+  try {
+    if (nativeCollectors) {
+      rows = await nativeCollectors.diskIo();
+    } else {
+      const out = await runCollector(DISK_IO_SCRIPT, [], 8000);
+      rows = (out && Array.isArray(out.disks)) ? out.disks : [];
+    }
+  } catch { rows = []; }
+  if (!Array.isArray(rows)) rows = [];
+
+  const now = Date.now();
+  const seen = new Set();
+  const disks = [];
+  for (const d of rows) {
+    const id = String((d && d.id) || '').slice(0, 120);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    // Linux counts sectors, Windows and macOS count bytes. Normalise here so
+    // the SDK sees one unit and nobody has to know which OS answered.
+    const rb = Number.isFinite(Number(d.readBytes)) ? Number(d.readBytes)
+      : (Number(d.sectorsRead) || 0) * DISK_SECTOR;
+    const wb = Number.isFinite(Number(d.writeBytes)) ? Number(d.writeBytes)
+      : (Number(d.sectorsWritten) || 0) * DISK_SECTOR;
+    const ro = Number(d.readsCompleted) || 0;
+    const wo = Number(d.writesCompleted) || 0;
+    const prev = _diskPrev.get(id);
+    const dt = prev ? (now - prev.t) / 1000 : 0;
+    disks.push({
+      id,
+      model: String((d && d.model) || id).slice(0, 120),
+      serial: String((d && d.serial) || '').slice(0, 80),
+      kind: d && (d.kind === 'ssd' || d.kind === 'hdd') ? d.kind : '',
+      sizeBytes: Number.isFinite(Number(d.sizeBytes)) && Number(d.sizeBytes) > 0 ? Number(d.sizeBytes) : null,
+      volumes: Array.isArray(d.volumes) ? d.volumes.slice(0, 16).map((v) => ({
+        mount: String((v && v.mount) || '').slice(0, 160),
+        label: String((v && v.label) || '').slice(0, 80),
+        fstype: String((v && v.fstype) || '').slice(0, 24),
+      })) : [],
+      temperature: Number.isFinite(Number(d && d.temperature)) ? Number(d.temperature) : null,
+      readBytesPerSec: bytesPerSec(rb, prev && prev.rb, dt),
+      writeBytesPerSec: bytesPerSec(wb, prev && prev.wb, dt),
+      readIops: bytesPerSec(ro, prev && prev.ro, dt),
+      writeIops: bytesPerSec(wo, prev && prev.wo, dt),
+      readBytes: rb,
+      writeBytes: wb,
+    });
+    _diskPrev.set(id, { rb, wb, ro, wo, t: now });
+  }
+  for (const id of Array.from(_diskPrev.keys())) {
+    if (!seen.has(id)) _diskPrev.delete(id);
+  }
+  return { ok: true, disks };
 }
 
 // Sticky per-track album art. SMTC — browser/YouTube sessions especially —
@@ -5791,6 +6061,19 @@ const deckRegistryDeps = {
     cachedSpeakerName = match.name || cachedSpeakerName;
     return { ok: true };
   },
+  // Flip between two outputs. Which one is decided against the live list, so a
+  // key pressed right after the output was changed from the OS still goes the
+  // right way; the same resolveOutputDevice check guards both ids.
+  audioDeviceToggle: async (a, b) => {
+    let info;
+    try { info = await getAudioInfo(); } catch { return { ok: false, error: 'audio_unavailable' }; }
+    const match = pickToggleDevice(a, b, info && info.speakers);
+    if (!match) return { ok: false, error: 'unknown_device' };
+    await svvExec(['/SetDefault', match.id, 'all']);
+    cachedSpeakerId = match.id;
+    cachedSpeakerName = match.name || cachedSpeakerName;
+    return { ok: true };
+  },
   // Task-list mutations (the `tasks` action category). All go through writeTasks,
   // which normalises (assigns id/createdAt, caps text to 200, drops empties) and
   // broadcasts the updated `tasks` stream — so the Tasks tile and every granted
@@ -6540,7 +6823,7 @@ async function speakOnServer(text, langPrefix, apiKey, provider) {
   if (!clean) return;
 
   const subscriptionVoice = provider === 'openai' && usesChatgpt(await readHubSettings().catch(() => null));
-  const useLocal = provider === 'ollama' || provider === 'anthropic' || subscriptionVoice;
+  const useLocal = provider === 'ollama' || provider === 'anthropic' || subscriptionVoice || aiCli.isCliProvider(provider);
   const useOpenai = provider === 'openai' && !subscriptionVoice;
   let openaiKey = '';
   if (useOpenai) { const s = await readHubSettings().catch(() => null); openaiKey = String((s && s.openaiApiKey) || '').trim(); }
@@ -7027,7 +7310,7 @@ async function executeAiTool(fnName, fnArgs, deps) {
       // searches key-free via DuckDuckGo. Use an explicit non-Gemini allowlist:
       // the Gemini main tool loop calls executeAiTool WITHOUT a `provider` dep, so
       // `provider` is undefined there and must fall to the grounded branch.
-      const searchRes = (provider === 'ollama' || provider === 'openai' || provider === 'anthropic')
+      const searchRes = (provider === 'ollama' || provider === 'openai' || provider === 'anthropic' || aiCli.isCliProvider(provider))
         ? await aiLocal.localWebSearch(fnArgs.query)
         : await _geminiWebSearch(fnArgs.query, apiKey);
       fnResult = searchRes.error
@@ -7848,11 +8131,11 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   uiFont: null,
   lockWidgets: Object.freeze({ clock: true, weather: true, media: true, calendar: true }),
   // Ambient / Screensaver mode (client mirror in js/settings.js — keep in step).
-  ambientMode: Object.freeze({ enabled: true, idleMinutes: 0, sceneId: 'builtin' }),
+  ambientMode: Object.freeze({ enabled: true, idleMinutes: 0, sceneId: 'builtin', openOnStartup: false }),
   // Native canvas Ambient scenes (client-owned, like customThemes).
   ambientScenes: Object.freeze([]),
   contentInstalls: Object.freeze([]),
-  weather: Object.freeze({ mode: 'auto', city: '', provider: 'auto', refreshMin: 30, forecastDays: 3, tile: Object.freeze({ metrics: true, hourly: true, forecast: true, fields: WEATHER_FIELDS_ALL_ON }) }),
+  weather: Object.freeze({ mode: 'auto', city: '', provider: 'auto', refreshMin: 30, forecastDays: 3, tile: Object.freeze({ hero: 'full', metrics: true, hourly: true, forecast: true, fields: WEATHER_FIELDS_ALL_ON }) }),
   tempUnit: 'c', // 'c' | 'f' — weather temperature display unit
   // Mirrors js/settings.js: 'off' | 'minimal' | 'wave'. Read by
   // audioLevelsWanted(): anything but 'off' is a first-party reason to run the
@@ -7973,7 +8256,14 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   // channels you care about is a fact about YOU, so it should follow you to the
   // phone and the Edge. Contrast the tile layout, which is per-device precisely
   // because the right answer differs from screen to screen.
+  // Which servers the user has collapsed in the Discord widget's Channels tab,
+  // by guild id. Remembered rather than reset per visit: someone with a dozen
+  // servers collapses the ones they never join once, and a list that forgets
+  // makes them do it again at every sign-in (asked for on Discord, Sep 2026 —
+  // "so your not forever scrolling"). Guild ids, not names, so a renamed server
+  // stays collapsed and two servers with the same name are told apart.
   discordFavChannels: Object.freeze([]),
+  discordCollapsedGuilds: Object.freeze([]),
   // Opt-in ad-blocker for the Browser tile (Settings → Browser). OFF by default;
   // when on, the server loads an unpacked uBOL MV3 extension into the tile's Edge.
   browserAdblock: false,
@@ -7992,7 +8282,7 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   streamerbotHost: '',
   streamerbotPort: 8080,
   streamerbotPassword: '',
-  aiProvider: 'gemini', // 'gemini' | 'ollama' | 'openai' | 'anthropic' — selected AI backend
+  aiProvider: 'gemini', // 'gemini' | 'ollama' | 'openai' | 'anthropic' | 'claudecode' | 'codex' — selected AI backend
   ollamaModel: 'auto',  // 'auto' | whitelist key | custom model tag
   ollamaUrl: 'http://localhost:11434',
   // ChatGPT (OpenAI) + Claude (Anthropic): server-mediated cloud providers. Keys
@@ -8006,6 +8296,9 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   openaiTtsModel: 'auto',
   anthropicApiKey: '',
   anthropicModel: 'auto',
+  // Claude Code / Codex (ai-cli.js): 'default' lets the program choose.
+  claudeCodeModel: 'default',
+  codexModel: 'default',
   // Gemini models, one per role. `auto` (or `auto:<family>`) follows whatever the
   // user's key can reach — see ai-models.js — so a model Google ships tomorrow is
   // in use without an app update, while a concrete id here is a pin kept forever.
@@ -8068,6 +8361,7 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   // normalizeSearchSettings: "C:\" is not a path off Windows, and a default the
   // validator there would reject leaves the index permanently off.
   searchSettings: Object.freeze({ indexRoots: Object.freeze([POWERSHELL_SUPPORTED ? 'C:\\' : os.homedir()]), hotkeyEnabled: false, hotkeyCombo: 'alt+space', aiFullContext: false }),
+  pageHotkeys: Object.freeze([]),
   diskSettings: Object.freeze({ devFolders: Object.freeze([]), installerAgeDays: 30 }),
   bgAurora: Object.freeze({ enabled: true, intensity: 55, speed: 50 }),
   bgGrid: Object.freeze({ enabled: true, color: '#1ed760', intensity: 45, speed: 50 }),
@@ -8278,6 +8572,9 @@ function normalizeAmbientMode(value) {
     enabled: source.enabled !== undefined ? !!source.enabled : defaults.enabled,
     idleMinutes: AMBIENT_IDLE_MINUTES.has(idle) ? idle : defaults.idleMinutes,
     sceneId,
+    // Mirror of js/settings.js — dropped here, the toggle would snap back off
+    // on the next hydrate.
+    openOnStartup: source.openOnStartup === true,
   };
 }
 
@@ -8311,7 +8608,8 @@ function normalizeSettingsWeather(value) {
     ? Number(source.forecastDays) : DEFAULT_HUB_SETTINGS.weather.forecastDays;
   const srcTile = source.tile && typeof source.tile === 'object' ? source.tile : {};
   const defTile = DEFAULT_HUB_SETTINGS.weather.tile;
-  const tile = {};
+  // 'full' | 'compact' — mirror of WEATHER_TILE_HEROES in js/settings.js.
+  const tile = { hero: ['full', 'compact'].includes(srcTile.hero) ? srcTile.hero : defTile.hero };
   ['metrics', 'hourly', 'forecast'].forEach(k => { tile[k] = typeof srcTile[k] === 'boolean' ? srcTile[k] : defTile[k]; });
   const srcFields = srcTile.fields && typeof srcTile.fields === 'object' ? srcTile.fields : {};
   const fields = {};
@@ -8991,6 +9289,39 @@ function normalizeSearchSettings(value, defaultRoot) {
 
 // Disk widget knobs: dev folders (the ONLY places build-output dirs become
 // cleanable) and how old a Downloads installer must be before it classifies.
+// Global shortcuts that flip the dashboard to a page while another app has
+// focus — the whole point of a second screen you are not clicking on. Each
+// entry is a combo and what it goes to: a page id, or one of the relative
+// moves, which are what "toggle between my two pages" is actually asking for.
+//
+// The page id is NOT validated against the current pages here. Pages live in
+// the dashboard layout, which is per device, and this list is shared by all of
+// them: dropping an id the saving device happens not to have would delete
+// another screen's shortcut every time the user saved anything. The client
+// resolves the id when the shortcut fires and does nothing if it is not there.
+const MAX_PAGE_HOTKEYS = 8;
+
+function normalizePageHotkeys(value) {
+  if (!Array.isArray(value)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object') continue;
+    const combo = String(raw.combo || '').toLowerCase().trim().slice(0, 40);
+    // The same shape the Spotlight combo is held to, and the same reason: the
+    // helpers parse it themselves and report a combo they cannot read, so this
+    // only has to keep the argument list free of anything shell-shaped.
+    if (!/^[a-z0-9+ ]{3,40}$/.test(combo)) continue;
+    if (seen.has(combo)) continue;            // two actions on one combo: the desktop fires neither
+    const target = String(raw.target || '').trim().slice(0, 64);
+    if (!target) continue;
+    seen.add(combo);
+    out.push({ combo, target });
+    if (out.length >= MAX_PAGE_HOTKEYS) break;
+  }
+  return out;
+}
+
 function normalizeDiskSettings(value) {
   const v = value && typeof value === 'object' ? value : {};
   const folders = Array.isArray(v.devFolders)
@@ -9356,6 +9687,7 @@ function normalizeHubSettings(value) {
     // every surface and used as a DOM key, so anything that is not a Discord id
     // has no business surviving a round trip through the store.
     discordFavChannels: normalizeSnowflakeList(source.discordFavChannels),
+    discordCollapsedGuilds: normalizeSnowflakeList(source.discordCollapsedGuilds),
     browserAdblock: source.browserAdblock === true,
     dashboardLayout: resetLayout
       ? cloneDashboardLayout(DEFAULT_DASHBOARD_LAYOUT)
@@ -9405,6 +9737,8 @@ function normalizeHubSettings(value) {
     openaiTtsModel: aiOpenai.sanitizeSpeechModel(source.openaiTtsModel, 'tts'),
     anthropicApiKey: String(source.anthropicApiKey || '').trim().slice(0, 200),
     anthropicModel: aiAnthropic.sanitizeModel(source.anthropicModel),
+    claudeCodeModel: aiCli.sanitizeModel(source.claudeCodeModel),
+    codexModel: aiCli.sanitizeModel(source.codexModel),
     // Gemini, one per role. Same sanitizer for all four: `auto`/`auto:<family>`
     // or a concrete id, anything else falls back to `auto`.
     geminiModel: aiGemini.sanitizeModel(source.geminiModel),
@@ -9437,6 +9771,7 @@ function normalizeHubSettings(value) {
     // never-set default; the browser's copy of this normalizer keeps whatever
     // the server already chose.
     searchSettings: normalizeSearchSettings(source.searchSettings, POWERSHELL_SUPPORTED ? 'C:\\' : os.homedir()),
+    pageHotkeys: normalizePageHotkeys(source.pageHotkeys),
     diskSettings: normalizeDiskSettings(source.diskSettings),
     bgAurora: normalizeBgAurora(source.bgAurora),
     bgGrid: normalizeBgGrid(source.bgGrid),
@@ -9713,6 +10048,9 @@ function normalizeLightingProviders(value) {
         optedIn: !(d && d.optedIn === false),
       };
       if (d && d.token) dev.token = String(d.token).slice(0, 256); // pairing token (Hue/Nanoleaf)
+      // The paired bridge's own id. Dropped here, it would be re-learned from
+      // whatever answers the address instead of from what was paired.
+      if (d && d.bridgeId) dev.bridgeId = String(d.bridgeId).toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 32);
       return dev;
     }).filter(Boolean).slice(0, 32);
     if (devices.length) out[id] = { devices };
@@ -12240,6 +12578,7 @@ const CSRF_MUTATION_PATHS = new Set([
   '/api/transfer/open',
   '/api/transfer/reveal',
   '/api/transfer/delete',
+  '/api/transfer/undo',
   '/api/transfer/settings',
 ]);
 
@@ -12424,6 +12763,36 @@ function transferState(includePaths) {
 // does nothing" failure this codebase avoids everywhere else.
 function broadcastTransfer() {
   broadcastSSE('transfer', transferState(false));
+}
+
+// ── Taking a delete back ────────────────────────────────────────────────────
+// A removed record is held here, blob and all, for a few seconds. Reported as
+// "if I delete one photo they all get deleted and there is no way back": the
+// first half was a boot bug (see file-transfer.js init), the second half was
+// true on its own — the bin says "remove from the list", and with the copy into
+// your own folder turned off that list holds the only copy there is.
+//
+// In memory, not on disk: an undo is a thing you do in the next breath, and a
+// restart is exactly the moment to stop holding files nobody asked to keep.
+// init()'s orphan sweep reclaims the blob if the process dies mid-window.
+const TRANSFER_UNDO_MS = 12000;
+const _transferUndo = new Map();   // id -> { rec, timer }
+
+function holdForUndo(rec) {
+  const timer = setTimeout(() => {
+    _transferUndo.delete(rec.id);
+    fileTransfer.discardBlob(rec).catch(() => {});
+  }, TRANSFER_UNDO_MS);
+  timer.unref && timer.unref();
+  _transferUndo.set(rec.id, { rec, timer });
+}
+
+async function undoTransferDelete(id) {
+  const held = _transferUndo.get(id);
+  if (!held) return false;
+  clearTimeout(held.timer);
+  _transferUndo.delete(id);
+  return !!(await fileTransfer.restore(held.rec));
 }
 
 /**
@@ -13204,6 +13573,12 @@ async function _aiPerformancePlan({ activity, appNames, opts, provider, key, mod
       const text = await mod.oneShot({ apiKey: provKey, model: provModel, systemText: 'You output only a single JSON object, never prose or markdown.', userText: prompt, maxTokens: 500 });
       return _normalizePerfPlan(text, names);
     }
+    if (aiCli.isCliProvider(provider)) {
+      // Started by the user switching Performance Mode on, so it may use their
+      // subscription; slower than an API call, and the plan waits for it.
+      const text = await cliOneShot(provider, 'You output only a single JSON object, never prose or markdown.', prompt);
+      return _normalizePerfPlan(text, names);
+    }
     if (!key) return null;
     const text = await _geminiGenerateJSON(prompt, key);
     return _normalizePerfPlan(text, names);
@@ -13535,6 +13910,13 @@ const handleRequest = async (req, res) => {
   } else if (reqPath === '/network' && req.method === 'GET') {
     try   { json(await getNetworkInfo()); }
     catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/disks/io' && req.method === 'GET') {
+    // Per-disk throughput and IOPS, for the SDK's `diskIo` stream. A read, and
+    // a costed one — it is pulled by a widget that is on screen asking, never
+    // polled by the server.
+    try   { json(await getDiskIo()); }
+    catch (e) { json({ ok: false, disks: [], error: String((e && e.message) || e) }); }
 
   } else if (reqPath === '/api/gamemode/status' && req.method === 'GET') {
     // Game mode runs off foreground full-screen detection (no PresentMon needed).
@@ -14086,6 +14468,7 @@ const handleRequest = async (req, res) => {
     json({
       ok: true,
       wanted: audioLevelsWanted(),
+      platform: process.platform,   // meters exist on Windows only; Settings says so elsewhere
       available: audioLevels.available(),
       running: audioLevels.isRunning(),
       failure: audioLevels.failure(),
@@ -16766,6 +17149,37 @@ const handleRequest = async (req, res) => {
         return;
       }
 
+      if (aiCli.isCliProvider(provider)) {
+        // The user's own subscription, through the official Claude Code / Codex
+        // program (see ai-cli.js for what that may and may not do). Xenon's tools
+        // reach the model over MCP (ai-mcp-bridge.js) and run through the very
+        // same executeAiTool as every other provider; the program's own tools
+        // (shell, files, web) stay off.
+        const settings = await readHubSettings().catch(() => null);
+        const cliModel = aiCli.sanitizeModel(settings && (provider === 'claudecode' ? settings.claudeCodeModel : settings.codexModel));
+        const SYS_XLATE = (langName ? ` Tool results (especially web_search) may be written in English; ALWAYS translate and write your final answer in ${langName}, never copy the English text verbatim.` : '');
+        const SYS_MCP = ' Your tools come from the "xenon" MCP server; their names may carry a prefix such as mcp__xenon__. You have no other tools: no shell, no file access, no web browsing except the web_search tool.';
+        const systemText = SYS_BASE + SYS_MCP + ((isVoice || hasAudio) ? SYS_VOICE : SYS_TEXT) + SYS_LANG + SYS_XLATE;
+        try {
+          const result = await aiCli.chat({
+            provider, model: cliModel, systemText, history: currentMessages,
+            tools: AI_FUNCTIONS,
+            executeTool: (fnName, fnArgs) => executeAiTool(fnName, fnArgs, {
+              apiKey, uiLang: _uiLang2, latestUserText: _latestUserText,
+              latestLooksLikeClothingWeather: _latestLooksLikeClothingWeather,
+              latestExplicitlyWantsScreen: _latestExplicitlyWantsScreen,
+              provider,
+            }).then(r => ({ fnResult: r.fnResult, clientActions: r.clientActions, pendingScreenImage: r.pendingScreenImage })),
+          });
+          json({ text: result.text, clientActions: result.clientActions, newContent: result.newContent });
+        } catch (e) {
+          const code = (e && e.code) || 'cli_failed';
+          res.writeHead(code === 'cli_failed' ? 502 : 400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: code, detail: code === 'cli_failed' ? String((e && e.message) || '').slice(0, 400) : undefined }));
+        }
+        return;
+      }
+
       if (provider === 'openai' || provider === 'anthropic') {
         // Server-mediated cloud providers (ChatGPT / Claude). Their keys are
         // SERVER-ONLY, so read them from settings — never from the request body.
@@ -16934,6 +17348,9 @@ const handleRequest = async (req, res) => {
         if (!provKey && mod !== aiChatgpt) { json({ summary: prev }); return; }
         const out = await mod.oneShot({ apiKey: provKey, model: provModel, systemText: sysText, userText, maxTokens: 400 }).catch(() => '');
         if (out) summary = String(out).trim().slice(0, 2000);
+      } else if (aiCli.isCliProvider(provider)) {
+        const out = await cliOneShot(provider, sysText, userText).catch(() => '');
+        if (out) summary = String(out).trim().slice(0, 2000);
       } else {
         if (!apiKey) { json({ summary: prev }); return; }
         const out = await _geminiOneShot(apiKey, [{ text: userText }], sysText, 400).catch(() => '');
@@ -17017,6 +17434,10 @@ const handleRequest = async (req, res) => {
         const provKey = provider === 'openai' ? (settings && settings.openaiApiKey) : (settings && settings.anthropicApiKey);
         const provModel = providerModelFor(provider, 'chat', settings);
         if (provKey || mod === aiChatgpt) text = await mod.oneShot({ apiKey: provKey, model: provModel, systemText: sysText, userText, maxTokens: 100 }).catch(() => '');
+      } else if (aiCli.isCliProvider(provider)) {
+        // Bit speaks up on its own, so it never spends the user's Claude Code /
+        // Codex subscription: an empty line sends the client to its phrase bank.
+        text = '';
       } else {
         if (apiKey) text = await _geminiOneShot(apiKey, [{ text: userText }], sysText, 100).catch(() => '');
       }
@@ -17111,7 +17532,7 @@ const handleRequest = async (req, res) => {
       if (startBody.mode !== 'test') {
         const settings = await readHubSettings().catch(() => null);
         const provider = aiLocal.sanitizeProvider(startBody.provider || settings?.aiProvider);
-        if (provider === 'ollama' || provider === 'anthropic' || (provider === 'openai' && usesChatgpt(settings))) {
+        if (provider === 'ollama' || provider === 'anthropic' || (provider === 'openai' && usesChatgpt(settings)) || aiCli.isCliProvider(provider)) {
           if (!aiLocal.whisperExe(__dirname)) throw new Error('whisper_not_installed');
           if (!fs.existsSync(aiLocal.whisperPaths(__dirname).model)) throw new Error('whisper_model_missing');
         }
@@ -17160,6 +17581,12 @@ const handleRequest = async (req, res) => {
       ], { windowsHide: true });
 
       ffmpegProc.stdin.setDefaultEncoding('utf8');
+      // Stopping a recording writes 'q' to this pipe. If ffmpeg already died
+      // (mic unplugged, device taken by another app) that write races its exit
+      // and reports EPIPE as an 'error' event on the stream, not as a throw —
+      // unhandled, it would take the server down at the end of a dictation.
+      ffmpegProc.stdin.on('error', () => {}); // the exit handler already settles it
+
       ffmpegProc.stderr.setEncoding('utf8');
 
       let stderrAccum = '';
@@ -17294,7 +17721,27 @@ const handleRequest = async (req, res) => {
         res.end(JSON.stringify({ audio: wavData.toString('base64'), mimeType: 'audio/wav' })); return;
       }
       let sttText;
-      if (sttProvider === 'ollama' || (sttProvider === 'openai' && usesChatgpt(await readHubSettings().catch(() => null)))) {
+      // Each provider hears the user the way /api/transcribe does, so none of
+      // them quietly needs a Gemini key: local whisper for Ollama, Claude (no
+      // speech API) and a Claude Code / Codex subscription; OpenAI's own speech
+      // model, with its server-only key, for ChatGPT. Before this, the voice orb
+      // sent Claude and ChatGPT to Gemini and failed without a Gemini key.
+      const s = sttProvider === 'openai' ? await readHubSettings().catch(() => null) : null;
+      const subscriptionVoice = sttProvider === 'openai' && usesChatgpt(s);
+      if (sttProvider === 'openai' && !subscriptionVoice) {
+        const openaiKey = String((s && s.openaiApiKey) || '').trim();
+        if (!openaiKey) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'missing_key' })); return;
+        }
+        process.stdout.write(`[STT] OpenAI transcribe lang=${sttLang}\n`);
+        try {
+          sttText = await aiOpenai.stt({ apiKey: openaiKey, wavBuffer: wavData, lang: sttLang, model: providerModelFor('openai', 'stt', s) });
+        } catch (e) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ text: '', error: e.message })); return;
+        }
+      } else if (sttProvider === 'ollama' || sttProvider === 'anthropic' || subscriptionVoice || aiCli.isCliProvider(sttProvider)) {
         process.stdout.write(`[STT] Local whisper transcribe lang=${sttLang}\n`);
         try {
           // Menu language does not determine the language being spoken.
@@ -17336,6 +17783,41 @@ const handleRequest = async (req, res) => {
       const settings = await readHubSettings().catch(() => null);
       json(await aiChatgpt.catalog(settings?.chatgptModel));
     } catch (e) { json({ models: [], error: e.message }); }
+
+  } else if (reqPath === '/api/ai/cli/mcp' && req.method === 'POST') {
+    // Xenon's tools for a Claude Code / Codex turn, asked for by the MCP bridge
+    // (ai-mcp-bridge.js) that the program started. The token names one live
+    // turn and dies with it; ai-cli.js refuses everything else, and each call
+    // runs through executeAiTool exactly as it does for the other providers.
+    try {
+      const raw = await readBodyBuffer(req, 256 * 1024);
+      const body = JSON.parse(raw.toString('utf8') || '{}');
+      const out = await aiCli.handleMcp(String(req.headers['x-xenon-mcp-token'] || ''), body);
+      res.writeHead(out.status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(out.body));
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'bad_request' }));
+    }
+
+  } else if (reqPath === '/api/ai/cli/status' && req.method === 'GET') {
+    // Claude Code / Codex: is the program there, and is the user signed in to
+    // it. Asked by Settings; `fresh=1` skips the 30s cache so the answer
+    // changes as soon as the user has signed in.
+    const provider = aiLocal.sanitizeProvider(urlObj.searchParams.get('provider'));
+    if (!aiCli.isCliProvider(provider)) { json({ ok: false, error: 'bad_provider' }); return; }
+    try { json(Object.assign({ ok: true }, await aiCli.status(provider, { fresh: urlObj.searchParams.get('fresh') === '1' }))); }
+    catch (e) { json({ ok: false, error: 'status_failed' }); }
+
+  } else if (reqPath === '/api/ai/cli/models' && req.method === 'GET') {
+    // The models the program itself offers this account today: Claude Code's
+    // own list (its `initialize` answer, what its /model picker shows), Codex's
+    // own catalog (`codex debug models`). `fresh=1` when Settings opens, so the
+    // picker is never older than the program.
+    const provider = aiLocal.sanitizeProvider(urlObj.searchParams.get('provider'));
+    if (!aiCli.isCliProvider(provider)) { json({ ok: false, error: 'bad_provider' }); return; }
+    try { json({ ok: true, provider, models: await aiCli.models(provider, { fresh: urlObj.searchParams.get('fresh') === '1' }) }); }
+    catch (e) { json({ ok: true, provider, models: [] }); }
 
   } else if (reqPath === '/api/ai/models' && req.method === 'GET') {
     // Live model list for the picker, fetched from each provider's own models
@@ -17389,7 +17871,7 @@ const handleRequest = async (req, res) => {
       // transcribe. Ollama and Claude (no speech API) use local whisper.cpp;
       // ChatGPT uses OpenAI Whisper with its server-only key. No Gemini key
       // required. Errors degrade gracefully (HTTP 200, empty text).
-      if (tProvider === 'ollama' || tProvider === 'anthropic' || tProvider === 'openai') {
+      if (tProvider === 'ollama' || tProvider === 'anthropic' || tProvider === 'openai' || aiCli.isCliProvider(tProvider)) {
         if (!audioB64) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'missing_params' })); return;
@@ -17484,7 +17966,7 @@ const handleRequest = async (req, res) => {
       }
       // Non-Gemini providers return a ready WAV. Ollama and Claude use the free
       // local Edge neural TTS; ChatGPT uses OpenAI TTS (server-only key).
-      if (ttsProvider === 'ollama' || ttsProvider === 'anthropic' || ttsProvider === 'openai') {
+      if (ttsProvider === 'ollama' || ttsProvider === 'anthropic' || ttsProvider === 'openai' || aiCli.isCliProvider(ttsProvider)) {
         try {
           let wavBuf;
           const s = ttsProvider === 'openai' ? await readHubSettings().catch(() => null) : null;
@@ -18280,6 +18762,8 @@ const handleRequest = async (req, res) => {
         const provModel = providerModelFor(provider, 'chat', settings);
         if (!provKey && mod !== aiChatgpt) { json({ ok: false, error: 'no_provider' }); return; }
         text = await mod.oneShot({ apiKey: provKey, model: provModel, systemText: sysText, userText, maxTokens: 300 }).catch(() => '');
+      } else if (aiCli.isCliProvider(provider)) {
+        text = await cliOneShot(provider, sysText, userText, settings).catch(() => '');
       } else {
         const key = settings && settings.geminiApiKey;
         if (!key) { json({ ok: false, error: 'no_provider' }); return; }
@@ -18347,6 +18831,31 @@ const handleRequest = async (req, res) => {
     // pressing it only ever opens Xenon's own search window.
     try { routeSpotlightHotkey(); json({ ok: true }); }
     catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/pages/hotkey-status' && req.method === 'GET') {
+    // Settings → the page-shortcuts list: one state per row, so a combo another
+    // app already owns says so on the row that has it rather than as one verdict
+    // over the whole feature.
+    try {
+      json({
+        slots: _hotkey.slots || {},
+        bindings: (_hotkey.bindings || [])
+          .filter((b) => b.slot !== 'spotlight')
+          .map((b) => ({ slot: b.slot, combo: b.combo, target: b.target })),
+      });
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/pages/hotkey-press' && req.method === 'POST') {
+    // The Linux page shortcuts' other end, one URL per slot: the desktop runs a
+    // command and `?i=` says which shortcut ran it. Read off urlObj, because
+    // reqPath is the pathname alone and carries no query. It is routed through
+    // the same binding table the helper path uses, so an index that no longer
+    // exists (settings saved between the press and here) simply does nothing.
+    try {
+      const at = Number.parseInt(urlObj.searchParams.get('i'), 10);
+      if (Number.isInteger(at)) routeHotkeyIndex(at);
+      json({ ok: true });
+    } catch (e) { err500(e.message); }
 
   } else if (reqPath === '/disk/status' && req.method === 'GET') {
     // Disk widget state: helper presence, scan progress, last summary and —
@@ -18457,6 +18966,8 @@ const handleRequest = async (req, res) => {
         text = await mod.oneShot({
           apiKey: key, model, systemText: sysText, userText, maxTokens: 1500,
         }).catch(() => '');
+      } else if (aiCli.isCliProvider(provider)) {
+        text = await cliOneShot(provider, sysText, userText, settings).catch(() => '');
       } else {
         const key = settings && settings.geminiApiKey;
         if (!key) { json({ ok: false, error: 'no_provider' }); return; }
@@ -18727,8 +19238,22 @@ const handleRequest = async (req, res) => {
     // last surprise this feature ever gave anyone. In CSRF_MUTATION_PATHS.
     try {
       const body = JSON.parse(await readBody(req, 4096) || '{}');
-      const ok = await fileTransfer.remove(body.id);
+      // The blob outlives the record for a few seconds so the delete can be
+      // taken back — "there is no way back" was half of what was reported. The
+      // RECORD comes back here, not a boolean, and it carries this PC's paths:
+      // only `ok` may travel to a phone.
+      const rec = await fileTransfer.remove(body.id, { keepBlob: true });
+      if (rec) holdForUndo(rec);
       broadcastTransfer();
+      json({ ok: !!rec, undoMs: rec ? TRANSFER_UNDO_MS : 0 });
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/transfer/undo' && req.method === 'POST') {
+    // Put back a record deleted within the window. In CSRF_MUTATION_PATHS.
+    try {
+      const body = JSON.parse(await readBody(req, 4096) || '{}');
+      const ok = await undoTransferDelete(String(body.id || ''));
+      if (ok) broadcastTransfer();
       json({ ok });
     } catch (e) { err500(e.message); }
 
@@ -19076,7 +19601,12 @@ const handleRequest = async (req, res) => {
       const r = await discordRpc.login();
       refreshDiscordWatch();
       json(r);
-    } catch (e) { err500(e.message); }
+    } catch (e) {
+      // JSON, never a bare 500: the page reads the reason from the body, and a
+      // plain-text error left it with nothing but "Could not start login".
+      console.error('[discord] login route failed:', e && e.message);
+      json({ ok: false, error: 'login_failed', detail: String((e && e.message) || e).slice(0, 200) });
+    }
 
   } else if (reqPath === '/stream/discord/logout' && req.method === 'POST') {
     // Watch down FIRST: logout's close() would otherwise schedule a reconnect

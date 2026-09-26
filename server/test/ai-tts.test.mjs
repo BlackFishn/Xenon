@@ -26,7 +26,7 @@ test('Thai replies use Thai speech with English menus; existing voice choices re
   assert.equal(local.voiceForLang('ja', 'こんにちは'), 'ja-JP-NanamiNeural');
 });
 
-function serverVoice({ synth = async () => Buffer.from('wav'), play = async () => {}, settings = { openaiAuthMode: 'chatgpt' } } = {}) {
+function serverVoice({ synth = async () => Buffer.from('wav'), play = async () => {}, settings = { openaiAuthMode: 'chatgpt' }, provider = 'openai' } = {}) {
   const calls = [], files = new Set();
   let restores = 0;
   const context = vm.createContext({
@@ -39,6 +39,7 @@ function serverVoice({ synth = async () => Buffer.from('wav'), play = async () =
     _speakGenToken: 0, splitSentences,
     readHubSettings: async () => settings,
     usesChatgpt: s => s?.openaiAuthMode === 'chatgpt',
+    aiCli: { isCliProvider: p => ['claudecode', 'codex'].includes(p) },
     aiLocal: { localTts: async (text, lang) => { calls.push(['edge', text, lang]); return synth(text, lang); } },
     aiOpenai: { tts: async () => { calls.push(['api']); throw new Error('Paid API must not be called'); } },
     getFfmpegPath: () => 'ffmpeg',
@@ -51,7 +52,7 @@ function serverVoice({ synth = async () => Buffer.from('wav'), play = async () =
   context.stopServerSpeak = () => { context._speakGenToken++; };
   vm.runInContext(extract(server, 'speakOnServer'), context);
   return { context, calls, files, restores: () => restores,
-    speak: text => context.speakOnServer(text, 'en', '', 'openai') };
+    speak: text => context.speakOnServer(text, 'en', '', provider) };
 }
 
 test('subscription speech uses Edge without an API key and waits for playback', async () => {
@@ -194,4 +195,15 @@ test('canceled and superseded speech cannot reopen the mic or display stale erro
   replaced.pending[1].resolve(Response.json({ ok: true }));
   await settle();
   assert.equal(replaced.done(), 1);
+});
+
+test('CLI subscription speech uses the same local voice and preserves synthesis failures', async () => {
+  for (const provider of ['claudecode', 'codex']) {
+    const voice = serverVoice({ provider, settings: {} });
+    await voice.speak('สวัสดีครับ');
+    assert.deepEqual(voice.calls.map(c => c[0]), ['edge', 'play'], provider);
+    const failed = serverVoice({ provider, settings: {}, synth: async () => { throw new Error('fixture synth failure'); } });
+    await assert.rejects(failed.speak('สวัสดีครับ'), /fixture synth failure/);
+    assert.equal(failed.calls.some(c => c[0] === 'api'), false);
+  }
 });
