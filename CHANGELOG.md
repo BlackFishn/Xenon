@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — Spotify queue controls
+
+- Search for songs or paste a Spotify track link from Up Next, then add the selected song to the existing Spotify queue without interrupting playback.
+- Wait for queue playback commands before refreshing; keep the list on failure and explain missing backend actions, account permissions, device errors and network failures.
+- Preserve Spotify's queue order; reordering and insertion at a chosen position are not offered by its public playback API.
+
 ## Unreleased — live AI quotas and dynamic layout
 
 - Compact List rows now expand to reveal charts and details, while preserving the full ring and usage overview.

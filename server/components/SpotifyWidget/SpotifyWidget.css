@@ -186,6 +186,28 @@
   .sp-track.is-playable .sp-track-play { opacity: 0.85; }
 }
 
+/* Queue tools share the library surface and keep the song list scrollable. */
+.sp-queue-list, .sp-search-results { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sp-queue-toggle, .sp-search-submit {
+  min-height: 36px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px;
+  background: var(--control-bg); color: var(--text); font-size: .72rem !important;
+}
+.sp-queue-toggle { width: 100%; text-align: left; margin-bottom: 6px; }
+.sp-queue-toggle:hover, .sp-search-submit:hover:not(:disabled) { background: var(--hover-bg); border-color: var(--sp-accent); }
+.sp-queue-feedback { font-size: .68rem; line-height: 1.5; color: var(--muted-text); overflow-wrap: anywhere; }
+.sp-queue-feedback:not(:empty) { padding: 4px 2px 8px; }
+.sp-search-form { display: flex; gap: 6px; margin-bottom: 8px; }
+.sp-search-input {
+  width: 0; min-width: 0; flex: 1; min-height: 36px; padding: 7px 9px; box-sizing: border-box;
+  font: inherit; font-size: .72rem; color: var(--text); background: var(--control-bg);
+  border: 1px solid var(--line); border-radius: 7px;
+}
+.sp-search-input::placeholder { color: var(--muted-text); opacity: 1; }
+.sp-search-add { flex: 0 0 24px; text-align: center; font-size: 1.15rem; color: var(--sp-accent); }
+@media (pointer: coarse) {
+  .sp-queue-toggle, .sp-search-submit, .sp-search-input, .sp-search-result { min-height: 44px; }
+}
+
 /* Empty and connection states remain part of the selected dashboard palette. */
 .sp-now-empty { display: none; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px 8px; width: 100%; color: var(--muted-text); text-align: center; }
 .sp-now-empty-ico, .sp-now-empty-btn-ico, .sp-empty-ico { display: inline-flex; }

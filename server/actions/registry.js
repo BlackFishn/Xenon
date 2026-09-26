@@ -676,6 +676,7 @@ function createRegistry(deps) {
         case 'spotifySave':
         case 'spotifyPlaylist':
         case 'spotifyPlayUri':
+        case 'spotifyQueueUri':
         case 'spotifyShuffle':
         case 'spotifyDevice':
         case 'spotifyPlay':
@@ -690,7 +691,10 @@ function createRegistry(deps) {
           // Spotify Premium — the provider surfaces a 'premium_required' error.
           if (typeof d.spotify !== 'function') return { ok: false, error: 'spotify_unavailable' };
           const r = await d.spotify(action);
-          return r && r.ok === false ? { ok: false, error: r.error || 'spotify_failed' } : { ok: true };
+          if (!r || r.ok !== false) return { ok: true };
+          const result = { ok: false, error: r.error || 'spotify_failed' };
+          if (Number.isFinite(r.retryAfterMs)) result.retryAfterMs = Math.max(0, r.retryAfterMs);
+          return result;
         }
         case 'haToggle':
         case 'haScene':

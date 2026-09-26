@@ -31865,6 +31865,24 @@ Object.assign(i18n.it, {
   perf_plan_failed: 'Impossibile cambiare il piano di alimentazione',
 });
 
+// Queue controls use the existing English fallback for other UI languages.
+Object.assign(i18n.en, {
+  deck_act_spotifyQueueUri: 'Add a Spotify song to queue',
+  spotify_w_action_failed: 'Spotify could not complete this action. Please try again.',
+  spotify_w_restart: 'Restart Xenon to load the updated Spotify controls.',
+  spotify_w_track_link: 'Use a Spotify song link or track URI.',
+  spotify_w_search_hint: 'Search songs or paste a Spotify song link',
+  spotify_w_no_matches: 'No songs found. Try a different search.',
+  spotify_w_add_songs: '+ Add songs',
+  spotify_w_search: 'Search',
+  spotify_w_back_queue: '← Back to queue',
+  spotify_w_searching: 'Searching…',
+  spotify_w_choose_add: 'Choose a song to add to your Spotify queue.',
+  spotify_w_add_queue: 'Add to queue',
+  spotify_w_adding: 'Adding to queue…',
+  spotify_w_added: 'Added to Spotify queue',
+});
+
 function t(key) {
   // Fallback: selected language → English → key name (never silently shows Italian to non-Italian users)
   return (i18n[lang] && i18n[lang][key]) ?? (i18n.en && i18n.en[key]) ?? key;

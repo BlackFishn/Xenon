@@ -554,9 +554,12 @@ function createSpotifyProvider(deps) {
   // `kind` defaults to playback (the common case); pass 'library' for /me/tracks.
   function apiResult(r, fallbackError, kind) {
     if (r.ok) return { ok: true };
+    if (r.status === 401) return { ok: false, error: 'not_connected' };
     if (r.status === 404) return { ok: false, error: 'no_active_device' };
     if (r.status === 403) return { ok: false, error: classify403(r, kind) };
-    return { ok: false, error: r.error || fallbackError || ('http_' + (r.status || '?')) };
+    const result = { ok: false, error: r.error || fallbackError || ('http_' + (r.status || '?')) };
+    if (Number.isFinite(r.retryAfterMs)) result.retryAfterMs = r.retryAfterMs;
+    return result;
   }
 
   // Extract a bare Spotify ID from an id / spotify: URI / open.spotify.com link,
@@ -731,18 +734,50 @@ function createSpotifyProvider(deps) {
     const t = ['track', 'album', 'artist', 'playlist'].includes(String(type)) ? String(type) : 'track';
     const n = clampInt(limit || 5, 1, 10);
     const r = await apiRequest('GET', '/search?type=' + t + '&limit=' + n + '&q=' + encodeURIComponent(q));
-    if (!r.ok || !r.data) return { ok: false, error: r.error || 'search_failed' };
+    if (!r.ok) return apiResult(r, 'search_failed', 'library');
+    if (!r.data) return { ok: false, error: 'search_failed' };
     const bucket = r.data[t + 's'];
     const items = (bucket && Array.isArray(bucket.items)) ? bucket.items : [];
     return {
       ok: true,
       type: t,
-      results: items.filter(Boolean).slice(0, n).map(it => ({
-        name: it.name || '',
-        uri: it.uri || '',
-        artist: Array.isArray(it.artists) ? it.artists.map(a => a && a.name).filter(Boolean).join(', ') : '',
-      })),
+      results: items.filter(it => it && typeof it === 'object').slice(0, n).map(it => {
+        const track = trackLite(it);
+        if (!track.image) delete track.image;
+        return track;
+      }),
     };
+  }
+
+  // Explicit-submit search for the built-in queue picker. Pasted track links are
+  // resolved through the fixed Spotify API, never fetched as caller-supplied URLs.
+  async function searchTracks(query) {
+    const q = String(query == null ? '' : query).trim();
+    if (!q) return { ok: false, error: 'no_query' };
+    if (q.length > 200) return { ok: false, error: 'query_too_long' };
+    let id = '';
+    if (q.startsWith('spotify:')) {
+      const match = /^spotify:track:([A-Za-z0-9]{1,40})$/.exec(q);
+      if (!match) return { ok: false, error: 'bad_uri' };
+      id = match[1];
+    } else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(q) || q.startsWith('open.spotify.com/')) {
+      try {
+        const url = new URL(q.startsWith('open.spotify.com/') ? 'https://' + q : q);
+        const match = /^\/(?:intl-[a-z]{2}\/)?track\/([A-Za-z0-9]{1,40})\/?$/.exec(url.pathname);
+        if (url.origin !== 'https://open.spotify.com' || url.username || url.password || !match) return { ok: false, error: 'bad_uri' };
+        id = match[1];
+      } catch { return { ok: false, error: 'bad_uri' }; }
+    }
+    if (!id) {
+      const r = await search(q, 'track', 10);
+      return r.ok ? { ok: true, results: r.results.filter(it => TRACK_URI_RE.test(it.uri)) } : r;
+    }
+    const r = await apiRequest('GET', '/tracks/' + id);
+    if (r.status === 404) return { ok: false, error: 'not_found' };
+    if (!r.ok) return apiResult(r, 'search_failed', 'library');
+    const track = trackLite(r.data);
+    if (!track || track.uri !== 'spotify:track:' + id) return { ok: false, error: 'not_found' };
+    return { ok: true, results: [track] };
   }
 
   // Search for the top match and start playing it. A track plays via `uris`; an
@@ -764,8 +799,15 @@ function createSpotifyProvider(deps) {
     if (!s.ok) return s;
     const hit = s.results[0];
     if (!hit || !hit.uri) return { ok: false, error: 'not_found' };
-    const r = apiResult(await apiRequest('POST', '/me/player/queue?uri=' + encodeURIComponent(hit.uri)), 'queue_failed');
+    const r = await queueUri(hit.uri);
     return r.ok ? { ok: true, queued: hit } : r;
+  }
+
+  // Spotify owns the queue: append one selected track without replacing playback.
+  async function queueUri(uri) {
+    const u = String(uri || '');
+    if (!TRACK_URI_RE.test(u)) return { ok: false, error: 'bad_uri' };
+    return apiResult(await apiRequest('POST', '/me/player/queue?uri=' + encodeURIComponent(u)), 'queue_failed');
   }
 
   // Single entry the registry calls for every spotify* Deck action.
@@ -774,6 +816,7 @@ function createSpotifyProvider(deps) {
       case 'spotifySave': return saveCurrent();
       case 'spotifyPlaylist': return playPlaylist(action.playlist);
       case 'spotifyPlayUri': return playUri(action.uri, action.contextUri);
+      case 'spotifyQueueUri': return queueUri(action.uri);
       case 'spotifyShuffle': return setShuffle(action.mode);
       case 'spotifyDevice': return transferDevice(action.device);
       case 'spotifyPlay': return playPause(action.mode);
@@ -944,6 +987,7 @@ function createSpotifyProvider(deps) {
   // With a context, the same tap becomes "play this album, starting here", which
   // is what Spotify's own clients do and what the queue afterwards should look
   // like.
+  const TRACK_URI_RE = /^spotify:track:[A-Za-z0-9]{1,40}$/;
   const URI_RE = /^spotify:(track|album|artist|playlist):[A-Za-z0-9]{1,40}$/;
   const CONTEXT_RE = /^spotify:(album|playlist|artist):[A-Za-z0-9]{1,40}$/;
   async function playUri(uri, contextUri) {
@@ -967,13 +1011,20 @@ function createSpotifyProvider(deps) {
     // named track is played on its own if it is refused — a tap always plays the
     // song that was tapped, and only loses the "carry on through the list" part
     // that could not have applied anyway.
-    if (!r.ok && usable) r = await apiRequest('PUT', '/me/player/play', bare);
-    return r.ok ? { ok: true } : { ok: false, error: r.error || 'play_failed', status: r.status || 0 };
+    // Auth, restrictions, rate limits and server failures cannot be fixed by
+    // dropping the context. Retrying those would hide the useful error and spend
+    // another call on the same failure.
+    const err = (r.data && r.data.error) || {};
+    const noDevice = err.reason === 'NO_ACTIVE_DEVICE' || /no active device/i.test(String(err.message || ''));
+    if (!r.ok && usable && (r.status === 400 || (r.status === 404 && !noDevice))) {
+      r = await apiRequest('PUT', '/me/player/play', bare);
+    }
+    return apiResult(r, 'play_failed');
   }
 
   return {
     configured, status, logout, buildAuthUrl, exchangeCode, getAccessToken,
-    getQueue, getPlaylists, getDevices, getPlayer, search, query, playUri,
+    getQueue, getPlaylists, getDevices, getPlayer, search, searchTracks, query, playUri, queueUri,
     normalizeQueue,   // pure, and exported so the wrap rules can be pinned without an account
     saveCurrent, playPlaylist, playSearch, queueSearch, setShuffle, transferDevice, transferToId,
     playPause, skipNext, skipPrev, setRepeat, toggleLike, setVolume, seek, runAction,
