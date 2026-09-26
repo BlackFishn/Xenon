@@ -7,6 +7,12 @@ dispatcher; this redesign does not change authentication or stored settings.
 
 ## Layout and controls
 
+The player follows the dashboard's semantic palette, panel transparency, typography,
+and control styling. The Spotify logo keeps its brand color; progress and active
+states use the selected dashboard accent. Flat library tabs and compact neutral
+controls match the neighbouring media widgets. Album art stays within its cover
+instead of recoloring the player surface.
+
 - Wide tiles place the library beside the player. Portrait tiles show larger
   artwork above playback controls. Compact tiles keep every tab reachable by
   scrolling instead of hiding the library.
