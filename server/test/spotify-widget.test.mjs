@@ -252,3 +252,26 @@ test('a delayed older player read cannot undo the post-volume confirmation', asy
   assert.equal(vol.value, '37');
   assert.equal(h.query('.sp-vol-range', 1).value, '37');
 });
+
+test('album backdrop follows the current cover in every copy and clears without artwork', async () => {
+  const h = await setup();
+  h.player.track.image = 'https://example.test/first cover.jpg';
+  h.poll(); await settle(30);
+  for (let i = 0; i < 2; i++) {
+    assert.equal(h.query('.sp-now', i).classList.contains('has-artwork'), true);
+    assert.equal(h.query('.sp-now', i).style.getPropertyValue('--sp-artwork'), 'url("https://example.test/first%20cover.jpg")');
+  }
+  h.player.track = { uri: 'spotify:track:2', name: 'Next', image: 'https://example.test/second.jpg' };
+  h.poll(); await settle(30);
+  assert.equal(h.query('.sp-now').style.getPropertyValue('--sp-artwork'), 'url("https://example.test/second.jpg")');
+  h.player.track.image = '';
+  h.poll(); await settle(30);
+  for (let i = 0; i < 2; i++) {
+    assert.equal(h.query('.sp-now', i).classList.contains('has-artwork'), false);
+    assert.equal(h.query('.sp-now', i).style.getPropertyValue('--sp-artwork'), 'none');
+  }
+  h.player.track = null;
+  h.poll(); await settle(30);
+  assert.equal(h.query('.sp-now').classList.contains('is-empty'), true);
+  assert.equal(h.query('.sp-now').classList.contains('has-artwork'), false);
+});

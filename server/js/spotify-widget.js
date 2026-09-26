@@ -526,7 +526,13 @@
 
     const art = mount.querySelector('.sp-now-art');
     const img = has ? (player.track.image || '') : '';
-    art.style.backgroundImage = img ? 'url("' + encodeURI(img) + '")' : '';
+    if (art.dataset.spImage !== img) {
+      art.dataset.spImage = img;
+      const cover = img ? 'url("' + encodeURI(img) + '")' : 'none';
+      art.style.backgroundImage = cover;
+      now.style.setProperty('--sp-artwork', cover);
+      now.classList.toggle('has-artwork', !!img);
+    }
     art.classList.toggle('has-cover', !!img);
     mount.querySelector('.sp-now-title').textContent = has ? (player.track.name || '—') : '';
     mount.querySelector('.sp-now-title').title = has ? (player.track.name || '') : '';
