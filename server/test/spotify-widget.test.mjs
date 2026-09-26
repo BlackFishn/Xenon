@@ -62,6 +62,7 @@ async function setup(options = {}) {
   await settle(30);
   return { mounts, requests, document, player, widget: window.SpotifyWidget,
     tick(ms = 250) { now += ms; intervals.get(250)(); },
+    poll(ms = 6000) { now += ms; intervals.get(6000)(); },
     query: (selector, index = 0) => mounts[index].querySelector(selector),
     fire(node, type, event = {}) { (node._handlers[type] || []).forEach(fn => fn({ preventDefault() {}, ...event })); },
   };
@@ -156,4 +157,98 @@ test('volume preview and playlist/device controls use the existing allowlisted a
     { type: 'spotifyPlaylist', playlist: 'spotify:playlist:1' },
     { type: 'spotifyDevice', device: 'Phone' },
   ]);
+});
+
+test('volume stays at the released value while Spotify returns an older snapshot', async () => {
+  const h = await setup();
+  const vol = h.query('.sp-vol-range');
+  vol.value = '37'; h.fire(vol, 'input'); h.fire(vol, 'change');
+  await settle(30);
+  assert.equal(vol.value, '37');
+  assert.equal(h.query('.sp-vol-value').textContent, '37%');
+  assert.equal(h.query('.sp-vol-range', 1).value, '37');
+});
+
+test('adjusting volume does not freeze the track progress ticker', async () => {
+  const h = await setup();
+  const vol = h.query('.sp-vol-range');
+  vol.value = '37'; h.fire(vol, 'input');
+  h.tick(1000);
+  assert.equal(h.query('.sp-seek-range').value, '55');
+  h.fire(vol, 'pointercancel');
+  assert.equal(vol.value, '64');
+});
+
+test('rapid volume changes serialize writes and keep only the newest queued value', async () => {
+  const completions = [];
+  const h = await setup({ api: (url, init) => {
+    if (url === '/actions/run' && JSON.parse(init.body).type === 'spotifyVolume') {
+      return new Promise(resolve => completions.push(resolve));
+    }
+  } });
+  const vol = h.query('.sp-vol-range');
+  for (const value of ['10', '25', '64']) {
+    vol.value = value; h.fire(vol, 'input'); h.fire(vol, 'change');
+  }
+  assert.equal(completions.length, 1);
+  h.player.volume = 10; // Spotify still reports the first write.
+  completions[0]({ ok: true });
+  await settle(30);
+  assert.equal(completions.length, 2);
+  assert.deepEqual(h.requests.filter(r => r.action?.type === 'spotifyVolume').map(r => r.action.value), ['10', '64']);
+  completions[1]({ ok: true });
+  await settle(30);
+  assert.equal(vol.value, '64'); // Returning to the old value is not a confirmation.
+});
+
+test('volume rolls back on rejection and resumes external updates after confirmation', async () => {
+  let fail = true;
+  const h = await setup({ api: url => url === '/actions/run' && fail ? { ok: false, error: 'volume_failed' } : undefined });
+  const vol = h.query('.sp-vol-range');
+  vol.value = '37'; h.fire(vol, 'input'); h.fire(vol, 'change');
+  await settle(30);
+  assert.equal(vol.value, '64');
+  fail = false;
+  vol.value = '37'; h.fire(vol, 'input'); h.fire(vol, 'change');
+  await settle(30);
+  assert.equal(vol.value, '37');
+  h.player.volume = 37;
+  h.poll(); await settle(30);
+  h.player.volume = 71;
+  h.poll(); await settle(30);
+  assert.equal(vol.value, '71');
+});
+
+test('unconfirmed volume is bounded and does not carry over to another device', async () => {
+  const h = await setup();
+  const vol = h.query('.sp-vol-range');
+  vol.value = '37'; h.fire(vol, 'input'); h.fire(vol, 'change');
+  await settle(30);
+  h.tick(9000);
+  h.widget.renderWidgets();
+  assert.equal(vol.value, '64');
+  vol.value = '37'; h.fire(vol, 'input'); h.fire(vol, 'change');
+  await settle(30);
+  h.player.device = 'Phone'; h.player.volume = 82;
+  h.poll(3000); await settle(30);
+  assert.equal(vol.value, '82');
+});
+
+test('a delayed older player read cannot undo the post-volume confirmation', async () => {
+  let hold = false, resolveOld;
+  const h = await setup({ api: url => url.includes('/player') && hold
+    ? new Promise(resolve => { resolveOld = resolve; }) : undefined });
+  const old = structuredClone(h.player);
+  hold = true;
+  h.poll(); await settle(30);
+  assert.equal(typeof resolveOld, 'function');
+  hold = false;
+  h.player.volume = 37;
+  const vol = h.query('.sp-vol-range');
+  vol.value = '37'; h.fire(vol, 'input'); h.fire(vol, 'change');
+  await settle(30);
+  resolveOld(old);
+  await settle(30);
+  assert.equal(vol.value, '37');
+  assert.equal(h.query('.sp-vol-range', 1).value, '37');
 });
