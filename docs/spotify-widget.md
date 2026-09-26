@@ -16,9 +16,12 @@ sharp. A scrim derived from the theme background preserves text and control
 contrast; the header and library retain their neutral surfaces. Missing artwork
 and idle playback clear the backdrop instead of retaining the previous cover.
 
-Tall wide tiles use the reviewed layout: larger cover, a title of up to two lines,
-seek above playback buttons, and a separate neutral volume footer. Compact tiles
-keep their responsive layout and the same control order.
+Tall wide tiles use the reviewed layout: square artwork up to 348 px, a lower
+title/control group with titles of up to two lines, seek above playback buttons,
+and a neutral volume row without a separator. The cover fits the space remaining
+above the controls, shrinking for shorter cards, wrapped titles and touch targets
+so the sliders stay reachable. Compact tiles keep their responsive layout and the
+same control order.
 
 - Wide tiles place the library beside the player. Portrait tiles show larger
   artwork above playback controls. Compact tiles keep every tab reachable by
@@ -55,6 +58,11 @@ Changing playback devices clears the previous device's pending volume.
 
 ## Album layout validation (2026-09-26)
 
+- The enlarged-cover revision matches the approved mock at 830×670: artwork is
+  approximately 348 px square, the title/control group sits lower, and the volume
+  divider is absent. Browser checks also verified two-line titles, the tall-layout
+  breakpoint, shorter cards, large desktops and coarse-pointer targets: every
+  cover stayed square and all controls remained visible and clickable.
 - Spotify UI and provider tests: 43 passed, including cover changes across widget
   copies, missing artwork, idle playback, and the volume regressions below.
 - The implementation was rendered with all 90 local dashboard stylesheets and the

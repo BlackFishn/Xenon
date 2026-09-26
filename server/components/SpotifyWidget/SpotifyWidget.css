@@ -229,9 +229,19 @@
 }
 /* Give tall, wide players the reviewed cover → title → seek → playback layout. */
 @container spw (min-width: 640px) and (min-height: 560px) {
-  .sp-now { padding: 24px; gap: 0; justify-content: flex-start; }
-  .sp-now-art { width: min(36cqh, 224px); margin: 4px auto 22px; }
-  .sp-now-panel { flex: 1; gap: 0; width: 100%; }
+  .sp-now {
+    container: sp-player / inline-size; display: grid;
+    grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto;
+    grid-template-areas: "art" "controls"; padding: 24px; gap: 22px;
+    align-items: stretch; justify-content: stretch;
+  }
+  /* Reserve controls first; the cover stays square when a title wraps or touch
+     targets need more room, instead of pushing the volume slider out of view. */
+  .sp-now-art {
+    width: auto; height: min(calc(100% - 4px), 348px, 100cqw);
+    min-height: 0; max-width: 100%; margin: 4px auto 0; align-self: start;
+  }
+  .sp-now-panel { grid-area: controls; flex: initial; gap: 0; width: 100%; }
   .sp-now-head { align-items: flex-start; gap: 10px; }
   .sp-now-info { gap: 6px; }
   .sp-now-title {
@@ -239,12 +249,11 @@
     font-size: 1.125rem; line-height: 1.35;
   }
   .sp-now-sub { font-size: .6875rem; line-height: 1.5; }
-  .sp-seek { margin-top: 15px; }
-  .sp-transport { gap: 12px; margin-top: 8px; }
+  .sp-seek { margin-top: 8px; }
+  .sp-transport { gap: 12px; margin-top: 4px; }
   .spotify-panel .sp-wrap .sp-play { width: 48px; height: 48px; border-radius: 12px; }
   .sp-vol {
-    margin-top: auto; align-self: center; width: 84%; padding-top: 18px;
-    border-top: 1px solid color-mix(in srgb, var(--text) 9%, transparent);
+    margin-top: auto; align-self: center; width: 84%; padding-top: 4px;
   }
 }
 @container spw (max-height: 350px) {
