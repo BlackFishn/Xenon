@@ -197,6 +197,10 @@ const DEFAULT_DASHBOARD_LAYOUT = Object.freeze({
   // freeing the full surface for widgets. A floating Layout button re-opens the
   // editor (which temporarily reveals the bar) so the user can never get stuck.
   topbarHidden: false,
+  // When true the Timer widget's add row (label + duration + format hint) is
+  // folded to a slim "+ New timer" strip. One flag, not one per instance: a
+  // Timer copy is cloned without the add row (stripTimerClone).
+  timerAddCollapsed: false,
 });
 
 // The activities Performance Mode can detect and react to. One list, used by
@@ -276,12 +280,21 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
     ],
   },
   clockFormat: 'auto', // 'auto' | '12' | '24' — auto follows the UI language (en → 12h)
+  // How big the top bar's clock reads, as multipliers on the stock sizes. Two
+  // knobs rather than one: the time is already large and the date deliberately
+  // small, so "make the date bigger" and "make the time bigger" are different
+  // wishes. 1 is byte-for-byte the old look. Asked for on Discord by someone who
+  // wanted to read the date across a room.
+  clockScale: 1,
+  clockDateScale: 1,
+  clockDateFormat: 'full', // 'full' | 'medium' | 'short' — how much of the date the top bar spells out
   weekStart: 'mon', // 'mon' | 'sun' — calendar first day of week
   // What the Upcoming list shows. There was never a two-week rule, which is how
   // it read from outside: the list took the next five events and their dates
   // fell where they fell. 0 days = no horizon, which is what it always did.
   upcomingCount: 5,
   upcomingDays: 0,
+  upcomingColumns: 0,   // 0 = as many as fit; 1 or 2 = the user's own choice
   swipeNavigation: true, // drag / finger-swipe to change dashboard page (touchscreen-friendly)
   swipeHomeGesture: true, // native app: swipe up from the bottom → Windows desktop (native-bridge.js)
   hideOnRdp: false, // native app: hide the kiosk during a Windows Remote Desktop session (opt-in; native-bridge.js)
@@ -359,6 +372,13 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
     tile: Object.freeze({ metrics: true, hourly: true, forecast: true, fields: WEATHER_FIELDS_ALL_ON }),
   }),
   tempUnit: 'c', // 'c' | 'f' — weather temperature display unit
+  // The Media tile's waveform: 'off' | 'minimal' | 'wave'. An ADDITION to that
+  // tile, so it defaults to off and has a quiet setting as well as a full one —
+  // nobody gets a busier Media tile than the one they already had. Off is also
+  // what keeps the helper's peak metering (~12 pushes a second) from running:
+  // the cost follows the choice, the same rule the SDK `audioLevels` grant
+  // follows, which until now was the only thing that could start it.
+  mediaVisualizer: 'off',
   // Open the dashboard in the default browser at Windows logon (default on).
   // Only reconciled into a real scheduled task from a standalone browser view —
   // never from inside the Xeneon Edge iframe (see reconcileAutoOpenBrowser).
@@ -851,8 +871,8 @@ const NEWS_DEFAULT_TOPIC = Object.freeze({
 // — a grant carrying a stream/action the server allows but this list omits gets
 // silently stripped on save, so the widget is granted a capability it can never
 // use. server/test/sdk-grant-cats-sync guards that half.
-const SDK_WIDGET_STREAMS = Object.freeze(['status', 'system', 'media', 'audio', 'audioLevels', 'wavelink', 'voicemeeter', 'stocks', 'football', 'news', 'claude', 'obs', 'discord', 'discordChannels', 'discordSoundboard', 'discordNotifications', 'streamerbot', 'homeassistant', 'twitchWatch', 'twitchChat', 'youtubeLive', 'tasks', 'notes', 'agenda', 'weather', 'battery', 'processes']);
-const SDK_WIDGET_ACTION_CATS = Object.freeze(['media', 'volume', 'audioDevice', 'mic', 'lighting', 'chroma', 'wavelink', 'voicemeeter', 'spotify', 'obs', 'discord', 'homeassistant', 'twitch', 'youtube', 'streamerbot', 'url', 'tasks', 'soundboard', 'browser', 'watch']);
+const SDK_WIDGET_STREAMS = Object.freeze(['status', 'system', 'media', 'audio', 'audioLevels', 'wavelink', 'voicemeeter', 'stocks', 'football', 'news', 'claude', 'obs', 'discord', 'discordChannels', 'discordSoundboard', 'discordNotifications', 'streamerbot', 'homeassistant', 'twitchWatch', 'twitchChat', 'youtubeLive', 'youtube', 'tasks', 'notes', 'agenda', 'weather', 'battery', 'processes', 'spotify', 'scriptStates']);
+const SDK_WIDGET_ACTION_CATS = Object.freeze(['media', 'volume', 'audioDevice', 'mic', 'lighting', 'chroma', 'wavelink', 'voicemeeter', 'spotify', 'steam', 'obs', 'discord', 'homeassistant', 'twitch', 'youtube', 'youtubePlayer', 'streamerbot', 'url', 'tasks', 'soundboard', 'browser', 'watch']);
 const SDK_PACKAGE_ID_RE = /^[a-z0-9][a-z0-9-]{1,40}$/;
 // Grant-side mirrors of the server manifest rules (sdk-widgets.js is the
 // authority; a grant can never widen what the manifest declared, so a loose
@@ -1346,6 +1366,7 @@ function normalizeDashboardLayout(value) {
   layout.calendarTabs = normalizeCalendarTabs(source.calendarTabs);
   layout.mediaView = normalizeMediaView(source.mediaView);
   layout.topbarHidden = source.topbarHidden === true;
+  layout.timerAddCollapsed = source.timerAddCollapsed === true;
   layout.gridCols = DASHBOARD_GRID_COLUMNS;  // units flag — see scaleDashboardLayoutUnits
   return layout;
 }
@@ -1619,9 +1640,13 @@ function normalizeSettings(source) {
     topbarRailsAutoHide: value.topbarRailsAutoHide !== false,
     topbarClock: normalizeTopbarClock(value.topbarClock, value),
     clockFormat: ['auto', '12', '24'].includes(value.clockFormat) ? value.clockFormat : DEFAULT_HUB_SETTINGS.clockFormat,
+    clockScale: clampNumber(value.clockScale, 0.8, 2, DEFAULT_HUB_SETTINGS.clockScale),
+    clockDateScale: clampNumber(value.clockDateScale, 0.8, 2, DEFAULT_HUB_SETTINGS.clockDateScale),
+    clockDateFormat: ['full', 'medium', 'short'].includes(value.clockDateFormat) ? value.clockDateFormat : DEFAULT_HUB_SETTINGS.clockDateFormat,
     weekStart: ['mon', 'sun'].includes(value.weekStart) ? value.weekStart : DEFAULT_HUB_SETTINGS.weekStart,
     upcomingCount: [3, 5, 8, 10].includes(Number(value.upcomingCount)) ? Number(value.upcomingCount) : DEFAULT_HUB_SETTINGS.upcomingCount,
     upcomingDays: [0, 7, 14, 30].includes(Number(value.upcomingDays)) ? Number(value.upcomingDays) : DEFAULT_HUB_SETTINGS.upcomingDays,
+    upcomingColumns: [0, 1, 2].includes(Number(value.upcomingColumns)) ? Number(value.upcomingColumns) : DEFAULT_HUB_SETTINGS.upcomingColumns,
     swipeNavigation: value.swipeNavigation !== false,
     swipeHomeGesture: value.swipeHomeGesture !== false,
     hideOnRdp: value.hideOnRdp === true,
@@ -1664,6 +1689,7 @@ function normalizeSettings(source) {
     ambientScenes: normalizeAmbientScenes(value.ambientScenes),
     weather: normalizeWeatherSettings(value.weather),
     tempUnit: value.tempUnit === 'f' ? 'f' : 'c',
+    mediaVisualizer: ['off', 'minimal', 'wave'].includes(value.mediaVisualizer) ? value.mediaVisualizer : (value.mediaVisualizer === true ? 'wave' : 'off'),
     autoOpenBrowser: value.autoOpenBrowser !== false,
     versionPing: value.versionPing === true,
     hubMessages: value.hubMessages !== false,
@@ -1679,6 +1705,7 @@ function normalizeSettings(source) {
     lastUsageDay: typeof value.lastUsageDay === 'string' ? value.lastUsageDay.slice(0, 10) : '',
     usageDays: Math.max(0, Math.floor(Number(value.usageDays) || 0)),
     supportAskSeen: value.supportAskSeen === true,
+    shareNudgeSeen: value.shareNudgeSeen === true,
     discordFavChannels: normalizeSnowflakeList(value.discordFavChannels),
     catalogStats: value.catalogStats === true,
     browserAdblock: value.browserAdblock === true,
@@ -3764,10 +3791,12 @@ const APPEARANCE_COLOR_KEYS = Object.freeze([
   'successColor', 'warningColor', 'dangerColor', 'infoColor',
 ]);
 
-// Windows app theme read from the server registry (reliable). Cached in
-// localStorage so a reload starts on the correct scheme immediately, instead of
-// the WebView's (unreliable) prefers-color-scheme — which otherwise flashed the
-// dashboard white on 'auto' until the first /system/theme fetch landed (up to 30s).
+// The OS colour scheme, read server-side from the OS itself (server/os-theme.js:
+// the Windows registry, macOS `defaults`, GNOME `gsettings`) rather than from the
+// WebView's unreliable prefers-color-scheme. Cached in localStorage so a reload
+// starts on the correct scheme immediately, instead of flashing the dashboard
+// white on 'auto' until the first /system/theme fetch landed (up to 30s).
+// `null` means no platform reading — only then does the media query decide.
 const OS_THEME_KEY = 'xeneonedge.osDark.v1';
 let _osPrefersDark = (() => {
   try { const v = localStorage.getItem(OS_THEME_KEY); return v === 'true' ? true : v === 'false' ? false : null; }
@@ -3777,9 +3806,10 @@ let _osThemeChecked = false;   // one fresh /system/theme read per page load
 
 function resolveAppearance(mode) {
   if (mode === 'light' || mode === 'dark') return mode;
-  // 'auto' follows the OS colour scheme. Prefer the server's registry reading
-  // (the embedded WebView's prefers-color-scheme is unreliable); fall back to
-  // the media query until that value is available.
+  // 'auto' follows the OS colour scheme. Prefer the server's reading of the OS
+  // itself (the embedded WebView's prefers-color-scheme is unreliable, and on
+  // macOS reports light for a moment after every display wake); fall back to the
+  // media query only until that value is available, or where there is none.
   if (typeof _osPrefersDark === 'boolean') return _osPrefersDark ? 'dark' : 'light';
   const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   return prefersDark ? 'dark' : 'light';
@@ -3810,12 +3840,13 @@ function freezePaletteVariants(settings) {
   return frozen;
 }
 
-// Poll the OS theme from the server (Windows registry) so "Auto" is reliable
-// even when the WebView doesn't report prefers-color-scheme correctly.
+// Ask the server what the OS actually says (Windows registry, macOS `defaults`,
+// GNOME `gsettings`) so "Auto" is reliable even where the WebView doesn't report
+// prefers-color-scheme correctly — which on macOS is every time the display
+// wakes. See server/os-theme.js.
 function refreshOsTheme() {
-  // The OS scheme only matters in 'auto', and the endpoint spawns reg.exe server-side.
-  // Skip the poll unless we're on auto and the tab is visible — OS theme flips are
-  // also caught live by the matchMedia listener below, so this is only a fallback.
+  // The OS scheme only matters in 'auto', and the endpoint spawns a process
+  // server-side. Skip the poll unless we're on auto and the page is visible.
   if (document.hidden || !hubSettings || hubSettings.appearance !== 'auto') return;
   fetch('/system/theme')
     .then(res => (res.ok ? res.json() : null))
@@ -3830,6 +3861,11 @@ function refreshOsTheme() {
 }
 refreshOsTheme();
 setInterval(refreshOsTheme, 30000);
+// Coming back from display sleep is precisely when the WebView's own reading is
+// least trustworthy, so ask the OS again the moment the page is visible rather
+// than up to 30 s later — that gap is how long a wrongly repainted dashboard
+// used to stay wrong.
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshOsTheme(); });
 
 function setAppearance(mode) {
   if (!['light', 'dark', 'auto'].includes(mode)) return;
@@ -3902,10 +3938,19 @@ function syncStyleModeControls() {
 }
 
 // Re-apply when the OS scheme flips, but only while the user is on 'auto'.
+//
+// The media query says "look again", not "you are light now". Where the OS can
+// be read directly that reading decides, and this only asks for a fresh one:
+// after a macOS display wakes, the WebView announces light on a Mac that never
+// left dark, and repainting on its word turned the whole dashboard white until
+// something else forced a repaint. The WebView gets the last word only on a
+// platform where nothing can be read at all.
 if (window.matchMedia) {
   try {
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-      if (hubSettings && hubSettings.appearance === 'auto') applyHubSettings();
+      if (!hubSettings || hubSettings.appearance !== 'auto') return;
+      refreshOsTheme();
+      if (typeof _osPrefersDark !== 'boolean') applyHubSettings();
     });
   } catch {}
 }
@@ -4119,6 +4164,20 @@ function applyThemeSurfaceTokens(root, alternateSkin) {
 
 function applyHubSettings() {
   hubSettings = normalizeSettings(hubSettings);
+  // The native shell's interface scale, applied on every hydrate rather than only
+  // when this surface's settings panel is built.
+  //
+  // nativeZoom is a hubSettings field, so it already travelled to every surface —
+  // but the only thing that ever handed it to the shell was syncNativeZoomControl,
+  // which runs when the Settings panel is (re)rendered HERE. A change made on
+  // another surface therefore sat in the app's settings, correct and ignored,
+  // until someone opened Settings on the app itself or reloaded it. That is also
+  // why the control was hidden everywhere else: it would not have worked. Now it
+  // does, so it is shown. A no-op off the native app — setNativeZoom returns early
+  // when the shell is not there.
+  if (window.XenonNative && typeof window.XenonNative.setNativeZoom === 'function') {
+    window.XenonNative.setNativeZoom(hubSettings.nativeZoom);
+  }
   // Restore the persisted language from server settings (covers browser-storage resets on PC restart)
   if (hubSettings.language && typeof setLang === 'function') setLang(hubSettings.language);
   // Restore app-switcher favorites from server settings (same reason: a starred app
@@ -4146,6 +4205,7 @@ function applyHubSettings() {
   // and keep its settings control in sync.
   if (window.DashboardPager && DashboardPager.refreshSwipe) DashboardPager.refreshSwipe();
   syncSwipeNavigationControl();
+  syncMediaVisualizerControl();
   syncSwipeHomeControl();
   syncHideRdpControl();
   const root = document.documentElement;
@@ -4157,6 +4217,12 @@ function applyHubSettings() {
   const panelBorderAlpha = Math.min(0.4, (0.045 + (hubSettings.panelAlpha * 0.08)) * borderStrength);
   const panelShadowAlpha = Math.min(0.6, (0.05 + (hubSettings.panelAlpha * 0.18)) * shadowStrength);
   const panelHighlightAlpha = Math.min(0.07, 0.012 + (hubSettings.panelAlpha * 0.04));
+  // The top bar's clock. Stamped as plain multipliers and applied in Topbar.css,
+  // where each breakpoint owns the BASE size it scales — the Edge and the phone
+  // draw a smaller clock than a desktop, and a single hard-coded size here would
+  // undo that.
+  const clockScale = clampNumber(hubSettings.clockScale, 0.8, 2, 1);
+  const clockDateScale = clampNumber(hubSettings.clockDateScale, 0.8, 2, 1);
   const bgSafeDim = Math.max(hubSettings.bgDim, 0.18);
   const bgSafeDimStrong = Math.min(0.9, bgSafeDim + 0.11);
   const bgBlur = Math.round(hubSettings.bgBlur);
@@ -4206,6 +4272,8 @@ function applyHubSettings() {
   root.style.setProperty('--panel-soft-alpha', (comic ? 1 : panelSoftAlpha).toFixed(2));
   root.style.setProperty('--panel-border-alpha', (light ? 0.10 * borderStrength : panelBorderAlpha).toFixed(3));
   root.style.setProperty('--panel-shadow-alpha', (light ? 0.10 * shadowStrength : panelShadowAlpha).toFixed(3));
+  root.style.setProperty('--clock-time-scale', String(clockScale));
+  root.style.setProperty('--clock-date-scale', String(clockDateScale));
   root.style.setProperty('--panel-highlight-alpha', light ? '0.55' : panelHighlightAlpha.toFixed(3));
 
   // Comic is opaque paper by default; the palette engine already maps its
@@ -4783,6 +4851,8 @@ function syncSettingsControls() {
   const rangeMap = [
     ['settings-panel-alpha', String(hubSettings.panelAlpha)],
     ['settings-panel-border', String(hubSettings.panelBorderStrength)],
+    ['settings-clock-scale', String(hubSettings.clockScale)],
+    ['settings-clock-date-scale', String(hubSettings.clockDateScale)],
     ['settings-panel-shadow', String(hubSettings.panelShadowStrength)],
     ['settings-roundness', String(hubSettings.uiRoundness)],
     ['settings-glass-blur', String(hubSettings.glassBlur)],
@@ -4804,6 +4874,10 @@ function syncSettingsControls() {
   if (borderVal) borderVal.textContent = formatPercent(hubSettings.panelBorderStrength);
   const shadowVal = $('settings-panel-shadow-value');
   if (shadowVal) shadowVal.textContent = formatPercent(hubSettings.panelShadowStrength);
+  const clockVal = $('settings-clock-scale-value');
+  if (clockVal) clockVal.textContent = formatPercent(hubSettings.clockScale);
+  const clockDateVal = $('settings-clock-date-scale-value');
+  if (clockDateVal) clockDateVal.textContent = formatPercent(hubSettings.clockDateScale);
   const glassBlurVal = $('settings-glass-blur-value');
   if (glassBlurVal) glassBlurVal.textContent = `${Math.round(hubSettings.glassBlur)}px`;
   const glassSatVal = $('settings-glass-saturate-value');
@@ -5678,11 +5752,18 @@ function onHexInput(key, rawValue) {
 }
 
 function updateSettingsRange(key, value) {
-  if (!['panelAlpha', 'bgDim', 'bgBlur', 'uiRoundness', 'glassBlur', 'glassSaturate', 'panelBorderStrength', 'panelShadowStrength'].includes(key)) return;
+  if (!['panelAlpha', 'bgDim', 'bgBlur', 'uiRoundness', 'glassBlur', 'glassSaturate', 'panelBorderStrength', 'panelShadowStrength', 'clockScale', 'clockDateScale'].includes(key)) return;
   hubSettings = normalizeSettings({ ...hubSettings, [key]: value });
   saveHubSettings();
   applyHubSettings();
   syncSettingsControls();
+  // A bigger clock makes the minimal island's capsule taller, and the tiles that
+  // sit under it inset themselves by its MEASURED height — so the measurement has
+  // to be retaken or the top row keeps clearing the old pill.
+  if ((key === 'clockScale' || key === 'clockDateScale')
+    && window.TopbarMinimal && typeof window.TopbarMinimal.reflowIsland === 'function') {
+    window.TopbarMinimal.reflowIsland();
+  }
 }
 
 // ── Background FX controls (aurora + grid) ────────────────────────
@@ -6052,15 +6133,20 @@ function refreshSlideshowFolderStatus(force) {
     .then(d => {
       if (seq !== _slideshowFolderStatusSeq) return;
       if (d.ok) {
+        // "0 images found" is true and useless: it reads the same whether the
+        // folder is empty or full of things Xenon passed over. Say which.
         out.textContent = d.truncated
           ? t('slideshow_folder_truncated').replace('{n}', String(d.count))
-          : t('slideshow_folder_found').replace('{n}', String(d.count));
+          : (d.count === 0 && (d.skipped | 0) > 0)
+            ? t('slideshow_folder_none_readable').replace('{n}', String(d.skipped | 0))
+            : t('slideshow_folder_found').replace('{n}', String(d.count));
       } else {
         // t() falls back to the key name, so an unknown code must be mapped here
         // rather than tested for truthiness — otherwise a raw key reaches the UI.
         const known = ['no_folder', 'not_found', 'not_a_dir', 'denied', 'read_failed'];
         const code = known.includes(d.error) ? d.error : 'read_failed';
-        out.textContent = t('slideshow_folder_err_' + code);
+        out.textContent = t('slideshow_folder_err_' + code)
+          + (d.network ? ' ' + t('slideshow_folder_err_network') : '');
       }
     })
     .catch(() => { if (seq === _slideshowFolderStatusSeq) out.textContent = t('slideshow_folder_err_read_failed'); })
@@ -8082,6 +8168,34 @@ function syncAutoOpenBrowserControl() {
 // Reflects the checkbox and re-applies the gesture on the pager (native
 // horizontal scroll + JS drag-pan). Default on; disabling keeps dot/keyboard
 // navigation working.
+// ── Media visualiser ────────────────────────────────────────────────────────
+// The switch is the consent: turning it on is what starts the helper's peak
+// metering, so there is no second place to enable anything (see the note on
+// audioLevelsWanted in server.js). saveHubSettings reaches the server, which
+// re-reads that gate on every save and starts or stops the meter child.
+function mediaVisualizerMode() {
+  const v = hubSettings && hubSettings.mediaVisualizer;
+  return ['off', 'minimal', 'wave'].includes(v) ? v : 'off';
+}
+
+function syncMediaVisualizerControl() {
+  const mode = mediaVisualizerMode();
+  document.querySelectorAll('.settings-media-viz[data-media-viz]').forEach((btn) => {
+    const active = btn.dataset.mediaViz === mode;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', String(active));
+  });
+  if (window.MediaViz) window.MediaViz.setStyle(mode);
+}
+
+function updateMediaVisualizer(mode) {
+  if (!['off', 'minimal', 'wave'].includes(mode)) return;
+  hubSettings = normalizeSettings({ ...hubSettings, mediaVisualizer: mode });
+  saveHubSettings();
+  syncMediaVisualizerControl();
+  setSettingsStatus('settings_saved', 'ok');
+}
+
 function syncSwipeNavigationControl() {
   const el = $('settings-swipe-nav');
   if (el) el.checked = hubSettings.swipeNavigation !== false;
@@ -8156,8 +8270,25 @@ function syncNativeZoomControl() {
   const slider = $('settings-native-zoom');
   const valueEl = $('settings-native-zoom-value');
   const isNativeApp = !!(window.XenonNative && window.XenonNative.isNative);
-  // display (not `hidden`): the settings category switcher owns `hidden`.
-  if (row) row.style.display = isNativeApp ? '' : 'none';
+  // Shown on EVERY surface, which it was not.
+  //
+  // The scale applies to the native app, so the row used to appear only there —
+  // and the one place people arrange their dashboard from is a browser on the big
+  // monitor, where it simply was not in the list. Reported after a long hunt:
+  // "the scale UI option appears only if you go in settings from edge screen, it
+  // was not shown in the settings from my browser on main screen… I spent much
+  // time trying to figure it out, and even coded a little upscale in my widgets".
+  // A control that exists but is invisible from where you are looking is worse
+  // than one that is greyed out, because nothing tells you to look elsewhere.
+  //
+  // It is not merely revealed: the value lives in hubSettings and reaches every
+  // surface, and applyHubSettings now hands it to the native shell on arrival, so
+  // moving this slider in a browser really does rescale the app on the Edge while
+  // you watch it. The second note says so, since here it is not this window it
+  // resizes.
+  if (row) row.style.display = '';
+  const remoteNote = $('settings-native-zoom-remote');
+  if (remoteNote) remoteNote.hidden = isNativeApp;
   const scale = clampNumber(hubSettings.nativeZoom, 0.6, 1.6, 1);
   if (slider) slider.value = String(scale);
   if (valueEl) valueEl.textContent = formatPercent(scale);
@@ -8359,6 +8490,17 @@ function rememberSupportAskSeen() {
   saveHubSettings();
 }
 
+// The share invitation (js/share-nudge.js): same shape, same home on disk.
+function shareNudgeDismissed() {
+  return !!(hubSettings && hubSettings.shareNudgeSeen === true);
+}
+
+function rememberShareNudgeSeen() {
+  if (hubSettings && hubSettings.shareNudgeSeen === true) return;
+  hubSettings = normalizeSettings({ ...hubSettings, shareNudgeSeen: true });
+  saveHubSettings();
+}
+
 // How long this install has been used, for the ask's own gate. Answers null
 // until the server copy has landed: before that the numbers are a blind local
 // mirror, and on a device whose site data is cleared every exit that mirror
@@ -8434,6 +8576,8 @@ window.XenonStartupCards = {
   rememberDiscordInvite: rememberDiscordInviteSeen,
   supportAskDismissed,
   rememberSupportAsk: rememberSupportAskSeen,
+  shareNudgeDismissed,
+  rememberShareNudge: rememberShareNudgeSeen,
   usageHistory,
 };
 
@@ -8725,10 +8869,37 @@ function updateWeatherMode(mode) {
 }
 
 // Reflect the active clock format (Auto / 12h / 24h) on its segmented control.
+// How much of the date the top bar spells out. Display-only, like the time
+// format beside it: redraw now rather than at the next tick, or the segmented
+// control moves and nothing else does for up to a second.
+function updateClockDateFormat(fmt) {
+  if (!['full', 'medium', 'short'].includes(fmt)) return;
+  hubSettings = normalizeSettings({ ...hubSettings, clockDateFormat: fmt });
+  saveHubSettings();
+  syncClockFormatControls();
+  if (typeof tickClock === 'function') tickClock();
+  // SDK widgets that print a date of their own read the shape from the theme
+  // bridge (theme.dateFormat) — re-push it, exactly as the time format beside
+  // this does, so a live widget follows instead of waiting for a reload.
+  if (window.CustomWidget && typeof window.CustomWidget.refreshTheme === 'function') window.CustomWidget.refreshTheme();
+  // A shorter date makes the island's capsule narrower, and the tiles beneath it
+  // clear a pill whose width was measured before the change.
+  if (window.TopbarMinimal && typeof window.TopbarMinimal.reflowIsland === 'function') {
+    window.TopbarMinimal.reflowIsland();
+  }
+  setSettingsStatus('settings_saved', 'ok');
+}
+
 function syncClockFormatControls() {
   const fmt = ['auto', '12', '24'].includes(hubSettings.clockFormat) ? hubSettings.clockFormat : 'auto';
   document.querySelectorAll('.settings-clock-format[data-clock-format]').forEach(btn => {
     const active = btn.dataset.clockFormat === fmt;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', String(active));
+  });
+  const dfmt = ['full', 'medium', 'short'].includes(hubSettings.clockDateFormat) ? hubSettings.clockDateFormat : 'full';
+  document.querySelectorAll('.settings-clock-date-format[data-clock-date-format]').forEach(btn => {
+    const active = btn.dataset.clockDateFormat === dfmt;
     btn.classList.toggle('active', active);
     btn.setAttribute('aria-pressed', String(active));
   });
@@ -9348,9 +9519,20 @@ function updateUpcomingDays(value) {
   setSettingsStatus('settings_saved', 'ok');
 }
 
+function updateUpcomingColumns(value) {
+  const n = Number(value);
+  if (![0, 1, 2].includes(n)) return;
+  hubSettings = normalizeSettings({ ...hubSettings, upcomingColumns: n });
+  saveHubSettings();
+  syncUpcomingControls();
+  if (typeof renderUpcoming === 'function') renderUpcoming();
+  setSettingsStatus('settings_saved', 'ok');
+}
+
 function syncUpcomingControls() {
   for (const [id, value] of [['settings-upcoming-count', hubSettings.upcomingCount],
-    ['settings-upcoming-days', hubSettings.upcomingDays]]) {
+    ['settings-upcoming-days', hubSettings.upcomingDays],
+    ['settings-upcoming-cols', hubSettings.upcomingColumns]]) {
     const el = document.getElementById(id);
     if (!el) continue;
     el.value = String(value);
@@ -9391,6 +9573,11 @@ function updateTempUnit(unit) {
   syncWeatherSettingsControls();
   if (typeof applyWeather === 'function') applyWeather(typeof weatherData !== 'undefined' ? weatherData : null);
   if (typeof renderLockScreen === 'function') renderLockScreen();
+  // Widgets draw temperatures too (a monitor tile, a weather tile). Tell them,
+  // the same way a theme or language change is told — see refreshTempUnit.
+  if (window.CustomWidget && typeof window.CustomWidget.refreshTempUnit === 'function') {
+    window.CustomWidget.refreshTempUnit();
+  }
   setSettingsStatus('settings_weather_saved', 'ok');
 }
 

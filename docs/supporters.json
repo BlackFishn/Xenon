@@ -1,6 +1,6 @@
 {
-  "_generated": "2026-09-09T06:41:24.505Z",
-  "_note": "Auto-generated from Buy Me a Coffee + GitHub Sponsors (plus any manualSupporters) by tools/build-supporters.mjs. Do not edit by hand — change docs/supporters-overrides.json instead. Names are privacy-masked (manual entries show as typed); full names and profile links are never published. Active members / recurring sponsors carry \"tier\":\"member\" and are highlighted on the site.",
+  "_generated": "2026-09-26T06:39:42.776Z",
+  "_note": "Auto-generated from Buy Me a Coffee + GitHub Sponsors + the supporter hub (plus any manualSupporters) by tools/build-supporters.mjs. Do not edit by hand — change docs/supporters-overrides.json instead. Names are privacy-masked (manual entries show as typed); full names and profile links are never published. Active members / recurring sponsors carry \"tier\":\"member\" and are highlighted on the site.",
   "supporters": [
     {
       "name": "arthurcruz1",
@@ -27,17 +27,8 @@
       "name": "Forlin"
     },
     {
-      "name": "cassoce"
-    },
-    {
       "name": "Wayfinder",
       "tier": "member"
-    },
-    {
-      "name": "Mully-1"
-    },
-    {
-      "name": "M4dM4x"
     },
     {
       "name": "Daniele",
@@ -52,18 +43,38 @@
       "tier": "member"
     },
     {
-      "name": "AliciaAster"
+      "name": "cassoce"
     },
     {
       "name": "Someone",
       "tier": "member"
     },
     {
-      "name": "Domi"
+      "name": "Adrian"
+    },
+    {
+      "name": "Mully-1"
+    },
+    {
+      "name": "M4dM4x"
     },
     {
       "name": "DeathFPV_LAPS",
       "tier": "member"
+    },
+    {
+      "name": "AliciaAster"
+    },
+    {
+      "name": "Simone",
+      "tier": "member"
+    },
+    {
+      "name": "Clarette",
+      "tier": "member"
+    },
+    {
+      "name": "Domi"
     },
     {
       "name": "Rob",

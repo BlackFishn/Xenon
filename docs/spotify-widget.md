@@ -101,3 +101,7 @@ Changing playback devices clears the previous device's pending volume.
   layout cases, stopwatch extraction, update handoff extraction, and three
   half-update extraction cases. The additional Discord voice timing case passes
   when rerun in isolation on both baseline and feature code.
+
+### Main v4.11.9 integration
+
+Up Next retains numbered, theme-aware rows and now plays a selected track inside its playlist or album context. Rows without a playable URI remain plain rows. The large square cover, lower control group, album backdrop and divider-free volume row remain unchanged.

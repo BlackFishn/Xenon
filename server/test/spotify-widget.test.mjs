@@ -275,3 +275,26 @@ test('album backdrop follows the current cover in every copy and clears without 
   assert.equal(h.query('.sp-now').classList.contains('is-empty'), true);
   assert.equal(h.query('.sp-now').classList.contains('has-artwork'), false);
 });
+
+test('numbered queue rows play within their context in every widget copy', async () => {
+  const h = await setup({ api: url => url.endsWith('/queue') ? {
+    ok: true, contextUri: 'spotify:playlist:queue-context',
+    queue: [{ uri: 'spotify:track:next', name: 'Next song', artist: 'Artist' },
+      { name: 'Unavailable local file', artist: 'Artist' }],
+  } : undefined });
+  for (let copy = 0; copy < 2; copy++) {
+    const rows = h.mounts[copy].querySelectorAll('.sp-track');
+    assert.equal(rows[0].tagName, 'BUTTON');
+    assert.equal(rows[0].querySelector('.sp-track-index').textContent, '01');
+    assert.equal(rows[1].tagName, 'DIV');
+    assert.equal(rows[1].querySelector('.sp-track-index').textContent, '02');
+    rows[0].click();
+    await settle(30);
+  }
+  const actions = h.requests.filter(r => r.action?.type === 'spotifyPlayUri');
+  assert.equal(actions.length, 2);
+  for (const { action } of actions) {
+    assert.equal(action.uri, 'spotify:track:next');
+    assert.equal(action.contextUri, 'spotify:playlist:queue-context');
+  }
+});

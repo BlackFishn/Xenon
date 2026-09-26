@@ -120,3 +120,30 @@ The release manifest records the final executable build and checksums. The
 source archive contains tracked files, not credentials, local settings, helper
 downloads or node_modules. This is a reproducible code checkpoint, not a complete
 machine backup.
+
+## Main integration: 2026-09-26
+
+Integrated origin/main at `6413073c` (v4.11.9) into production, then synchronized
+develop from production. The newer upstream/main was fetched for comparison only.
+Spotify keeps the reviewed layout and volume behavior while accepting playable
+Up Next rows. FPS keeps modern PresentMon, time-window pruning, swap-chain
+isolation, tracked-game selection and mean-rate calculation while adding the
+upstream present/display detail API.
+
+Validation on Windows:
+- Full integrated suite: 3,930 tests, 3,893 passed, 27 failed, 10 skipped.
+- Unmodified main baseline with the same CRLF checkout: 3,702 tests,
+  3,664 passed, 28 failed, 10 skipped. Every integrated failure also failed on
+  main; the edited FPS documentation assertion additionally accepts CRLF.
+- Focused Spotify/FPS integration tests: 110 passed, including queue context in duplicate widgets.
+- Native unit tests: 25 passed. The no-bundle v4.11.9 release build passed.
+- Dashboard demo build, 93 changed-JavaScript syntax checks and diff checks passed.
+- Spotify mouse, keyboard and emulated touch volume plus Edge, portrait, compact,
+  desktop, wrapped-title and tall-breakpoint layouts passed in an isolated browser.
+
+A new native executable is required for all shell changes, including window backing
+and platform-specific monitor/WebView recovery. It was built locally without
+installing over the running app. The Windows helper and Game Bar sources did not
+change in this main update, so they need no rebuild. Backend JavaScript changes
+require restarting the production backend; frontend changes require a reload.
+Source sync, binary installation and runtime restart remain separate operations.

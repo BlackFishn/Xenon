@@ -139,7 +139,7 @@ function normHeader(name) {
 function parseHeader(fields) {
   const norm = fields.map(normHeader);
   const find = pred => norm.findIndex(pred);
-  const frameTime = find(n => n.includes('betweenpresents')); // msBetweenPresents
+  const frameTime = find(n => n.includes('betweenpresents') || n === 'frametime');
   // Prefer 2.x display durations: these include the collector's frame-generation
   // and flip-metering handling. Never infer a generated-frame multiplier.
   const displayDuration = find(n => n === 'displayedtime');
@@ -156,53 +156,64 @@ function parseHeader(fields) {
   return { frameTime, displayTime, fps, app, pid, presentMode, dropped, swapChain, time, timeScale };
 }
 
-function pruneSamples(entry, at) {
-  while (entry.samples.length && (at - entry.samples[0].at > SAMPLE_WINDOW_MS
-      || entry.samples.length > MAX_SAMPLES)) entry.samples.shift();
+function pruneSamples(samples, at) {
+  while (samples.length && (at - samples[0].at > SAMPLE_WINDOW_MS
+      || samples.length > MAX_SAMPLES)) samples.shift();
 }
 
-function handleRow(fields) {
-  if (!_cols) return;
-  const pidRaw = _cols.pid >= 0 ? fields[_cols.pid] : '';
-  const pid = String(pidRaw || '').trim() || (_cols.app >= 0 ? fields[_cols.app] : '?');
-  const name = (_cols.app >= 0 ? String(fields[_cols.app] || '') : '').trim().toLowerCase();
-  if (isIgnoredProc(name)) return;
+function rowValues(cols, fields) {
+  if (!cols) return null;
+  const pidRaw = cols.pid >= 0 ? fields[cols.pid] : '';
+  const pid = String(pidRaw || '').trim() || (cols.app >= 0 ? fields[cols.app] : '?');
+  const name = (cols.app >= 0 ? String(fields[cols.app] || '') : '').trim().toLowerCase();
+  if (isIgnoredProc(name)) return null;
 
   // When PresentMon reports the present mode, keep only flip-model (game) presents
   // so windowed desktop apps and the dashboard's own browser don't count.
-  if (_cols.presentMode >= 0 && !isGamingPresentMode(fields[_cols.presentMode])) return;
+  if (cols.presentMode >= 0 && !isGamingPresentMode(fields[cols.presentMode])) return null;
 
-  const displayed = _cols.displayTime >= 0;
-  // A burst of Present() calls can contain frames never shown. Dropping those
-  // rows only works with DISPLAY intervals; present intervals would then count
-  // just the tiny gap after a dropped frame and inflate the result further.
-  if (displayed && _cols.dropped >= 0 && fields[_cols.dropped] !== '0') return;
-  let value, usesFps;
-  if (displayed || _cols.frameTime >= 0) {
-    const ft = parseFloat(fields[displayed ? _cols.displayTime : _cols.frameTime]);
-    if (!Number.isFinite(ft) || ft <= 0 || ft > 1000) return;
-    value = ft; usesFps = false;
-  } else {
-    const f = parseFloat(fields[_cols.fps]);
-    if (!Number.isFinite(f) || f <= 0 || f > 1000) return;
-    value = f; usesFps = true;
+  let present = null, usesFps = false;
+  if (cols.frameTime >= 0) {
+    const ft = parseFloat(fields[cols.frameTime]);
+    if (Number.isFinite(ft) && ft > 0 && ft <= 1000) present = ft;
+  } else if (cols.fps >= 0) {
+    const f = parseFloat(fields[cols.fps]);
+    if (Number.isFinite(f) && f > 0 && f <= 1000) { present = f; usesFps = true; }
   }
 
+  // A frame that was never displayed carries no display interval — blank, zero
+  // or negative depending on the version. Those rows are dropped frames, and
+  // counting one as an interval of zero would read as an infinite frame rate.
+  let display = null;
+  if (cols.displayTime >= 0 && (cols.dropped < 0 || fields[cols.dropped] === '0')) {
+    const dt = parseFloat(fields[cols.displayTime]);
+    if (Number.isFinite(dt) && dt > 0 && dt <= 1000) display = dt;
+  }
+  if (present == null && display == null) return null;
+  return { pid, name, present, display, usesFps };
+}
+
+function handleRow(fields) {
+  const r = rowValues(_cols, fields);
+  if (!r) return;
   const now = Date.now();
   const at = _cols.time >= 0 ? Number(fields[_cols.time]) * _cols.timeScale : now;
   if (!Number.isFinite(at)) return;
   const swapChain = _cols.swapChain >= 0 ? fields[_cols.swapChain] : '';
-  const key = `${pid}:${swapChain}`;
+  const key = `${r.pid}:${swapChain}`;
   let entry = _bySwapChain.get(key);
   if (!entry) {
-    entry = { pid, name, samples: [], usesFps, metric: displayed ? 'displayed' : 'presented', lastSeen: 0 };
+    entry = { pid: r.pid, name: r.name, samples: [], display: [], usesFps: r.usesFps,
+      metric: _cols.displayTime >= 0 ? 'displayed' : 'presented', lastSeen: 0 };
     _bySwapChain.set(key, entry);
   }
-  entry.name = name || entry.name;
-  entry.usesFps = usesFps;
-  entry.samples.push({ value, at });
+  entry.name = r.name || entry.name;
+  entry.usesFps = r.usesFps;
+  if (r.present != null) entry.samples.push({ value: r.present, at });
+  if (r.display != null) entry.display.push({ value: r.display, at });
   entry.lastSampleAt = at;
-  pruneSamples(entry, at);
+  pruneSamples(entry.samples, at);
+  pruneSamples(entry.display, at);
   entry.lastSeen = now;
 }
 
@@ -265,49 +276,78 @@ function scheduleRestart(startedAt) {
 // PID seen over a 24/7 uptime.
 const STALE_ENTRY_MS = 60000;
 
-// Use the existing foreground/game identity, never whichever desktop app filled
-// a sample buffer first. Pure getters avoid recursing through isGaming(), which
-// itself asks getGamingProcess() for a windowed-game hint. Within that process,
-// choose one swap chain so separate windows/overlays cannot mix their timings.
+let _foregroundPid = null;
+function setForegroundPid(fn) { _foregroundPid = typeof fn === 'function' ? fn : null; }
+
+function weight(entry) {
+  return entry.metric === 'displayed' ? entry.display.length
+    : Math.max(entry.samples.length, entry.display.length);
+}
+
+// The optional game context preserves the fork's tracked-game fallback when
+// touching the dashboard. Unknown busy desktop apps must not replace that game.
+function pickEntry(entries, now, wantedPid, context = null) {
+  let best = null, front = null;
+  const wanted = String(wantedPid || '');
+  for (const [key, entry] of entries) {
+    if (now - entry.lastSeen > SAMPLE_WINDOW_MS || !weight(entry)) continue;
+    const pid = String(entry.pid || key);
+    const name = entry.name.replace(/\.exe$/, '');
+    let focused = wanted && pid === wanted;
+    if (context) {
+      focused = wanted ? focused : name === context.foreground
+        && (name !== context.gameProc || !context.gamePid || pid === String(context.gamePid));
+      const tracked = pid === String(context.gamePid) && name === context.gameProc;
+      if (!focused && !tracked) continue;
+    }
+    if (focused && (!front || weight(entry) > weight(front))) front = entry;
+    if (!best || weight(entry) > weight(best)) best = entry;
+  }
+  return front || best;
+}
+
+function meanOf(samples) {
+  if (!samples.length) return null;
+  const mean = samples.reduce((sum, sample) => sum + (typeof sample === 'number' ? sample : sample.value), 0) / samples.length;
+  return Number.isFinite(mean) && mean > 0 ? mean : null;
+}
+
+function entryFps(entry) {
+  if (!entry) return { fps: null, presentFps: null, displayFps: null };
+  // Frames / elapsed seconds, including stalls; median inversion inflates bursts.
+  const p = meanOf(entry.samples);
+  const d = meanOf(entry.display);
+  const presentFps = p == null ? null : Math.round(entry.usesFps ? p : 1000 / p);
+  const displayFps = d == null ? null : Math.round(1000 / d);
+  // A display-capable collector with no displayed frames is not a high-FPS game.
+  const fps = entry.metric === 'displayed' ? displayFps : displayFps ?? presentFps;
+  return { fps, presentFps, displayFps };
+}
+
 function _bestEntry() {
   const now = Date.now();
-  const foreground = gameDetect.getForegroundProcess();
-  const game = gameDetect.getGameDiag();
-  let focused = null, tracked = null;
   for (const [key, entry] of _bySwapChain) {
     if (now - entry.lastSeen > STALE_ENTRY_MS) { _bySwapChain.delete(key); continue; }
-    if (now - entry.lastSeen > SAMPLE_WINDOW_MS) continue;
-    pruneSamples(entry, entry.lastSampleAt + now - entry.lastSeen);
-    if (!entry.samples.length) continue;
-    const name = entry.name.replace(/\.exe$/, '');
-    if (name === foreground && (name !== game.gameProc || !game.gamePid || entry.pid === String(game.gamePid))
-        && (!focused || entry.samples.length > focused.samples.length)) focused = entry;
-    if (entry.pid === String(game.gamePid) && name === game.gameProc
-        && (!tracked || entry.samples.length > tracked.samples.length)) tracked = entry;
+    const at = entry.lastSampleAt + now - entry.lastSeen;
+    pruneSamples(entry.samples, at);
+    pruneSamples(entry.display, at);
   }
-  return focused || tracked;
+  let wanted = '';
+  try { wanted = _foregroundPid ? String(_foregroundPid() || '') : ''; } catch { /* use name/tracked identity */ }
+  return pickEntry(_bySwapChain, now, wanted, {
+    ...gameDetect.getGameDiag(), foreground: gameDetect.getForegroundProcess(),
+  });
 }
 
-function _entryFps(entry) {
-  // FPS is frames / elapsed seconds. Inverting the median frame interval can
-  // report 400 FPS for a 100 FPS stream with short bursts followed by stalls.
-  const m = entry.samples.reduce((sum, sample) => sum + sample.value, 0) / entry.samples.length;
-  if (!Number.isFinite(m) || m <= 0) return null;
-  return Math.round(entry.usesFps ? m : 1000 / m);
-}
-
-// Recent FPS of the foreground/tracked game, or null.
-function getCurrentFps() {
-  const best = _bestEntry();
-  return best ? _entryFps(best) : null;
-}
+function getCurrentFps() { return entryFps(_bestEntry()).fps; }
+function getFpsDetail() { return entryFps(_bestEntry()); }
 
 // Diagnostic: name + fps of the process currently driving game detection, or
 // null. Used to identify false positives (e.g. the dashboard's own host).
 function getGamingProcess() {
   const best = _bestEntry();
   if (!best) return null;
-  const fps = _entryFps(best);
+  const { fps } = entryFps(best);
   return fps == null ? null : { name: best.name || '?', pid: Number(best.pid) || null, fps, metric: best.metric };
 }
 
@@ -362,4 +402,4 @@ function stopFpsMonitor() {
   _bySwapChain.clear();
 }
 
-module.exports = { startFpsMonitor, stopFpsMonitor, pauseFpsMonitor, resumeFpsMonitor, getCurrentFps, getGamingProcess, isGaming, isAvailable, isCurrentVersionAvailable, reload };
+module.exports = { startFpsMonitor, stopFpsMonitor, pauseFpsMonitor, resumeFpsMonitor, getCurrentFps, getFpsDetail, getGamingProcess, setForegroundPid, isGaming, isAvailable, isCurrentVersionAvailable, reload, parseHeader, rowValues, pickEntry, entryFps };

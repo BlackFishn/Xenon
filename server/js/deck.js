@@ -24,7 +24,7 @@
   let lastServerRev = 0;                      // newest server-assigned store rev we've seen (GET ack / POST ack / SSE)
 
   // Latest known live state; key nodes bound via data-state-bound reflect it.
-  const stateSnapshot = { micMuted: false, speakerMuted: false, obsRecording: false, obsStreaming: false, obsScene: '', obsMutes: {}, remoteConnected: false, remoteActive: false, sbGlobals: {}, sdkStates: {}, sdkStateMeta: {}, discordMuted: false, discordDeafened: false, mediaPlaying: false, mediaSource: '', haStates: {}, timers: {}, masterVolume: NaN, discordInputVolume: NaN, discordOutputVolume: NaN };
+  const stateSnapshot = { micMuted: false, speakerMuted: false, obsRecording: false, obsStreaming: false, obsScene: '', obsMutes: {}, remoteConnected: false, remoteActive: false, sbGlobals: {}, sdkStates: {}, sdkStateMeta: {}, scriptStates: {}, discordMuted: false, discordDeafened: false, mediaPlaying: false, mediaSource: '', haStates: {}, timers: {}, masterVolume: NaN, discordInputVolume: NaN, discordOutputVolume: NaN };
   // Latest OBS program-scene thumbnail; painted onto one host key by applyScenePreview.
   let scenePreview = { scene: '', image: '' };
   let obsToastTimer = null;   // auto-dismiss timer for the "OBS pronto" toast
@@ -370,14 +370,27 @@
   }
   // Profiles that live on OTHER deck instances, offered in the profile menu as one-tap
   // "copy into this deck" sources — so a newly added (independent) deck can pull in a
-  // profile already built elsewhere without first saving it as a preset. Deduped by
-  // name against this deck and across decks; empty placeholder profiles are skipped.
-  // Returns [{ instanceId, profileId, name }].
+  // profile already built elsewhere without first saving it as a preset. Empty
+  // placeholder profiles are skipped. Returns [{ instanceId, profileId, name, keys }].
+  //
+  // Deliberately NOT deduped, by name or otherwise — it used to be, and that was the
+  // bug. Two dedupes were in the way of the one case the list exists for:
+  //
+  //   · against THIS deck: a source was dropped if a profile here already had its
+  //     name. Someone duplicating a page, landing an obsolete "Nocturne Control" on
+  //     the new Deck, then coming back for the real one found nothing — the current
+  //     profile was hidden precisely BECAUSE the stale namesake was sitting next to
+  //     it. With one candidate, the whole section vanished and the answer read as
+  //     "this feature doesn't work".
+  //   · across decks: only the first profile with a given name was offered, so which
+  //     of three same-named profiles you were given came down to key order.
+  //
+  // listOrphanProfiles already learned this and says so in its own comment; the
+  // reasoning was never specific to removed decks. So every non-empty profile is
+  // listed, and the key count rides along as the thing that tells namesakes apart.
   function listOtherDeckProfiles(instanceId) {
     const M = window.DeckModel;
     const all = readStore();
-    const mine = new Set((durableConfig(instanceId, all).profiles || []).map(p => String(p.name || '').toLowerCase()));
-    const seen = new Set();
     const out = [];
     const live = liveInstanceSet();
     for (const otherId of Object.keys(all)) {
@@ -385,11 +398,9 @@
       if (!isLiveInstance(otherId, live)) continue;   // hide profiles from removed decks
       let cfg; try { cfg = M.normalizeDeckConfig(all[otherId]); } catch { continue; }
       for (const prof of (cfg.profiles || [])) {
-        const key = String(prof.name || '').toLowerCase();
-        if (!key || mine.has(key) || seen.has(key)) continue;
-        if (countProfileKeys(prof) === 0) continue; // skip empty placeholders
-        seen.add(key);
-        out.push({ instanceId: otherId, profileId: prof.id, name: prof.name });
+        const keys = countProfileKeys(prof);
+        if (keys === 0) continue;   // an empty placeholder is not worth offering
+        out.push({ instanceId: otherId, profileId: prof.id, name: prof.name, keys });
       }
     }
     return out;
@@ -1420,7 +1431,7 @@
       // the node so applyStateStyle can swap and restore them losslessly.
       if (key.stateStyle) {
         btn._deckStateStyle = key.stateStyle;
-        btn._ssBase = { ico, labelEl: label, labelText: key.title || '', accent: key.bg || '', iconFrag: null };
+        btn._ssBase = { ico, labelEl: label, labelText: key.title || '', accent: key.bg || '', iconFrag: null, iconClass: '' };
         btn._ssApplied = false;
       }
       if (window.DeckModel.evaluateKeyState(key.state, stateSnapshot)) {
@@ -2268,6 +2279,11 @@
     tile.replaceChildren(...keepControls);
     const root = el('div', 'deck-root');
     root.classList.toggle('is-editing', state.editing);
+    // The "Nessuna" faceplate takes the chassis away and the header goes with it
+    // (DeckPanel.css [data-plate="none"] .deck-bar). It has to come BACK while
+    // it is being used, or the profile menu would float over a bar that had
+    // collapsed underneath it and Done would be unreachable in edit mode.
+    root.classList.toggle('bar-open', !!(state.editing || state.profileMenu));
     root.dataset.keysize = cfg.keySize;
     // Whole-device look: cap material, cap shape and faceplate finish (see
     // DeckPanel.css [data-capstyle] / [data-shape] / [data-plate] variants).
@@ -2310,7 +2326,14 @@
       bar.appendChild(el('span', 'deck-crumb', crumbLabel(cfg, state)));
     }
     bar.appendChild(el('span', 'deck-spacer'));
-    bar.appendChild(el('span', 'deck-index', (view.pageIndex + 1) + ' / ' + view.pageCount));
+    // Only when there is somewhere to page TO. The footer below already carries
+    // arrows and dots the moment a second page exists, so this readout was a
+    // duplicate then and, on a single-page deck, a badge that says nothing at
+    // all — "1 / 1", taking the same height as a control. Reported from a Xeneon
+    // Edge, where the bar is a real share of a short tile.
+    if (view.pageCount > 1) {
+      bar.appendChild(el('span', 'deck-index', (view.pageIndex + 1) + ' / ' + view.pageCount));
+    }
     const edit = el('button', 'deck-edit');
     edit.type = 'button';
     if (state.editing) edit.classList.add('is-on');
@@ -2318,6 +2341,20 @@
     edit.title = state.editing ? 'done' : 'edit';
     edit.addEventListener('click', () => { state.editing = !state.editing; render(tile, instanceId); });
     bar.appendChild(edit);
+
+    // A touchscreen has no hover, and the Xeneon Edge is one. Tapping the
+    // collapsed strip peeks the bar for a few seconds — long enough to reach the
+    // profile menu or the pencil, short enough that it goes away on its own if
+    // the tap was a miss. The class goes straight on the node rather than
+    // through state + re-render: a re-render would rebuild the keys under the
+    // finger that is on its way to the pencil.
+    bar.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse') return;          // hover already handles it
+      if (e.target !== bar) return;                   // a tap ON a control is that control's
+      root.classList.add('bar-peek');
+      clearTimeout(root._barPeek);
+      root._barPeek = setTimeout(() => root.classList.remove('bar-peek'), 4000);
+    });
 
     // The profile switcher popover is portaled to <body> at the END of render (so
     // it escapes the deck tile's `overflow:hidden`); here we only tear it down
@@ -2519,10 +2556,20 @@
     menu.style.visibility = 'hidden';     // measure before painting to avoid a flash at 0,0
     const mw = menu.offsetWidth || 200, mh = menu.offsetHeight || 0;
     const margin = 8;
+    // The room to clamp inside, in the same layout space as the numbers above.
+    // Normally the window; under the Xeneon Edge preview NOT the window, because
+    // that mode makes <body> a fixed 2560x720 stage and hides anything outside
+    // it. This popover is portaled to that body, so its own containing block is
+    // the stage and the window's height is a promise of space that does not
+    // exist — the menu lands in the letterbox and is cut off. Same fault as the
+    // dropdown panel in js/custom-select.js, reported from the same screen.
+    const stage = document.documentElement.classList.contains('edge-preview') ? document.body : null;
+    const roomW = stage ? stage.offsetWidth : window.innerWidth;
+    const roomH = stage ? stage.offsetHeight : window.innerHeight;
     let left = rLeft;
-    left = Math.max(margin, Math.min(left, window.innerWidth - mw - margin));
+    left = Math.max(margin, Math.min(left, roomW - mw - margin));
     let top = rBottom + 6;
-    if (top + mh > window.innerHeight - margin) top = Math.max(margin, rTop - mh - 6);  // flip above if no room below
+    if (top + mh > roomH - margin) top = Math.max(margin, rTop - mh - 6);  // flip above if no room below
     menu.style.left = Math.round(left) + 'px';
     menu.style.top = Math.round(top) + 'px';
     menu.style.visibility = '';
@@ -2591,6 +2638,17 @@
     menu.appendChild(el('div', 'deck-pmenu-head', tr('deck_profiles', 'Profili')));
 
     const list = el('div', 'deck-pmenu-list');
+    // How many profiles here share each name. A deck that accumulated copies
+    // before they were numbered (or whose owner named two profiles the same on
+    // purpose) shows a column of rows that read identically, and the only thing
+    // separating them is the active dot — which says which one is live, not which
+    // one is the one you were looking for. Where a name is ambiguous the key count
+    // goes on the row, exactly as it does in the two copy-from lists below.
+    const nameUses = new Map();
+    cfg.profiles.forEach((p) => {
+      const k = String(p.name || '').toLowerCase();
+      nameUses.set(k, (nameUses.get(k) || 0) + 1);
+    });
     cfg.profiles.forEach((p) => {
       const row = el('div', 'deck-pmenu-row' + (p.id === cfg.activeProfile ? ' active' : ''));
       if (state.editing && state.renamingProfile === p.id) {
@@ -2614,6 +2672,9 @@
       const pick = el('button', 'deck-pmenu-pick'); pick.type = 'button';
       pick.appendChild(el('span', 'deck-pmenu-dot'));
       pick.appendChild(el('span', 'deck-pmenu-name', p.name));
+      if ((nameUses.get(String(p.name || '').toLowerCase()) || 0) > 1) {
+        pick.appendChild(el('span', 'deck-pmenu-count', String(countProfileKeys(p))));
+      }
       pick.addEventListener('click', () => {
         // Read the store once: checking the captured cfg but mutating a fresh
         // read could act on two different versions of the config.
@@ -2723,6 +2784,9 @@
         const row = el('div', 'deck-pmenu-row');
         const pick = el('button', 'deck-pmenu-pick'); pick.type = 'button';
         pick.appendChild(el('span', 'deck-pmenu-name', op.name));
+        // Same reason the lost list carries it: without a count, two rows named
+        // "Nocturne Control" are a coin flip.
+        pick.appendChild(el('span', 'deck-pmenu-count', String(op.keys)));
         pick.addEventListener('click', () => {
           copyDeckProfileInto(instanceId, op.instanceId, op.profileId);
           state.path = []; state.pageIndex = 0;
@@ -2960,6 +3024,46 @@
   // and restore the original losslessly when the state turns off. The base
   // icon's real nodes are parked in a fragment (never rebuilt from strings), so
   // image/builtin faces survive the round-trip; all text goes via textContent.
+  // Fill a `.deck-ico` with the GLYPH forms of an icon: a built-in vector, a
+  // compact picture, or an emoji. Shared by the base face (below) and by the
+  // active face in applyStateStyle, so a state icon is built by the same code
+  // that builds a normal one — the alternative was a second, drifting copy that
+  // happened to support only text, which is exactly what it did support.
+  //
+  // Full-bleed pictures are deliberately not here: those restyle the whole cap
+  // (`has-image` + the label scrim) rather than filling the glyph slot, and only
+  // the base face does that. normalizeStateIcon stores an active-face picture as
+  // 'small' for the same reason.
+  function fillGlyphIcon(ico, icon) {
+    ico.textContent = '';
+    ico.classList.remove('is-builtin', 'is-img-small');
+    const type = icon && icon.type;
+    const src = type === 'image' ? safeIconSrc(icon.value) : '';
+    if (src) {
+      const img = document.createElement('img');
+      img.draggable = false;
+      img.src = src; img.alt = '';
+      ico.classList.add('is-img-small');
+      ico.appendChild(img);
+      return true;
+    }
+    if (type === 'builtin' && window.DeckIcons && window.DeckIcons.has(icon.value)) {
+      ico.classList.add('is-builtin');
+      ico.appendChild(window.DeckIcons.el(icon.value));
+      return true;
+    }
+    // Only an EMOJI is printed as text. Without that check the value of anything
+    // that failed to render — an unknown built-in id, an image whose URL was
+    // rejected — was written onto the cap as a word, so a key that should have
+    // fallen back to its base face showed `javascript:alert(1)` instead. Harmless
+    // as text (never markup, never fetched) and wrong in every other way. The base
+    // face has always tested the type here; this is the same test.
+    const text = (type === 'emoji' && icon && typeof icon.value === 'string') ? icon.value : '';
+    if (!text) return false;
+    ico.textContent = text;
+    return true;
+  }
+
   function applyStateStyle(node, on) {
     const ss = node._deckStateStyle;
     const base = node._ssBase;
@@ -2967,11 +3071,22 @@
     node._ssApplied = on;
     if (ss.icon) {
       if (on && !base.iconFrag) {
+        // Keep the base face's nodes rather than its markup: a built-in SVG or an
+        // <img> has to come back exactly as it was, and remembering the classes
+        // is what lets `is-builtin` / `is-img-small` be restored with it.
         base.iconFrag = document.createDocumentFragment();
         while (base.ico.firstChild) base.iconFrag.appendChild(base.ico.firstChild);
-        base.ico.textContent = ss.icon;
+        base.iconClass = base.ico.className;
+        if (!fillGlyphIcon(base.ico, ss.icon)) {
+          // Nothing renderable (an unknown built-in id, a rejected image): put the
+          // base face straight back rather than leaving the key blank.
+          base.ico.className = base.iconClass;
+          while (base.iconFrag.firstChild) base.ico.appendChild(base.iconFrag.firstChild);
+          base.iconFrag = null;
+        }
       } else if (!on && base.iconFrag) {
         base.ico.textContent = '';
+        base.ico.className = base.iconClass || 'deck-ico';
         base.ico.appendChild(base.iconFrag);
         base.iconFrag = null;
       }

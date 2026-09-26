@@ -15,6 +15,8 @@ mod monitor;
 mod prefs;
 mod spotlight_window;
 mod tray;
+#[cfg(target_os = "linux")]
+mod webview_guard;
 
 /// WebView2 browser arguments shared by EVERY webview in this process.
 ///
@@ -1573,6 +1575,29 @@ pub fn run() {
                 monitor::initial_window(app.handle(), &display_prefs);
             let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Xenon")
+                // The window's own backing, under the web content. Left unset it
+                // is the platform default - WHITE - and every moment the page is
+                // not painting its own background shows through as a white
+                // dashboard. On Windows that is the launch flash the Spotlight
+                // window already guards against; on macOS it outlives the launch:
+                // after the display sleeps, WebKit brings the page back without
+                // repainting the root background, so the white backing shows in
+                // every gap and the tiles - which are translucent - composite
+                // over it as pale grey. Reported on Discord from a Mac mini
+                // (Sep 2026) on a dashboard explicitly set to Dark, which is why
+                // it was not the theme: the palette was never wrong, the surface
+                // behind it was. Near-black, matching --bg in styles/global.css.
+                //
+                // On macOS this needs `macOSPrivateApi` in tauri.conf.json, and
+                // that is the ONLY reason it is on. WKWebView paints an opaque
+                // WHITE background of its own, and the switch that turns it off
+                // (`drawsBackground`) is a private key — so wry only compiles
+                // that call in under the private-api feature. Without it the
+                // colour set here lands on the NSWindow, which the white webview
+                // then covers completely: the window would be dark and the app
+                // still white. Xenon is not distributed through the App Store,
+                // where private APIs are refused; it ships as a signed .dmg.
+                .background_color(tauri::window::Color(6, 8, 10, 255))
                 .inner_size(init_w, init_h)
                 .min_inner_size(640.0, 240.0)
                 .resizable(true)
@@ -1584,12 +1609,12 @@ pub fn run() {
                 .visible(!start_hidden)
                 .focused(!start_hidden)
                 .center();
-            // `transparent` is not on the macOS builder at all: making a window
-            // transparent there needs a private API, so Tauri hides the method
-            // unless the `macos-private-api` feature is enabled. Opting into a
-            // private API to declare that the window is NOT transparent would be
-            // absurd — and false is the default everywhere — so this states the
-            // intent only on the platforms where stating it is free.
+            // `transparent` is not on the macOS builder at all: it is gated
+            // behind the `macos-private-api` feature, which `macOSPrivateApi` in
+            // tauri.conf.json now switches on — for `background_color` above
+            // rather than for transparency (see that comment). The window stays
+            // opaque either way; false is the default everywhere, so the intent
+            // is stated only on the platforms where the method exists.
             #[cfg(not(target_os = "macos"))]
             let builder = builder.transparent(false);
             // Borderless + native fullscreen is a combination macOS does not
@@ -1906,6 +1931,14 @@ pub fn run() {
                     }
                 });
             }
+
+            // WebKit renders the page in its own process; when that one dies the
+            // window keeps its last frame, every timer in the page stops, and the
+            // next repaint is white until the app is restarted by hand. Write the
+            // reason down and bring the page back. Linux only — Windows and macOS
+            // recover from this themselves.
+            #[cfg(target_os = "linux")]
+            webview_guard::start(&window);
 
             // System-tray icon (show / hide / restart / exit).
             if let Err(err) = tray::build(app) {

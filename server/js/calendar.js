@@ -270,7 +270,32 @@ function checkCalendarDayRollover() {
 //
 // Pure and self-contained on purpose: test/calendar-upcoming.test.mjs evaluates
 // this very function out of the source.
-function upcomingWhenLabel(startsAt, now, locale) {
+// Until when an event still counts as current.
+//
+// A timed event is its own start: once 15:00 has passed, the 15:00 meeting is no
+// longer upcoming. A WHOLE-DAY event is not a thing that happens at 00:00 — it
+// covers the days it names, so it stays current until the end of the last one.
+// Reading its 00:00 start as the moment it expires is what made today's all-day
+// events disappear from the list one minute after midnight: at 9am, a day that
+// had barely started was already in the past. Reported from a Mac, with Google
+// Calendar events, which is where all-day events mostly come from.
+//
+// Local midnight on purpose: an all-day event is wall-clock, not an instant.
+function eventActiveUntil(e) {
+  const start = Date.parse(e && e.startsAt);
+  if (!e || !e.allDay) return start;
+  // endsAt names the LAST day the event covers (ics-feeds.js already turns RFC
+  // 5545's exclusive DTEND into an inclusive one); a single-day event has none
+  // to speak of, so its start day is its end day.
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(e.endsAt || e.startsAt));
+  if (!m) return start;
+  return new Date(+m[1], +m[2] - 1, +m[3], 23, 59, 59, 999).getTime();
+}
+
+// `allDayLabel` is passed in rather than looked up so this stays a pure function
+// of its arguments — the unit tests evaluate it straight out of this file with
+// nothing but timeParts injected. Empty for a timed event.
+function upcomingWhenLabel(startsAt, now, locale, allDayLabel) {
   const start = new Date(startsAt);
   if (Number.isNaN(start.getTime())) return '';
   const ref = new Date(now);
@@ -281,6 +306,9 @@ function upcomingWhenLabel(startsAt, now, locale) {
   // Today (or the minute just gone — the list keeps events up to 60s old): the
   // time of day is the thing that matters, and it is just as short.
   if (days <= 0) {
+    // A whole-day event has no o'clock to report. Printing its 00:00 would say
+    // the one thing that is not true about it.
+    if (allDayLabel) return allDayLabel;
     return new Intl.DateTimeFormat(locale, timeParts()).format(start);
   }
   const [value, unit] = days < 14 ? [days, 'day']
@@ -311,9 +339,35 @@ function upcomingLimits() {
   return { count, days };
 }
 
+// How many columns the list is laid out in. 0 is "as many as fit", which is what
+// it always did and still the default; 1 and 2 are the user overriding that.
+//
+// The automatic answer is a CSS `auto-fit` on a minimum width, and that minimum
+// was set to the width of the ITEM rather than of the name inside it. An item
+// spends about 70px on its dot, its gaps, its padding and the time on the right,
+// so a 130px column left the title around eight characters — which is how a
+// Xeneon Edge ended up showing "FC Barcel…" and "Levante - FC…" side by side,
+// two columns of one word each. Reported with a screenshot from an Edge, where
+// the panel is wide and short and every tile is narrow.
+//
+// The minimum is now the width at which a title is actually worth reading, so
+// the second column appears later and carries something when it does. The manual
+// setting is for the case that is nobody's business but the user's: a tile whose
+// events all have long names, where one column is right at any width.
+function upcomingColumns() {
+  const s = (typeof hubSettings === 'object' && hubSettings) || {};
+  return [0, 1, 2].includes(Number(s.upcomingColumns)) ? Number(s.upcomingColumns) : 0;
+}
+
 function _buildUpcomingInto(list) {
   const now = Date.now();
   const { count, days } = upcomingLimits();
+  // Stamped on the list itself rather than on <body>: two Calendar tiles on the
+  // same page (a second dashboard instance, the phone view) are laid out by the
+  // same rule, and neither can be told apart by a body-level attribute.
+  const cols = upcomingColumns();
+  if (cols) list.dataset.cols = String(cols);
+  else delete list.dataset.cols;
   // The horizon is counted in CALENDAR days, like the chip labels beside it: a
   // "7 days" that hid tomorrow evening because it is 7×24h+1 away would be
   // wrong in the one way a person would notice.
@@ -325,7 +379,12 @@ function _buildUpcomingInto(list) {
     until = end.getTime();
   }
   const upcoming = allCalendarEvents()
-    .filter(e => { const at = Date.parse(e.startsAt); return at >= now - 60000 && at < until; })
+    // Kept while it is still current (see eventActiveUntil — a whole-day event
+    // runs to the end of its last day) and it starts inside the horizon.
+    .filter(e => {
+      const at = Date.parse(e.startsAt);
+      return Number.isFinite(at) && eventActiveUntil(e) >= now - 60000 && at < until;
+    })
     .sort((a, b) => new Date(a.startsAt) - new Date(b.startsAt))
     .slice(0, count);
   list.innerHTML = '';
@@ -356,7 +415,7 @@ function _buildUpcomingInto(list) {
     name.textContent = title;
     const when = document.createElement('span');
     when.className = 'upcoming-when';
-    when.textContent = upcomingWhenLabel(e.startsAt, now, locale);
+    when.textContent = upcomingWhenLabel(e.startsAt, now, locale, e.allDay ? t('event_all_day') : '');
     item.appendChild(dot);
     item.appendChild(name);
     item.appendChild(when);

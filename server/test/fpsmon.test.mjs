@@ -192,3 +192,26 @@ test('upgrading the reader uses modern metrics and retains its isolated ETW sess
   }
   assert.equal(m.spawns[1].options.windowsHide, true);
 });
+
+test('both FPS details retain the mean rate and separate swap chains after the main merge', () => {
+  const m = monitor();
+  for (let i = 0; i < 20; i++) {
+    for (const interval of [2.5, 2.5, 25]) m.feed({ present: interval / 2, display: interval });
+  }
+  for (let i = 0; i < 10; i++) m.feed({ swap: '0xoverlay', present: 1, display: 1 });
+  const detail = m.api.getFpsDetail();
+  assert.equal(detail.fps, 100);
+  assert.equal(detail.displayFps, 100);
+  assert.equal(detail.presentFps, 200);
+});
+
+test('foreground PID selects the correct instance and keeps the tracked game on focus loss', () => {
+  const m = monitor();
+  m.api.setForegroundPid(() => m.state.foregroundPid);
+  m.state.foregroundPid = 99;
+  for (let i = 0; i < 20; i++) m.feed();
+  for (let i = 0; i < 10; i++) m.feed({ pid: 99, present: 20, display: 20 });
+  assert.equal(m.api.getCurrentFps(), 50);
+  m.state.foregroundPid = 7; // dashboard gains focus
+  assert.equal(m.api.getCurrentFps(), 100);
+});

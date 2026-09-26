@@ -19,10 +19,18 @@ community catalog) — every one of those calls is listed in the [privacy page](
 ![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D6)
 ![node](https://img.shields.io/badge/node-%E2%89%A5%2018.15-brightgreen)
 ![license](https://img.shields.io/badge/license-non--commercial-blue)
-![version](https://img.shields.io/badge/version-4.11.7-informational)
+![version](https://img.shields.io/badge/version-4.11.9-informational)
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/MBVrw9kZyg)
 
+<p align="center">
+  <a href="https://github.com/marcimastro98/Xenon/releases/latest/download/Xenon-Setup-x64.exe"><img src="https://img.shields.io/badge/Download%20for%20Windows-Xenon--Setup--x64.exe-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Download Xenon for Windows"></a>
+  &nbsp;
+  <a href="https://github.com/marcimastro98/Xenon/releases/latest"><img src="https://img.shields.io/badge/macOS%20%C2%B7%20Linux-all%20downloads-555?style=for-the-badge" alt="All downloads"></a>
+</p>
+
 ![Xenon dashboard overview](docs/images/overview.png)
+
+Four people out of five find Xenon here rather than on the website, so the short version: **download the installer above, run it, press *Complete setup* when the app asks.** Everything else on this page is detail. If Windows warns you about the file, [this explains why and how to check it yourself](#if-windows-blocks-the-download-or-flags-xenon-as-a-virus).
 
 **Join the community:** share themes, swap ideas and get help on our [Discord](https://discord.gg/MBVrw9kZyg).
 
@@ -276,7 +284,7 @@ Just open **`http://127.0.0.1:3030/`**.
 
 > **Nothing.** The engine starts automatically when you log in and the native app reopens itself on its display — the dashboard is live before you even settle in. (Using iCUE instead? It remembers your layout too.)
 
-To remove Xenon, double-click **`UNINSTALL.bat`** on Windows or **`UNINSTALL.command`** on macOS, and run `./UNINSTALL.sh` on Linux. All three ask once, then take the whole thing with them: the app, the startup entry, the local server, your data and the install folder. Add `--keep-data` (`-KeepData` on Windows) to keep your settings, layouts and notes, or `--dry-run` to see what would go without changing anything.
+To remove Xenon on Windows, open **Settings → Apps → Installed apps**, find **Xenon** and press **Uninstall** — the same as any other program. The entry is registered by the installer from 4.11.8 on; on an older install, and on macOS and Linux, use the uninstaller in the folder instead: double-click **`UNINSTALL.bat`** on Windows or **`UNINSTALL.command`** on macOS, and run `./UNINSTALL.sh` on Linux. All three ask once, then take the whole thing with them: the app, the startup entry, the local server, your data and the install folder. Add `--keep-data` (`-KeepData` on Windows) to keep your settings, layouts and notes, or `--dry-run` to see what would go without changing anything.
 
 ### Updating
 
@@ -425,6 +433,10 @@ iCUE's embedded WebView can reject some MP4 files even when they play fine in Ch
 - **Defender quarantined Xenon, or the download was blocked** — a false positive: either an unsigned build with no reputation yet, or a generic signature reacting to an installer that downloads what it installs. See [If Windows blocks the download, or flags Xenon as a virus](#if-windows-blocks-the-download-or-flags-xenon-as-a-virus) for how to tell which, verify the file, and restore it.
 - **Nothing happens when you launch Xenon, and Defender never said anything** — on Windows 11 this is usually Smart App Control, which is separate from your antivirus and is not affected by an exclusion. See [If Xenon simply will not start: Smart App Control](#if-xenon-simply-will-not-start-smart-app-control).
 - **"Can not find script file …\server\open-dashboard.vbs" every time you sign in, but Xenon starts anyway** — that is the optional "open the dashboard in your browser at logon" task, pointing at a launcher that is no longer where it was: the install moved, or an antivirus quarantined the `.vbs`. Xenon now repoints or removes that task the next time the engine starts, so the box stops after one more sign-in. To clear it by hand: **Task Scheduler → Task Scheduler Library → Xenon Edge Dashboard → Delete**, or in PowerShell `Unregister-ScheduledTask -TaskName 'Xenon Edge Dashboard' -Confirm:$false`. If the script was quarantined, **Protection history** has it, and restoring it plus the folder exclusions above brings the feature back.
+- **Windows says one version and Xenon says another** — the setup `.exe` installs the app; the dashboard engine behind it is a separate piece. Before 4.11.8 the setup left an engine that was already there untouched, whatever version it was, so *Apps & features* could read one version ahead of the dashboard. Either update from inside Xenon, or download the release's **source zip** and run its `INSTALL.bat`, which always replaces the engine. From 4.11.8 the setup updates an engine that is behind it.
+- **You installed Xenon twice and the setup keeps “succeeding” without changing anything** — `INSTALL.bat` installs wherever you extracted the zip, while the setup `.exe` always installs into `%LOCALAPPDATA%\\Programs\\Xenon`, so using both leaves two copies on the PC and only one of them can hold port 3030. From 4.11.8 the setup spots the other one, names its folder, stops it and takes over; before that it reported success while the older copy went on serving the dashboard. Remove the copy you don't want with its own `UNINSTALL.bat`.
+- **You deleted the Xenon folder by hand, and now every sign-in shows “Can not find script file …\\server\\start-hidden.vbs” (or …\\open-dashboard.vbs)** — the two logon entries live in Task Scheduler, outside the folder, so deleting the folder leaves them firing at scripts that are no longer there. Remove them: **Task Scheduler → Task Scheduler Library**, delete **Xenon Edge Widget** and, if it is there, **Xenon Edge Dashboard**. In PowerShell: `Unregister-ScheduledTask -TaskName 'Xenon Edge Widget' -Confirm:$false; Unregister-ScheduledTask -TaskName 'Xenon Edge Dashboard' -Confirm:$false`. Uninstalling from **Settings → Apps → Installed apps** (or with `UNINSTALL.bat`) takes both with it, which is why that is the route to use.
+- **The app stays on “Xenon isn't finished installing”, the setup reports every component OK, and reinstalling changes nothing** — the files are fine; it is the engine that is not starting. Open `%LOCALAPPDATA%\Xenon\server.log`: from 4.11.9 the launcher writes there when it cannot find a `node.exe` to start, which happens when Node.js is installed somewhere unusual (a second drive, a portable copy) and is not on the `PATH` that Windows hands the startup task. Installing **Node.js LTS** from [nodejs.org](https://nodejs.org/) and running `INSTALL.bat` again fixes it, as does adding the folder that holds your `node.exe` to `PATH` and signing out and back in. If `server.log` is empty too, the launcher itself never ran: check that the task **Xenon Edge Widget** is enabled under **Task Manager → Startup apps**.
 - **Xenon closes on its own after a while** — the tray menu's **Open crash log** records Rust panics and deliberate exits. If neither appears, check OS crash reports: native faults can also bypass the panic hook. See [If Xenon closes on its own while you are using it](#if-xenon-closes-on-its-own-while-you-are-using-it).
 
 ---
@@ -448,9 +460,17 @@ iCUE's embedded WebView can reject some MP4 files even when they play fine in Ch
 
 **Have an idea?** Open a [Feature Request](https://github.com/marcimastro98/Xenon/issues/new?template=feature_request.md) — all feedback is welcome.
 
-**If this saved you some time** — no pressure, always appreciated. 💙 Supporters get a role on our Discord + a spot in the Hall of Supporters!
+**If this saved you some time**, one person writes Xenon in their spare time, and the people below are what pays for the code-signing certificate, the domain and the servers. There is no paid version and there never will be; support is a gift, and it unlocks a few things as a thank-you:
+
+| | What it unlocks |
+|---|---|
+| **$5, a coffee** | One month of supporter-only themes and widgets, the Supporter role on Discord, your name in the [Hall of supporters](https://xenon-app.com/#support). |
+| **$25, a supporter pass** | Five months of drops, paid once. Nothing renews by itself. |
+| **$50, a whole year** | Twelve months of drops as a [yearly membership](https://www.buymeacoffee.com/marcimastro98/membership). It renews by itself and stops whenever you say. |
 
 <a href="https://www.buymeacoffee.com/marcimastro98" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy me a coffee" height="50" width="210"></a>
+
+Your code arrives by email within a minute of the payment; paste it once in **Settings → Support** and the drops unlock in the gallery.
 
 ---
 

@@ -119,6 +119,7 @@
 <link rel="stylesheet" href="components/UnifiPanel/UnifiPanel.css">
 <link rel="stylesheet" href="components/DiscordInvite/DiscordInvite.css">
 <link rel="stylesheet" href="components/SupportAsk/SupportAsk.css">
+<link rel="stylesheet" href="components/ShareNudge/ShareNudge.css">
 <link rel="stylesheet" href="components/Spotlight/Spotlight.css">
 <link rel="stylesheet" href="components/SearchWidget/SearchWidget.css">
 <link rel="stylesheet" href="components/DiskWidget/DiskWidget.css">
@@ -424,19 +425,41 @@
         </div>
 
         <div class="cal-pane" id="cal-pane-timer" data-calpane="timer" hidden>
-          <div class="timer-add-section">
-            <div class="timer-add-row">
-              <input class="timer-add-label-input" id="timer-label-input" type="text" maxlength="40"
-                data-i18n-placeholder="timer_label_placeholder" placeholder="Es. Pasta, Focus…"
-                onkeydown="onTimerInputKeydown(event)">
-              <input class="timer-add-dur-input" id="timer-duration-input" type="text" maxlength="10"
-                placeholder="5:00"
-                onkeydown="onTimerInputKeydown(event)">
-              <button class="timer-add-btn" type="button" onclick="addTimerFromInput()" data-i18n-title="timer_add" title="Aggiungi timer" aria-label="Aggiungi timer">+</button>
+          <div class="timer-add-section" data-timerf="add-section">
+            <!-- Collapsed face: one slim strip that brings the row back. The add
+                 row and its hint are used once and then sit there; on a wide,
+                 short panel (a Xeneon Edge) that is a third of the widget spent
+                 on something already done. The strip still says what it does, so
+                 collapsing never hides the way to add a timer. -->
+            <button class="timer-add-strip" type="button" data-timerf="add-strip"
+              onclick="setTimerAddCollapsed(false)"
+              data-i18n-title="timer_add_expand" title="Aggiungi un timer"
+              data-i18n-aria-label="timer_add_expand" aria-label="Aggiungi un timer">
+              <span class="timer-add-strip-plus" aria-hidden="true">+</span>
+              <span data-i18n="timer_add_new">Nuovo timer</span>
+            </button>
+            <div class="timer-add-body" data-timerf="add-body">
+              <div class="timer-add-row">
+                <input class="timer-add-label-input" id="timer-label-input" type="text" maxlength="40"
+                  data-i18n-placeholder="timer_label_placeholder" placeholder="Es. Pasta, Focus…"
+                  onkeydown="onTimerInputKeydown(event)">
+                <input class="timer-add-dur-input" id="timer-duration-input" type="text" maxlength="10"
+                  placeholder="5:00"
+                  onkeydown="onTimerInputKeydown(event)">
+                <button class="timer-add-btn" type="button" onclick="addTimerFromInput()" data-i18n-title="timer_add" title="Aggiungi timer" aria-label="Aggiungi timer">+</button>
+                <button class="timer-add-collapse" type="button" data-timerf="add-collapse"
+                  onclick="setTimerAddCollapsed(true)"
+                  data-i18n-title="timer_add_collapse" title="Nascondi il campo"
+                  data-i18n-aria-label="timer_add_collapse" aria-label="Nascondi il campo">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 8.6 6 6-1.4 1.4-4.6-4.6-4.6 4.6L6 14.6l6-6Z"/></svg>
+                </button>
+              </div>
+              <!-- The hint is where the stopwatch is discoverable: there is no
+                   second button, an empty duration is the gesture. So it is not
+                   deleted, it is moved to when it is wanted — it fades in while
+                   the row has focus and is out of the way the rest of the time. -->
+              <div class="timer-format-hint"><span data-i18n="timer_format_hint">5 min · 5:30 min:sec · 1:05:00 ore:min:sec · vuoto = cronometro · +5 = avvisa ogni 5 min</span></div>
             </div>
-            <!-- The hint is where the stopwatch is discoverable: there is no
-                 second button, an empty duration is the gesture. -->
-            <div class="timer-format-hint" data-i18n="timer_format_hint">5 min · 5:30 min:sec · 1:05:00 ore:min:sec · vuoto = cronometro · +5 = avvisa ogni 5 min</div>
           </div>
           <div class="timer-list" id="timer-list" data-timerf="list"></div>
         </div>
@@ -1300,6 +1323,25 @@
         </div>
       </div>
 
+      <!-- Media visualiser. Windows + Xenon Helper only: peak metering does not
+           exist without the native companion (server/audio-levels.js), and there
+           is no fallback to degrade to. The row says so under the switch rather
+           than offering a toggle that silently does nothing. -->
+      <div class="settings-group settings-behavior-group" data-settings-cat="appearance">
+        <div class="settings-group-head">
+          <span data-i18n="settings_media_viz_head">Riquadro Media</span>
+          <span class="settings-hint" data-i18n="settings_media_viz_head_hint">onda sonora sotto la copertina</span>
+        </div>
+        <div class="settings-row full">
+          <div class="settings-segmented" role="group" aria-label="Onda sonora">
+            <button class="settings-media-viz settings-segment-btn active" type="button" data-media-viz="off" onclick="updateMediaVisualizer('off')" aria-pressed="true" data-i18n="settings_media_viz_off">Nessuna</button>
+            <button class="settings-media-viz settings-segment-btn" type="button" data-media-viz="minimal" onclick="updateMediaVisualizer('minimal')" aria-pressed="false" data-i18n="settings_media_viz_minimal">Minimal</button>
+            <button class="settings-media-viz settings-segment-btn" type="button" data-media-viz="wave" onclick="updateMediaVisualizer('wave')" aria-pressed="false" data-i18n="settings_media_viz_wave">Onda</button>
+          </div>
+          <span class="settings-note" data-i18n="settings_media_viz_note">Disegna il suono che l'app sta davvero producendo, con i colori della copertina. Non cambia nulla del riquadro: si aggiunge sotto, e con Nessuna non viene disegnato niente. Minimal e una riga sottile che respira, Onda e la versione piena. Serve Windows con Xenon Helper installato: senza di lui il livello audio non si puo misurare e non esiste un ripiego. La misurazione parte solo quando scegli Minimal o Onda.</span>
+        </div>
+      </div>
+
       <div class="settings-group settings-behavior-group" data-settings-cat="island">
         <div class="settings-group-head">
           <span data-i18n="settings_cat_island">Dynamic Island</span>
@@ -1442,7 +1484,10 @@
         </div>
       </div>
 
-      <!-- Native-app only: revealed by syncNativeZoomControl() inside the Tauri kiosk. -->
+      <!-- Sets the NATIVE app's interface scale, and is shown on every surface:
+           the value lives in hubSettings, so a browser on the main monitor can set
+           the scale of the app running on the Edge. Hiding it off the native app
+           was the reported trap — see syncNativeZoomControl(). -->
       <div class="settings-group settings-behavior-group" data-settings-cat="general" id="settings-native-zoom-row" hidden>
         <div class="settings-group-head">
           <span data-i18n="settings_native_zoom">Scala interfaccia</span>
@@ -1452,6 +1497,7 @@
           <span class="settings-label-line"><span data-i18n="settings_native_zoom_label">Zoom</span><span class="settings-value" id="settings-native-zoom-value">100%</span></span>
           <input class="settings-range" id="settings-native-zoom" type="range" min="0.6" max="1.6" step="0.05" oninput="updateNativeZoom(this.value)">
           <span class="settings-note" data-i18n="settings_native_zoom_note">Ingrandisci o rimpicciolisci tutta la dashboard, indipendentemente dalla scala di Windows. Puoi anche usare Ctrl + rotellina del mouse.</span>
+          <span class="settings-note" id="settings-native-zoom-remote" data-i18n="settings_native_zoom_remote" hidden>Vale per l'app Xenon, non per questa finestra: qui usa lo zoom del browser. Puoi regolarla da qui mentre guardi l'Edge.</span>
         </label>
       </div>
 
@@ -1506,7 +1552,7 @@
       <div class="settings-group settings-behavior-group" data-settings-cat="island">
         <div class="settings-group-head">
           <span data-i18n="settings_clock">Orologio</span>
-          <span class="settings-hint" data-i18n="settings_clock_hint">formato dell'ora</span>
+          <span class="settings-hint" data-i18n="settings_clock_hint">formato e dimensioni di ora e data</span>
         </div>
         <div class="settings-row full">
           <span class="settings-label-line"><span data-i18n="settings_clock_format">Formato ora</span></span>
@@ -1515,6 +1561,28 @@
             <button class="settings-clock-format settings-segment-btn" type="button" data-clock-format="12" onclick="updateClockFormat('12')" aria-pressed="false" data-i18n="settings_clock_12h">12 ore</button>
             <button class="settings-clock-format settings-segment-btn" type="button" data-clock-format="24" onclick="updateClockFormat('24')" aria-pressed="false" data-i18n="settings_clock_24h">24 ore</button>
           </div>
+        </div>
+        <div class="settings-row full">
+          <span class="settings-label-line"><span data-i18n="settings_clock_date_format">Formato data</span></span>
+          <div class="settings-segmented" role="group" aria-label="Formato data">
+            <button class="settings-clock-date-format settings-segment-btn active" type="button" data-clock-date-format="full" onclick="updateClockDateFormat('full')" aria-pressed="true" data-i18n="settings_clock_date_full">Completo</button>
+            <button class="settings-clock-date-format settings-segment-btn" type="button" data-clock-date-format="medium" onclick="updateClockDateFormat('medium')" aria-pressed="false" data-i18n="settings_clock_date_medium">Medio</button>
+            <button class="settings-clock-date-format settings-segment-btn" type="button" data-clock-date-format="short" onclick="updateClockDateFormat('short')" aria-pressed="false" data-i18n="settings_clock_date_short">Corto</button>
+          </div>
+        </div>
+        <!-- Size lives beside the format, in the section that already owns the
+             top bar ("contenuti e stile della barra superiore"): someone who
+             wants a bigger date is looking at the top bar, not at Aspetto, and a
+             second home for the clock would be one place too many to look. -->
+        <div class="settings-grid">
+          <label class="settings-row">
+            <span class="settings-label-line"><span data-i18n="settings_clock_scale">Dimensione ora</span><span class="settings-value" id="settings-clock-scale-value">100%</span></span>
+            <input class="settings-range" id="settings-clock-scale" type="range" min="0.8" max="2" step="0.05" oninput="updateSettingsRange('clockScale', this.value)">
+          </label>
+          <label class="settings-row">
+            <span class="settings-label-line"><span data-i18n="settings_clock_date_scale">Dimensione data</span><span class="settings-value" id="settings-clock-date-scale-value">100%</span></span>
+            <input class="settings-range" id="settings-clock-date-scale" type="range" min="0.8" max="2" step="0.05" oninput="updateSettingsRange('clockDateScale', this.value)">
+          </label>
         </div>
       </div>
 
@@ -1556,6 +1624,21 @@
             <option value="7" data-i18n="settings_upcoming_days_7">7 giorni</option>
             <option value="14" data-i18n="settings_upcoming_days_14">14 giorni</option>
             <option value="30" data-i18n="settings_upcoming_days_30">30 giorni</option>
+          </select>
+        </label>
+        <!-- The list fills the width it is given, and on a wide short panel that
+             means two columns of titles cut to one word. "Automatico" still fits
+             what it can, only later — a second column now has to be wide enough
+             to carry a name. These two are for deciding it yourself. -->
+        <label class="settings-row full">
+          <span class="settings-label-line">
+            <span data-i18n="settings_upcoming_cols">Colonne</span>
+            <span class="settings-hint" data-i18n="settings_upcoming_cols_hint">come disporre gli eventi in arrivo</span>
+          </span>
+          <select class="settings-select" id="settings-upcoming-cols" data-custom-select data-cs-fixed onchange="updateUpcomingColumns(this.value)">
+            <option value="0" selected data-i18n="settings_upcoming_cols_auto">Automatico</option>
+            <option value="1" data-i18n="settings_upcoming_cols_1">Una</option>
+            <option value="2" data-i18n="settings_upcoming_cols_2">Due</option>
           </select>
         </label>
       </div>
@@ -4049,6 +4132,7 @@
 <script src="js/ambient-freeze.js"></script>
 <script src="js/discord-invite.js"></script>
 <script src="js/support-card.js"></script>
+<script src="js/share-nudge.js"></script>
 <script src="js/custom-bg.js"></script>
 <script src="js/slideshow-widget.js"></script>
 <script src="js/theme-palette.js"></script>
@@ -4059,6 +4143,7 @@
 <script src="js/tile-shape-presets.js"></script>
 <script src="js/dashboard-layout.js"></script>
 <script src="js/topbar-minimal.js"></script>
+<script src="js/media-viz.js"></script>
 <script src="js/topbar-media.js"></script>
 <script src="js/sdk-island-schema.js"></script>
 <script src="js/sdk-island.js"></script>
@@ -4133,6 +4218,7 @@
 <script src="js/vitals-pet.js"></script>
 <script src="js/ticker.js"></script>
 <script src="js/sdk-perf.js"></script>
+<script src="js/sdk-youtube-player.js"></script>
 <script src="js/custom-widget.js"></script>
 <script src="js/spotify-widget.js"></script>
 <script src="js/browser-tile.js"></script>

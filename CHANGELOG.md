@@ -15,6 +15,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Changed
+- **Sync fork production with main v4.11.9.** Keep the custom Spotify player and stable volume while adding selectable Up Next rows. Preserve PresentMon 2.5.1, swap-chain isolation and average FPS while exposing main's present/display FPS detail. Native shell updates require a rebuilt executable.
 - **Spotify volume no longer snaps back to stale readings.** Keep the released value while Spotify confirms it, serialize rapid adjustments, ignore older player responses, and restore confirmed values after failures. Volume dragging no longer pauses the track clock, and its handle remains visible.
 - **Spotify Playing uses a blurred album backdrop and clearer layout.** Fill the player card with the current cover, keep the foreground art sharp, and use a theme-aware scrim for readable controls. Tall wide players show square artwork up to 348 px, a lower title/control group, seek above playback, and a neutral volume row without a divider. Artwork adapts to available height so wrapped titles and touch controls remain visible. Library tabs, header and controls retain the dashboard theme.
 - **Spotify has a cleaner, responsive player.** Wide widgets place the library beside playback; small and portrait widgets retain access to every tab. Larger touch targets, visible volume percentages, numbered queue rows, and a device shortcut make controls easier to use.
@@ -56,6 +57,312 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Custom Ambient layouts keep the Xenon background and are easier to arrange.** Choose the dashboard or scene background, move freely with optional grid snapping, and enter exact position and size values in a movable toolbar. Fractional positions survive saving, dragging preserves live widgets, and clock text and media artwork fit short ultrawide screens. See the [Ambient editor guide](docs/ambient-editor.md).
 - **Game FPS now uses the current standalone PresentMon reader for Frame Generation.** Both installers fetch and verify 2.5.1 alongside the legacy binary. The parser reads modern display durations and millisecond timestamps, counts all displayed-frame rows including generated frames, and retains average-rate calculation, game/process selection, and swap-chain isolation. Older readers remain usable and Settings offers their upgrade; FPS from a legacy reader is not a verified Frame Generation total.
 - **Microphone mute now reflects the real Windows device state.** SoundVolumeView exports are decoded as UTF-8 so non-ASCII microphones such as RØDE retain a usable device ID, mute targets the current default capture device even if Voicemod changes it between polls, and Xenon verifies the hardware result before updating the control.
+
+## [v4.11.9] - 20-09-2026
+### ✨ Added
+- **You can re-order the list of stocks by dragging.** Asked on Discord: *"is there a way to re-order the list of stocks? besides deleting and re-adding"*. There was not — the Borsa tile drew the watchlist in the order it was stored, and adding a symbol always put it at the end, so putting one at the top meant removing everything above it and adding it all back.
+
+  Each row now has a handle on its left. Drag it and the rows move under your finger; let go and the order is saved. The **scrolling ticker** reads the same list, so it follows too, and so does any SDK widget on the `stocks` stream.
+
+  It is built for the screen it lives on: the handle is always faintly visible rather than waiting for a hover the Xeneon Edge will never get, a row swaps after **half** a row of travel rather than a whole one, and a quote arriving over the live feed mid-drag no longer rebuilds the list out from under you. A single symbol shows no handle — one row cannot be out of order.
+
+- **A Deck key's second face can now carry a real icon, not just an emoji.** Asked on Discord as *"is it possible to assign two icons to a single button in the Deck widget and toggle between them"*, answered with "a key can already carry two faces" — and then, on trying it: *"is this feature active? I cannot find it."*
+
+  It was active, and it was narrower than the answer implied. The face shown while a key's state is ON took an **emoji**, a label and a colour: a text box capped at eight characters. So "two faces" meant two emoji, and someone looking for the icon picker found a field asking for 🔴.
+
+  The active face now takes exactly what the normal face takes — an icon from the built-in library, a picture you upload, or an emoji — through the same picker and the same checks. A microphone that becomes a **crossed-out microphone** while muted, a record dot that becomes a **stop square** while recording: the icon swaps the instant your script posts the state, on the dashboard and in the Virtual Deck alike.
+
+  An uploaded picture sits as a compact icon rather than taking over the whole cap, so the flip is a glyph changing and not the key changing shape. Faces set before this keep working untouched, including inside shared profile codes.
+
+  It also says where it is now, which was half the problem: **key editor → Effects → Look while active**. It had been described as living under Appearance, which is not where it is.
+
+- **You can pick a track out of the Spotify widget's Up Next.** Asked for on GitHub: *"I'd love to be able to actually pick from the spotify playlist showing in Up Next. Unfortunately I can see it all, but can't press any of them. I can only use back and forward."*
+
+  Tap any row and it plays. Not just that song either — when the queue belongs to a playlist or an album, Xenon starts it **inside** that list, so playback carries on through the rest exactly as it would in Spotify itself, rather than stopping dead at the end of the one track you picked.
+
+  A track that was dropped into the queue by hand belongs to no playlist, and Spotify's API gives no way to tell those rows apart from the outside. So Xenon tries the list first and plays the track on its own if that is refused: a tap always plays what you tapped. And a row Spotify won't name a track for (the odd local file or unnamed podcast episode) stays plain rather than looking pressable and doing nothing.
+
+  On a touchscreen the play button is always there instead of waiting for a hover it will never get.
+
+- **The Media tile can show the sound wave of what is playing.** Asked for by a supporter on Buy Me a Coffee: *"wish there was a media bar and visualization"*. The bar was already there — the now-playing strip in the top bar, with cover and transport, under **Settings → Dynamic Island**. The visualisation was not.
+
+  **Settings → Aspetto → Riquadro Media** now offers **Nessuna / Minimal / Onda**, coloured by the album cover — the same colours the LED strip already takes from it.
+
+  It is an addition, and it behaves like one. The tile is unchanged: the strip is added underneath the content, it can never move or cover a control, and **Nessuna** is the default and draws nothing at all. **Minimal** is a thin line along the bottom edge that breathes with the music, for anyone who wants the dashboard to stay quiet; **Onda** is the fuller strip. Neither competes with the cover or the title — both are drawn under the artwork rather than on top of it.
+
+  It is not decoration. Xenon can measure the peak level of each app about twelve times a second, and every bar in the strip is one of those measurements: the last few seconds of them, scrolling past, newest on the right. So a quiet passage looks quiet and a drop looks like a drop. It reads the *player's* level specifically, so a Discord call or a game never makes your music dance.
+
+  What it deliberately is **not** is a spectrum analyser. Xenon measures one number per app, not frequency bands, and drawing sixty bars from one number would be a picture of nothing. The same reason the placeholder equaliser in this tile has never animated.
+
+  It needs **Windows with Xenon Helper** — peak levels cannot be read without it and there is no fallback — so everywhere else the tile draws no wave at all rather than faking one, and the setting says so under the choice. Picking Minimal or Onda is what starts the measurement, and Nessuna stops it again; nothing runs while the tile is off screen, the music is paused, or the dashboard is in the background.
+
+- **A second Discord tile, showing a different tab.** The widget has four tabs — Controls, Channels, Soundboard, Notifications — and only one could be on screen at a time, because only one Discord tile could exist. Asked for by someone who wanted his DM notifications above and the voice-chat controls below, on the same screen.
+
+  It can now be added twice from the **"+"** palette, and **each tile remembers its own open tab**. Both read the same connection to your Discord app, so the second one costs no extra polling — and when either tile is showing Notifications, the unread badge stays where it belongs: at zero.
+
+
+- **The Windows downloads are signed.** Until now `Xenon-Setup-x64.exe` arrived as a file nobody had vouched for, and Windows treated it that way: browsers cancelling the download, "unknown publisher" on the setup, Defender quarantining it outright. There is a code-signing certificate behind the release now, and the installer carries a real publisher name.
+
+  Two honest limits, because this is not a switch that turns the warnings off. **SmartScreen can still appear for a while**: since 2024 Microsoft grants no certificate instant trust, and reputation is earned through downloads over time. What changes is that it now accumulates against one stable identity instead of resetting with every release. And a signature is not a verdict: the app executable inside the installer and the companion helper are signed too, but Defender judges behaviour as well as identity, so a flag on a brand-new file remains possible until the reputation has had time to build.
+
+  If you have hit any of this, [the README section](https://github.com/marcimastro98/Xenon#if-windows-blocks-the-download-or-flags-xenon-as-a-virus) still explains how to check a download by hand and restore a quarantined file.
+
+### 🐛 Fixed
+- **Xenon now starts even when Node.js lives somewhere unusual.** Reported by someone whose partner's Xeneon Edge worked on the first try while his own never came up: the setup found every component, said it was done, and the app sat on *"Xenon isn't finished installing"* forever. A full uninstall and reinstall changed nothing. His Node.js was on a second drive, at `F:\Nodejs`.
+
+  The engine is started on Windows by a small hidden launcher, and that launcher asked the system to find `node` by name. The installer resolves Node properly — it had already printed the exact path, run npm with it and ticked every box — but the launcher threw that away and started from scratch, with whatever environment Windows happened to hand the startup task. A Node.js anywhere but the two or three usual folders is not in it.
+
+  Worse, the whole failure was silent. Nothing was started, so nothing wrote a log, so the setup could only report that *something* had not answered and reinstalling could only find everything in place again.
+
+  The installer now writes down the exact `node.exe` it verified, and the launcher starts that one. If it has gone missing, the launcher looks in the usual folders and then through `PATH` itself, by hand, one folder at a time — which is also how it stops depending on `cmd` being findable, the same failure [issue #127](https://github.com/marcimastro98/Xenon/issues/127) caused on a PC whose `PATH` had been rewritten by a "debloat" script. And if there is genuinely no Node.js on the machine, it says so in `server.log` — the file the setup and the app splash already tell you to send — instead of leaving it empty.
+
+- **The Slideshow's frozen picture no longer shows a broken-image icon and a pale border while you game.** Reported as: *"it works fine on desktop, but pauses with a white border and a little picture broken icon top left corner"* when a game is running.
+
+  While a game has the machine, the slideshow paints its current picture onto a still and drops the live one — that is how an animated GIF stops costing anything. Dropping the live one means hiding it first, and **the hide was doing nothing**: five of the widget's pieces set their own display, which quietly overrules the browser's own way of hiding an element. So what stayed on screen was a picture with no picture in it, sitting behind the still: its empty frame around the edges and a broken-image icon in the corner. It only showed with **Whole picture** fit, where the still doesn't reach the tile's edges, which is why it took a while to surface.
+
+  Fixing it fixed three more of the same, all shipped and none reported: a slideshow holding **one** image kept its back/forward arrows and its position dots, both pointing nowhere, and the pause badge sat on every tile whether it was paused or not. Hiding now works on everything in the tile, written once so the next piece added can't quietly opt out of it.
+
+- **The interface scale is now in Settings wherever you open them, and it works from there.** Reported by someone who arranges their dashboard from a browser on their main monitor while the app runs on an Edge: *"the scale UI option appears only if you go in settings from edge screen, it was not shown in the settings from my browser on main screen… I spent much time trying to figure it out, and even coded a little upscale in my widgets in the beginning."*
+
+  Two faults, and the first is what made the second look reasonable. The scale is stored with the rest of your settings and already reached every screen — but the only thing that ever handed it to the app was opening Settings **on the app itself**. A scale set anywhere else sat there, saved and ignored, until you opened Settings on the Edge or restarted it. So the control was hidden everywhere else, because from everywhere else it would not have worked.
+
+  It works now: the app picks the scale up the moment it arrives, so moving the slider in a browser rescales the app on the Edge while you watch it. And since it works, it is shown — on every screen, with a line under it saying that it resizes the **app**, not the browser window you happen to be in.
+
+- **Long dropdowns stay inside the frame in the Xeneon Edge preview.** Reported from the Deck's action picker: *"part of the list displayed when you configure a key is outside the window. Top of the list is not visible."*
+
+  The preview renders the dashboard as a fixed 2560×720 stage, scaled to fit your browser window, and hides anything that falls outside it — that is what makes it a faithful frame. But the floating menus were positioning themselves against the **browser window** instead, which in that mode is a promise of space that isn't there. A 50-row menu was placed partly above the stage's top edge and the frame simply cut it off. Measured at 110 pixels of list lost, with no scrollbar to hint that anything was missing, since as far as the menu knew it had fitted comfortably.
+
+  Both floating menus now measure the stage: the shared dropdown panel and the Deck's profile switcher, which is attached to the very element the stage is made of. They cap their height to the room actually available and scroll instead of overflowing, exactly as they already did on a real Edge.
+
+  A second fault came out with it. Inside the preview the page is *scaled*, so a menu's on-screen size and its own layout size are different units — and the positioning code was mixing the two, which left the panel landing short of its own field by the scale factor. It now measures that ratio from the menu itself rather than reading it off the page, so nothing changes at all when there is no scaling.
+
+- **A Deck key can point at `%APPDATA%\Spotify\Spotify.exe` and it will work.** Reported alongside another issue: *"I got a button to the exe but it tells me the path doesn't exist when I push it (but again, it does)."*
+
+  It does exist. Windows writes paths that way in its own dialogs, every install guide quotes them that way, and both Win+R and the Explorer address bar expand `%APPDATA%` on the spot — so the path reads as real everywhere a person can check it. Xenon was the only thing in the chain not expanding it, so the key reported "not found" about a file sitting right there, and the field looked perfectly correct.
+
+  Whole `%NAME%` pairs are now expanded before the path is looked up, from Xenon's own environment and with no shell involved anywhere. It is deliberately cautious: a path that already exists is never reinterpreted, an unknown or empty variable abandons the attempt rather than quietly dropping the segment (`%NOPE%\x.exe` must never become `\x.exe`), a stray percent sign in a folder name is left alone, and the expanded path still has to clear every check the typed one did. Applies to **Open app**, **Open file/folder** and **Run script** alike — the same three actions the macOS and Linux path repairs already cover.
+
+- **The Slideshow tile now says why it is empty, instead of asking you to add images you cannot add.** Reported from a folder on a NAS reached over a UNC path: *"NO error displays, but the photos slideshow shows 'No images yet' with an 'Add Images' button"* — while the same pictures in a folder on `C:\` worked.
+
+  The tile was showing the **library's** empty state to someone whose source is a **folder**. "Add images" is the right prompt for a library you fill by hand and a meaningless one for a folder, so the message both withheld the problem and pointed at the one thing that could not be the fix. Everything needed to say the real thing was already there — the server answers with a reason (folder missing, not a folder, not allowed, unreadable) and Settings has shown those exact sentences in all eleven languages since the folder source shipped. Only the tile threw them away.
+
+  It doesn't any more: a folder that cannot be read says so on the tile, with **Open settings** rather than Add images.
+
+  It also names the one cause that reads as nonsense otherwise. Told a network folder "does not exist", the reporter mapped the share to a drive letter, pointed Xenon at that, and was told the same — *"it doesn't exist, but it truly does."* It does; it does not exist to **that process**. Windows scopes mapped drives and saved share credentials to a logon token, and Xenon's startup task runs with the elevated one, which is a different session from the Explorer window that made the mapping — so the letter is genuinely absent and the share has no credentials, while a folder on `C:\` is unaffected. Where the path is a network one (a UNC path, or a drive whose root Xenon cannot reach), the message now says that instead of leaving you to doubt your own file manager.
+
+  And a folder that reads perfectly but yields nothing is now told apart from an empty one. "0 images found" was true in both cases and useless in both: it could not distinguish *put some pictures in it* from *these are not files Xenon can read*. The tile and the settings line now say how many entries were passed over — **"No readable images in this folder (517 entries skipped)"** — which names the supported formats and makes the difference visible instead of leaving an empty tile and no thread to pull.
+
+- **Copying a Deck profile onto a second Deck works even when a profile of that name is already there.** Reported after duplicating a dashboard page to reuse a Deck setup: *"The list has 2 items, but they are early obsolete versions… the one with the green bullet is the current one, but it is not visible on the second page."*
+
+  **From another Deck** in the profile menu was dropping any profile whose name this Deck already had. So the moment an old *Nocturne Control* landed on the new Deck, the current *Nocturne Control* was hidden — hidden precisely because the stale one was sitting next to it. With nothing else to offer, the whole section disappeared, and the feature read as simply not working. It also kept only the first profile of a given name across Decks, so which of three namesakes you were handed came down to storage order.
+
+  Neither rule survives. Every non-empty profile on every Deck still on the dashboard is listed, each row carrying **how many keys it holds** — the same thing that already tells two namesakes apart in the recovery list below it. A Deck no longer on the dashboard still stays out; that gate was never the problem.
+
+  And copies no longer pile up under one name: the second copy of *Nocturne Control* is saved as *Nocturne Control 2*, the way a second download is numbered. Where a Deck already carries namesakes from before this, the profile switcher now shows the key count on those rows, so the five identical lines in that report can be told apart without opening each one.
+
+- **A Deck profile now looks the same on every screen it is opened on.** Reported with two screenshots side by side, the same profile on a desktop browser and on a Xeneon Edge: *"icon scaling is inconsistent between the web app and the macOS app"*.
+
+  The key caps grow to fill the space the Deck is given, but the icon and the title on them did not: both stopped growing at a fixed pixel size, tuned for the largest key-size preset. Below that point everything scaled together and the two screens matched. Above it the cap kept growing around an icon that could not, so on a large display an icon drew at **24%** of its cap where the same icon on the Edge drew at **40%** — the same profile, visibly different.
+
+  It only affected *some* keys, which is what made it read as random rather than as one bug: a key whose face is a full-bleed picture is sized as a share of the cap and was always correct, so those keys stayed put while the vector icons, emoji and small icons beside them shrank.
+
+  Icon, title and the live value badge are now a fixed share of the cap at every size, with the small-screen minimums kept as they were. Nothing changes on a Deck whose caps were already under that size, which is most of them.
+
+- **On Linux, the app comes back by itself when the page dies under it.** Reported from Bazzite with the AppImage: the clock stopped updating, then the weather stopped refreshing, and clicking on the window turned it white with no way back except restarting Xenon.
+
+  The two frozen readings are what identified it. The clock and the weather run on two separate timers that share no code; both stop only if the engine running them is gone. On Linux the page is rendered by a **separate WebKit process**, and the shell survives its death — so the window keeps showing the last frame it was handed, looking perfectly alive, until something forces a repaint and there is nothing left to paint it.
+
+  Xenon did two things wrong there, and neither was the clock. It never recorded the event: the crash diary behind Tray → **Open crash log** carries problems in Xenon's own process, and a dead render process is not one, so the single event explaining everything the user saw left no trace anywhere. And it did nothing about it, which is why restarting by hand was the only way out.
+
+  Now the reason WebKit gives — crashed, out of memory, or stopped deliberately — goes into that diary, and the page reloads itself a moment later. If it dies over and over Xenon stops retrying rather than flickering forever, and says so in the diary. Windows and macOS already recover from this on their own, so this is Linux only.
+
+  This is the symptom, not the cause; the diary is what will tell us the cause, now that it is being written down.
+
+- **All-day calendar events stay in the Upcoming list for the whole day.** An all-day event from Google Calendar arrives with no time, so Xenon filed it at 00:00 — and the list, which keeps an event until it starts, retired it one minute after midnight. Turn the PC on at nine in the morning and today's all-day events were already gone. Reported from a Mac.
+
+  Two halves of the same omission. The importer has always known an event is whole-day and then dropped that fact on the way out; the list, with nothing to tell it otherwise, read a birthday as a midnight appointment. And the two cannot be separated: a one-day all-day event's end resolves to its own start day, so once the flag is gone there is genuinely nothing left to distinguish the two.
+
+  The flag now travels with the event, and a whole-day event counts as current until the end of the last day it covers — not from its 00:00. It also says **Giornata** instead of showing 00:00, which was the one thing about it that was not true. Timed events are untouched: a 15:00 meeting still leaves the list at 15:00.
+
+- **The Media tile has a hierarchy again on a wide, short screen.** On a tile that is much wider than it is tall — the shape every tile has on a Xeneon Edge — the four pieces were laid out in a single queue: cover, source chip, track title, transport, all on one baseline. Nothing read as the important one. The **SPOTIFY** chip sat as a peer of the song title and shoved it rightwards, and the buttons ended up marooned across an empty gap.
+
+  It is two blocks now. The cover anchors the left; beside it one column read top-down in the order it should be read — source, then title, then artist, then the per-app volume — and the transport alone on the right, centred against the whole block. The same order the tall tile has always used, turned on its side. The source chip is sized as an eyebrow rather than a badge, so it introduces the title instead of competing with it, and the cover takes the height the text column no longer needs instead of leaving the bottom third of the tile empty.
+
+  Only that shape changes. The tall and narrow tiles are untouched.
+
+### 📘 Documentation
+- **FEATURES.md was sending people to look for a panel that no longer exists.** Asked on Discord by a moderator: how do you create a second dashboard page, is there a "Create new page" button, and can the current layout be copied onto it. All three already existed; the guide described none of them correctly.
+
+  It still documented a **Layout → Pages manager**. Those controls moved next to the page dots some releases ago: in Layout mode, **+** adds a page, **✎** renames, **×** removes, **‹ ›** reorder. The section now says that, and — the actual question — how to copy a page you already like instead of rebuilding it: **My presets → Save page**, then tap the preset, and a saved page always comes back as a brand-new page with the same tiles in the same places.
+
+  Two claims were also plainly wrong. The guide said every duplicated widget is a "live mirror" of its source; five of them are not — a second **Deck, Browser, Remote, Discord or Custom widget** is an independent instance with its own keys, address or page. Which is why someone duplicating a page to reuse a Deck setup got an empty Deck and no explanation. The Deck section now also carries the one-tap answer: **"From another Deck"** in the profile menu copies a whole profile in, keys and look included.
+
+  And **removing a page destroys more than the guide admitted**: single tiles come back from the layout dock, but tab groups and duplicated tiles are deleted outright — a duplicated Deck takes its keys with it. Both the guide and the confirmation dialog say so now, in every language that carries it.
+
+  Prose cannot be unit-tested, but the claims can: the mirror list in the guide is now checked against the code that decides it, so the next widget added to one has to be added to the other.
+
+- **The code-signing notes in DEVELOPER.md were out of date in the two places that would have cost money.** They recommended Azure Trusted Signing, whose individual onboarding has been paused since April 2025, and said an EV certificate clears SmartScreen immediately, which stopped being true in 2024. Rewritten against what is actually purchasable, plus the signing recipe that was proven end to end rather than guessed at: which OpenSSL PKCS#11 path works with Certum's token and which one segfaults, and why the certificate chain has to be a chain.
+
+## [v4.11.8] - 11-09-2026
+### 🐛 Fixed
+- **The settings sidebar no longer squeezes its categories into a strip on a short screen.** The list of categories scrolls, and under it sits a block that does not: the support links, the update button, the platform notice and the version number. On a tall screen that is the right arrangement. On a Xeneon Edge — wide and only 720 pixels tall — the fixed half took 337 of the sidebar's 549 pixels, leaving twenty-seven categories scrolling through a window four and a half rows high. Reported from an Edge; a 1366×768 laptop had the same squeeze and nobody had mentioned it.
+
+  On any short screen the sidebar now scrolls as one column: the categories keep their full height, the rest follows underneath. Eleven categories where there were four.
+
+- **A versioned setup that left the engine on the old version.** The `.exe` on the Releases page installs the app you see; the dashboard engine behind it is installed by a second step, and that step began by asking only whether an engine was already there — and stopping if it was. True on every PC that already runs Xenon, whatever version it runs. So reinstalling with `Xenon_4.11.7_x64-setup.exe` replaced the app, left the engine where it was, and finished happily: Windows' *Apps & features* said 4.11.7, Xenon itself said 4.11.6 with an update waiting, and running the setup again changed nothing at all.
+
+  Reported by someone who did exactly that, twice, on our own advice — after a failed update we had told him to reinstall over the top, which was the right idea and the wrong file.
+
+  It now asks *which* version is installed before deciding: an engine that is behind the release gets updated (settings, layouts, notes and Deck keys kept), one that is level or ahead is left alone by name and version, and a PC that cannot reach GitHub is told that rather than shown a failure.
+
+- **A setup that reported success while changing nothing.** There are two ways to install Xenon — `INSTALL.bat` runs from wherever you unpacked it, the setup `.exe` installs into its own folder — and anyone who used both ended up with two copies on the PC. Only one of them can answer on the port the dashboard lives at, and the setup could not tell the two apart: it asked whether *something* was answering, not whether *its own* engine was. So it stopped a copy it could not find, waited for a port that was never freed, started an engine that died instantly because the port was taken, saw the old copy still answering, and called the install a success — leaving the machine on exactly the version it started from. Twice in a row, with a restart in between, and no error anywhere.
+
+  Reported by someone who had been told to reinstall over the top after the dependency fix in v4.11.6, and who had been doing it right all along.
+
+  The setup now checks *which* Xenon holds the port. If it is another copy, it says which folder that copy lives in, stops it, and takes over; if it is a program that is not Xenon at all, it says that instead of failing silently. And it only counts an install as finished when its own engine is the one answering.
+
+- **The dashboard now actually moves onto the screen you choose, on a Mac.** Picking the Xeneon Edge — or any second display — left Xenon sitting as a window on the main screen. The panel was found, labelled “Xeneon Edge” in the picker and selected; the dashboard simply never went there, and nothing said why. Reported by the first person to run Xenon on a Mac with an Edge attached.
+
+  Two macOS APIs measure in different units and neither mentions it: asking a screen where it is gives an answer scaled to that screen, while telling a window where to go is read in the scale of the screen it is on at that moment. With a Retina main display next to the Edge the two disagree by a factor of two, so “go to the Edge” came out as a point still inside the main display. The move succeeded, at the wrong place. Every screen Xenon can be sent to is now measured in units that mean the same thing on both.
+- **The app window is dark behind the dashboard, instead of white.** The web view Xenon draws into paints a background of its own underneath the page, and nobody had ever told it which colour — so it was the default, white. Any moment the page was not painting its own background, that white showed through: a flash at launch on Windows, and on macOS something that outlasted the launch. After the display slept, the page came back without repainting its background, and the white underneath showed in every gap between the tiles — which are semi-transparent, so they turned pale grey sitting on it. The whole dashboard looked like it had switched to the light theme, on a Mac set firmly to Dark. The same white flashed for an instant on every theme change, which is the clue that solved it.
+
+  Reported from a Mac mini with before-and-after screenshots, which is what made it clear the colours themselves had never changed.
+
+- **The dashboard no longer wakes up white on a Mac.** With the appearance set to Auto, every time the display went to sleep the dark dashboard came back light — reported from a Mac mini, and reproducible on every wake.
+
+  Auto follows the system, and the only way it had to ask on macOS was the WebView's own answer, which after a display wake is briefly “light” on a Mac that never left dark. That was enough to repaint everything, and nothing afterwards disagreed: the reliable reading Xenon already used on Windows was a registry read, and a Mac has no registry.
+
+  It now asks the operating system itself on all three platforms — the registry on Windows, `defaults` on macOS, `gsettings` on GNOME — and asks again the instant the screen comes back rather than up to half a minute later. Where an answer genuinely cannot be had, the system's own preference is still used, but “no idea” is never read as light, which is the half the old code guessed wrong.
+
+- **A widget told to wait by Spotify is now told how long.** When Spotify refuses a read because too much was asked of it at once, it says how many seconds to leave it alone, and Xenon works that out and passes it on — the widget guide has always documented it. It was being thrown away at the last step, on the way into the widget, so widgets got the refusal without the wait and had to guess. Guessing short is the expensive mistake: retrying too early keeps the whole account in the penalty box, the user's own Spotify tile included.
+
+- **“Up next” no longer shows the same album over and over.** Playing a short album or the end of a playlist, Spotify answers the queue question by padding its reply — the tracks that are left, then the whole thing again from the top, and again. With repeat off none of that will ever play: after the last track, playback stops. Xenon was passing the padding straight through, so the Spotify tile's Up Next, and any widget reading the queue, listed the same songs several times over.
+
+  Widgets reading the queue get the same answer as the tile — the two used to go down different paths, and the first version of this fix reached only one of them.
+
+  The repetition is now cut. Carefully, because two of these look identical from the outside: a playlist is allowed to hold the same song twice, and a queue is allowed to play one twice in a row, so nothing is removed for being a repeat of something. What gets cut is the sequence starting over as a whole, and only when the album is *not* set to repeat, the queue is not shuffled, and the loop comes back round to the track playing right now — which is what proves it is padding rather than somebody's actual queue.
+
+
+### ✨ Added
+- **The Timer's add field folds away, and its help line only appears while you are typing.** The label box, the duration box and the line of format examples under them sat on screen permanently — used once per timer, then in the way. On a Xeneon Edge, wide and only 720 pixels tall, that band was a third of the widget, and the help line was two rows of small grey text the panel could not render legibly even with Xenon scaled to 125%.
+
+  Reported from an Edge, with the suggestion that the whole top could collapse to a strip. It does.
+
+  The chevron beside **+** folds the row to a slim **+ New timer** strip — one tap brings it back, with the cursor already in the label box — and the choice is remembered across restarts. Escape folds it away too.
+
+  The help line is not gone, because it is the only place the stopwatch is discoverable: an empty duration is the whole gesture. It now appears while the row has focus — exactly while you are filling it in — and is bigger and brighter than it was, then gets out of the way. The timer list gains the space.
+
+- **A Deck key can now follow a state set by any script on your PC.** Keys have always been able to show a second face — a different icon, label and colour — while something is on, but only for the sixteen things Xenon watches itself: the mic, OBS, a Home Assistant entity, a widget's published state. Anything else on the machine was invisible to them.
+
+  Asked for by someone with an AppleScript that swaps between two audio outputs, who wanted the key to show which output was live.
+
+  There is now a seventeenth source: **Reflect a script state**, in the key editor. Give the state a name, give the key its second face, and end your script — `.bat`, PowerShell, AppleScript, Python, anything — with one line:
+
+  ```
+  curl -X POST 127.0.0.1:3030/state/set -H "Content-Type: application/json" -d '{"name":"audio-out","value":"speakers"}'
+  ```
+
+  The key changes face the instant that runs, on the dashboard and in the Virtual Deck together. Send the same name with no value to clear it. The endpoint answers only to the machine it runs on: a web page cannot reach it, and neither can a widget.
+
+  Widgets can follow those states too: the SDK gains a `scriptStates` stream, asked for in the manifest and granted by the user like any other ("States your own scripts set"). Reading only — a widget publishes states of its own with `deck.states`, which are declared and namespaced, so no package can overwrite a name belonging to another one or to your script.
+
+- **The date in the top bar can be shortened, too.** It always spelled the day out in full — *Friday, 11 September* — which is a lot of bar once you have made it bigger. **Settings → Dynamic Island → Clock → Date format** now offers *Full*, *Medium* (*Fri 11 Sep*) and *Short* (*11/09*).
+
+  Each one is asked of the system rather than cut out of the long version, so every language gets the short form it actually uses — American English even swaps the halves, and writes 09/11.
+
+  Widgets follow it as well. The time format beside it has reached them since v4.11.7; the date format now travels the same way (`theme.dateFormat`, re-pushed the moment you change it), so a widget printing a date is not the one thing on screen still spelling out the whole weekday.
+
+- **The clock and the date in the top bar can be made bigger.** Asked for by someone who wanted to read the date from across the room: the top bar offered a time format and nothing else, and the date was a fixed size no theme could touch. **Settings → Dynamic Island → Clock** now has two sliders beside the format — one for the time, one for the date — from 80% to 200%.
+
+  Two sliders rather than one because the date is deliberately the quiet half of that corner: someone who wants a readable date does not necessarily want a bigger clock, and the request was for the date.
+
+  **Date size** sizes the whole line the date is on — the live dot, the separator and the weather beside it come with it, or a big date next to a stock-size weather chip reads as a mistake rather than a setting. The opt-in chips on that row (now playing, vitals, widget badges) keep their own size: each is its own feature, and the widget ones were sized by their author.
+
+  They scale whatever size your screen already draws, not a fixed number: a Xeneon Edge and a laptop start from a smaller clock than a desktop does, and both keep that proportion at any setting. A phone is left out — the top bar there has no room to give.
+
+- **The Deck's minimal finish is finally minimal.** *Personalizzazione → Base → Nessuna* takes the Deck's body away and leaves the keys floating on the dashboard — except for the title bar on top, which stayed exactly where it was. That bar belongs to the faceplate, and this is the one finish with no faceplate: a profile name, a page badge and a pencil, hanging over nothing. It now collapses with the rest of the chassis.
+
+  Not removed, collapsed: that bar is the only way into edit mode and the only place to switch profile, so hiding it outright would shut you out of your own Deck. It becomes a thin strip — hover it, or tap it on a touchscreen, and it comes back; it stays up on its own while you are editing or picking a profile.
+
+  Asked for from a Xeneon Edge, where the Deck sat next to a Calendar, a Player and a Timer that are all just a border and their contents.
+
+- **The Deck stops saying "1 / 1".** The page counter in the title bar showed even on a Deck with a single page, where it has nothing to report, and duplicated the arrows and dots that already appear under the keys the moment a second page exists. It now appears only when there is somewhere to page to — on every finish, not just the minimal one.
+
+- **The Calendar's upcoming events stop splitting into columns too narrow to read.** Past a certain width the list broke into two columns, and on a wide, short panel like the Xeneon Edge — where every tile is narrow — that meant two columns of one word each: “FC Barcel…” beside “Levante - FC…”. The width it split at was the width of a whole row, not of the event name inside one, and a row spends most of itself on the dot, the padding and the time. A second column now appears only when it is wide enough to carry a name whole, so the same tile shows five full titles where it used to show ten halves.
+
+  And if you would rather decide it yourself, **Settings → Calendar → Columns** now offers *Automatic*, *One* or *Two*. Requested with a screenshot from an Edge.
+
+- **Widgets can read past the first fifty followed artists.** Saved albums, playlists and Liked Songs could always be paged through to the end; followed artists and recently played could not — Spotify pages those two by a marker rather than by a page number, and there was no way to send the marker back. A widget saw the first fifty and stopped there. It can now ask for the rest, and a marker it gets wrong is refused rather than answered with the first page again, which is the version of this bug that looks like an endless list of the same names. Reported by the author of the Spotify library browser.
+
+- **Xenon is now in Windows' own list of installed apps.** It installs from a folder rather than through an MSI, and Windows had no idea it was there: nothing under **Settings → Apps → Installed apps**, nothing in Control Panel. The only way out was `UNINSTALL.bat`, back inside the folder — findable if you knew it was there, invisible if you did not.
+
+  So people deleted the folder instead, which takes the files and leaves behind everything that lives outside them. Chief among those is the entry that starts Xenon when you sign in: Windows kept running it, found no script where it pointed, and said so in a box you can only click OK on — at every single boot, on a PC with no Xenon left on it to explain where the box was coming from. Reported on Discord by someone it had been greeting for a while.
+
+  Installing now registers a normal uninstall entry, so Xenon is removed the way every other program is, and that route takes the startup entries with it. Already deleted the folder? The two lines that clear the leftovers are in README's troubleshooting section.
+
+- **Turn one person in a voice call up or down, from the Discord widget.** One friend twice as loud as everyone else is the oldest problem in voice chat, and Discord's own fix is buried in a right-click menu in another window. Tap someone's name in the Discord widget's call list and you get their volume and a mute that applies to you alone — they carry on talking to everyone else exactly as before.
+
+  It is one row and no words: a speaker to silence them, a slider, the number. The name is not repeated — it is lit up in the list right above it.
+
+  Your own name is not one of them: Discord has no per-person setting for your own account, and your levels are the microphone and output rows just above.
+
+  Two things that look alike are drawn differently on purpose. Someone who muted their own microphone is dimmed, as before; someone *you* turned down or muted carries a mark of your own, so "they went quiet" and "I turned them down" never look like the same thing.
+
+  Xenon has been able to do this since 4.11 — but only for widget authors, through the SDK, so the only way to use it was to write a widget. Someone went looking for the setting and there wasn't one. Now there is.
+
+- **Widgets are told whether you read Celsius or Fahrenheit.** A widget that draws a temperature had no way to know which one you use, so one showing °C on a dashboard where the clock, the weather and the lock screen all say °F was wrong in a way its author could not see from their own machine. The setting is now handed to widgets at start and again the moment you change it, alongside the language.
+
+  The numbers themselves are unchanged and always Celsius, as they have always been — what a widget gets is which unit to show them in. Converting them on the way out would leave a widget unable to tell 30 °C from 30 °F, and would quietly change what every widget already installed is drawing.
+
+- **Video rows a widget reads now say which channel they came from.** They carried the channel's name but not its id, so a widget could print the name and not make it open anything. Tapping a channel name works again — and it is the channel that *uploaded* the video, not whoever made the playlist it was read from, which is the mistake the same data invites.
+
+- **A widget can ask for YouTube's own channel order.** The subscription list a widget reads was always alphabetical, so a widget offering "YouTube order" was showing A–Z under another name. It can now ask for YouTube's own ranking, or for channels with something unwatched first — and an order Xenon does not have is refused rather than quietly answered in the default one, which is what let the wrong label go unnoticed in the first place.
+
+- **A widget can play a song without throwing away the album it came from.** Reported by the widget author who moved his Spotify browser onto the SDK: tapping a track inside an album played that track and then stopped, with the rest of the album gone.
+
+  That was Spotify's own behaviour rather than a fault — asking for a single song *is* a queue of one song — but it is not what tapping a row in a list means. A widget can now say what the track came from, so the same tap means "play this album, starting here" and the rest follows, exactly as in Spotify's own apps. Sending it is always safe: anything Spotify cannot honour that way falls back to playing the song that was tapped, never a different one.
+
+- **The frame rate now agrees with your other overlays, including with frame generation on.** Reported by the author of a monitoring widget, with measurements: on one game with DLSS Frame Generation at x2, Xenon read about 220 frames a second while RTSS and the NVIDIA overlay both said about 155.
+
+  Nothing was broken — Xenon was answering a slightly different question. It counted how often the game *hands a frame over*, which with frame generation is no longer how often the screen actually changes. It now counts what reaches the display, which is what everyone means by their frame rate, and the number lines up with the overlays. In the same measurements it is the closer number even with frame generation switched off.
+
+  Widgets can also read both halves separately now — frames handed over and frames shown — because the gap between them is exactly what frame generation is doing, and a monitoring widget may want to show it.
+
+  Xenon also picks *which* program to read the frame rate from more carefully: the window you are actually looking at, when it is producing frames, rather than whichever program on the machine happens to be the busiest. A launcher, an overlay, or a second game left running in the background could win that contest before.
+
+- **Widgets can read YouTube, and put a real YouTube player inside themselves.** The author building a YouTube widget had to run a private server of his own alongside Xenon to get at either. Both are now part of the SDK, as two separate permissions.
+
+  **Reading** covers six things: the latest uploads from the channels you follow, the channels themselves, a search, a channel's videos, a channel's playlists, and what is in a playlist — with proper paging, so a widget can walk a large library instead of showing the first page and stopping. The widget names one of those and gets the answer; it never receives your YouTube login and cannot ask for anything else. YouTube gives an account a fixed budget of requests a day, shared with Xenon's own YouTube tile, so the answers are cached and a search — which costs a hundred times an ordinary read — is only made when something actually asks for one.
+
+  **The player** is the other half. A widget's own frame is sealed off from the network, which is what makes installing one safe, so it cannot embed YouTube itself: it asks Xenon to place a player inside its layout, and Xenon owns it. The widget says which video and where, then plays, pauses, mutes, seeks and moves it, and hears back what the player is doing. Only one exists on a dashboard at a time, so two videos can never talk over each other; it cannot be shrunk to a size nobody would see; and it goes away with the tile — a video does not keep playing for a widget that is no longer on screen.
+
+  **Two permissions, asked for separately.** Reading your subscriptions is not the same as playing a video inside a tile, and neither is the same as the existing "control your YouTube stream", which is about your own broadcast. A widget that has one still cannot do the others.
+
+- **Xenon now absorbs the Spotify bursts a widget makes.** From the same widget author, building a library browser: Spotify limits how much an account may ask for in a short window, and a widget that re-reads a page every time it redraws burns through that limit fast — a limit shared with Xenon's own Spotify tile, so the person's music stops and it looks like Xenon broke.
+
+  Repeated reads no longer reach Spotify. Two identical reads happening at the same time share one call, and a read repeated within a few seconds is answered from memory — so redrawing, reopening a tile, or having the same widget on two screens now costs nothing. It is deliberately a few seconds and a handful of pages, not a store: your library still visibly changes, and what is playing right now is never held for long.
+
+  When the limit is hit anyway, the answer now says how many milliseconds to wait, so a widget can wait exactly that long instead of guessing — guessing short is what keeps an account stuck. And starting playback from a widget clears what was remembered about playback, so the queue it reads straight after is the new one.
+
+- **A widget can browse your Spotify library without ever touching your account.** Widgets could already control playback — play, pause, skip — but not read anything, so anyone building a Spotify browser had to run a private server of their own alongside Xenon just to fetch a playlist. One did exactly that, and asked for the honest version instead.
+
+  Xenon now answers a fixed list of Spotify questions on a widget's behalf: what is playing, the queue, your playlists and devices, your saved albums and songs, what you played recently, the artists you follow, the contents of an album or playlist, and search. The widget names one of those and gets the answer. It never receives your Spotify login, cannot ask for anything not on the list, and can start a track, album, artist or playlist it found — nothing else.
+
+  **Reading is a separate permission from controlling.** "Control Spotify playback" is play, pause and skip; your listening history, saved music and followed artists are a different thing to hand over, so they are asked for on their own line and a widget that only controls playback still sees nothing. Two new Spotify permissions are requested at connection time for the history and followed artists; if you connected Spotify before this release, everything keeps working and only those two ask you to reconnect — and say so when they do.
+
+- **Widgets follow the language you pick, instead of the one you had when they loaded.** A widget writes its own text, and Xenon told it which language to use — once, when it appeared. Change the dashboard language afterwards and every widget on screen stayed in the old one until something reloaded it, sitting next to a dashboard that had already switched. Now they are told, the same way they are already told when you change the theme.
+
+  Noticed while a widget author was showing a tile he had written in French: a German user would have had a French tile on a German dashboard, with nothing to explain why.
+
+- **A widget can start a game you own.** A Steam tile that shows what you played last and launches one when you tap it needed a permission that did not exist: Xenon could already start a game by its Steam id, but only from a Deck key, never from a widget. Now it is a permission like any other, listed as "Launch a Steam game" and off until you approve it.
+
+  It is its own permission rather than a wider version of "open web links", which is the point: those two look similar and are not. A widget that may open a link should not silently gain the ability to start programs, least of all one you already approved for links months ago. A widget names a game id — digits, nothing else — and never a command.
+
+- **Widgets can keep artwork instead of downloading it again every time.** A widget showing album covers, game art or video thumbnails had nowhere to put them: the only store it has caps a single value at 16 KB and the whole thing at 256 KB, and an image encoded as text is bigger still. So every cover was fetched again on every redraw, over a bridge built for small messages. Asked for by someone building exactly those widgets, who had already written this for himself and told us where his own version fell short.
+
+  Pictures now come down a route Xenon already had for map tiles, which hands them to the widget as an ordinary image instead of squeezing them through that bridge, and the ones worth keeping are written to disk so they survive a restart. Nothing about what a widget may reach changed: the address still has to be one the widget declared and you approved, and the same protections apply.
+
+  **The part that took the work is the forgetting.** A cache that only ever grows is a slow leak, and left alone this one would have been a big one: every album played and every game in a library is another file. So there is a ceiling per widget and a ceiling for all of them together, whatever is thrown away is really deleted rather than merely forgotten, an hourly pass removes anything left behind by an interrupted write, what goes first is what you have looked at least recently, and uninstalling a widget takes its pictures with it. A cover is also re-checked after a week, because an image can quietly change behind an address that stays the same.
 
 ## [v4.11.7] - 05-09-2026
 ### ✨ Added
@@ -530,6 +837,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **You can send photos and files straight from your phone to this PC, and back.** Getting a photo off your phone has meant sending it to yourself in a messaging app, opening that app's website on the PC, and downloading it again. Now, once your phone is paired, open Xenon on it, tap **Foto e video** or **Altri file**, pick what you want, and the files land in `Download/Xenon` on your PC with their own names. It works the other way too: drag a file onto the tile from Explorer or Finder, and download it from your phone. Everything goes over your own network, never through anyone's server. The folder they land in is yours to change, in Settings → **Telefono**, and only from the PC. If a name is already taken Xenon adds a number and never replaces a file you already had. Photos are not re-encoded and not resized, so what arrives is what you took. A new **Trasferimento file** tile shows what has come and gone; on a phone there is also a button in the bottom bar, so you do not have to put the tile on your layout to use it. Two things worth knowing, and Xenon says both where you would otherwise find out the hard way: on an iPhone you have to open Xenon to send something, because iOS does not let any website appear in its Share button, and a file you download on an iPhone goes to the Files app rather than the camera roll. One file goes at a time, and if you close Xenon in the middle of a large video, that video starts over.
 - **Xenon now asks which screen you want it on, the first time it opens.** Until now it never asked, and the answer it gave itself was invisible: with a Xeneon Edge attached it took the Edge, and without one it opened a window on your main monitor. The only way to change that was a submenu in the tray icon that almost nobody finds — and which was greyed out entirely if you owned an Edge. Now a short screen appears once, listing the displays it can actually see, with the Edge already selected if you have one. Pick a different screen and it stays there: your choice wins over the Edge, which it could not before. Pick **my phone or tablet** and, from the next start onwards, this PC shows nothing at all — no window, no icon, and at login only the background service starts, which is what serves the dashboard to your phone. It does not vanish the moment you choose: the window you are looking at is the one carrying the pairing QR code, so it stays until you are done, and it only takes effect once a phone is actually paired. Choosing it takes you straight to the pairing panel and turns nothing on by itself; that switch stays yours. There is a **Decide later** if you would rather not think about it, and it never asks twice. Everything is in Settings → **Schermo** afterwards, in all 11 languages, with the same list of displays and a full-screen switch. And if the screen you chose is unplugged, the window stays hidden instead of reappearing somewhere you never asked for; it comes back on its own when you plug it in, and Settings says so rather than leaving you wondering where Xenon went.
 - **A widget does not have to be a rectangle any more.** Every tile on the dashboard has been a rounded rectangle since the first version, which is fine for a system monitor and quietly limiting for everything else: a clock, a pet, a hero stat, a piece of art. Open a tile's 🎨 style editor and there is now a **Shape** picker in the new Effects tab, with eleven silhouettes to choose from: squircle, circle, hexagon, diamond, cut corner, slant, ticket, arch, shield, wave and blob. The tile keeps its place in the grid, so nothing moves around it. The border follows the outline instead of the old rectangle, and Xenon works out how far the content has to stay from the cut edges and applies that margin itself, so a hexagon does not eat the end of every line of text. **You can also write your own shape**: paste any closed SVG path drawn in a 0 to 1 square and the tile takes it. If the path cannot be used, the editor says why instead of quietly doing nothing. A shape is saved with your layout, travels in a shared page or preset code, and works on the Xeneon Edge, in the app, in a browser and on a paired phone.
+- **A widget can turn one person in a voice call up or down.** Discord lets you set the volume of a single person, per person, and mute them just for you — the two controls you reach for when one friend is twice as loud as everyone else. Both are now available to widgets, alongside the list of who is in your channel with the volume and local-mute state of each, so a widget can show a row per person with a slider that does the real thing. It is part of the existing "Control Discord voice" permission and needs Discord running. Documented for creators in the Widget SDK.
+
 - **And a widget you install can arrive with its own shape.** A creator can declare the silhouette of their own tile in the widget's manifest (`"shape": { "preset": "hexagon" }`, or their own path), so a widget designed as a circle looks like a circle the moment it is installed rather than needing you to go and set it. This is not a permission and there is nothing to approve: a shape only ever affects that widget's own tile, it cannot touch anything else on your dashboard, and if you pick a shape for that tile yourself, yours wins. Widgets are told the shape they are in so they can lay themselves out around it. It is documented for creators in the Widget SDK, along with the eleven presets and the rules for a custom path.
 - **Three of the per-tile effects were doing nothing at all, and now do what they say.** In the tile style editor, **Glass blur** and **Glass saturation** were writing settings that no part of a dashboard tile ever read, so moving those sliders changed nothing on any theme. Blur is now real: the tile blurs what is behind it, which on a photo background is the difference between a card and a pane of glass. It is only applied to tiles that ask for it, because blurring every tile costs graphics work on a screen that is on all day. Blur is also only visible through a panel you can see through, so the editor now says that on the spot instead of leaving you with a slider that appears broken. **Panel shadow** was the same story twice over: the value went into a setting nothing consumed, and the shadow was being cut off by the grid anyway, which is why no tile in any version of Xenon has had one. Tiles cast a shadow now, the slider controls it, and the global theme's shadow control finally does something too. Short screens like the Xeneon Edge still have no shadow by default, and a tile that asks for one gets it.
 - **A tile can be completely transparent now.** Panel opacity stopped just short of zero and, even there, kept a faint light wash and a lit top edge, so a "transparent" card was still a pale sheet over your wallpaper. The slider goes to zero and at zero the panel is genuinely gone: only the widget's own content over your background. The border and the shadow are separate controls, so an outline with nothing inside it is still something you can build on purpose.

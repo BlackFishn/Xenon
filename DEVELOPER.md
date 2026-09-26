@@ -79,11 +79,11 @@ service/                Retired Windows-service host, kept for migration (see be
 
 ### Backend startup (`service/` is retired)
 
-The backend runs **in the user's interactive session**, started by a per-logon Task Scheduler task registered by `install.ps1` (`wscript start-hidden.vbs` → `node server/server.js`, hidden). An early v4 beta ran it as a WinSW **Windows service** instead; that is retired: a service lives in session 0, isolated from the interactive desktop, which silently broke Deck app/site launching, SMTC media, hotkeys, window actions, screen capture and TTS audio. `install.ps1` now removes a leftover `XenonEdgeService` before registering the task; `service/` keeps only the uninstall script (used by that migration and by `uninstall.ps1`) — see `service/README.md`. There is still **no** single-exe compile (SEA/pkg break native addons + `__dirname` asset resolution).
+The backend runs **in the user's interactive session**, started by a per-logon Task Scheduler task registered by `install.ps1` (`wscript start-hidden.vbs` → `node server/server.js`, hidden). The launcher looks nothing up on `PATH`: `install.ps1` records the `node.exe` it verified in `%LOCALAPPDATA%\Xenon\node-path.txt` and `start-hidden.vbs` starts that one, falling back to the usual install folders and then to a `PATH` scan it walks itself, and writing into `%LOCALAPPDATA%\Xenon\server.log` when there is no `node.exe` at all — the logon task's environment is not the installer's, and a start that fails there has no console to fail in. An early v4 beta ran it as a WinSW **Windows service** instead; that is retired: a service lives in session 0, isolated from the interactive desktop, which silently broke Deck app/site launching, SMTC media, hotkeys, window actions, screen capture and TTS audio. `install.ps1` now removes a leftover `XenonEdgeService` before registering the task; `service/` keeps only the uninstall script (used by that migration and by `uninstall.ps1`) — see `service/README.md`. There is still **no** single-exe compile (SEA/pkg break native addons + `__dirname` asset resolution).
 
 ### Native app (`apps/native/`)
 
-A **Tauri 2** kiosk shell (Rust in `src-tauri/`). The only bundled page is `splash/index.html`, which waits for the backend then navigates the same webview to the loopback dashboard — so it renders the identical UI and keeps SSE/WebSocket open (presence features behave like an open tab). `src-tauri/src/monitor.rs` pins the borderless full-screen window to the Xeneon Edge (matched by its 2560×720 panel) with a watchdog for display reorders/replug/standby; `tray.rs` adds the tray icon (show/hide/restart/exit, plus **Open crash log**); `crash_log.rs` is why that item exists — a console-less stripped binary that dies leaves nothing behind, so a panic hook records thread/message/`file:line` next to `display.json` and brackets it with a line per launch and per deliberate stop, and the release profile unwinds so a panic in a polling thread is caught, logged and restarted instead of ending the process; the autostart plugin sets login autostart. Built with `npm run native:build` (NSIS installer, WebView2 ensured). Requires the Rust toolchain; icons must exist in `src-tauri/icons/` before the first build.
+A **Tauri 2** kiosk shell (Rust in `src-tauri/`). The only bundled page is `splash/index.html`, which waits for the backend then navigates the same webview to the loopback dashboard — so it renders the identical UI and keeps SSE/WebSocket open (presence features behave like an open tab). `src-tauri/src/monitor.rs` pins the borderless full-screen window to the Xeneon Edge (matched by its 2560×720 panel) with a watchdog for display reorders/replug/standby; `tray.rs` adds the tray icon (show/hide/restart/exit, plus **Open crash log**); `crash_log.rs` is why that item exists — a console-less stripped binary that dies leaves nothing behind, so a panic hook records thread/message/`file:line` next to `display.json` and brackets it with a line per launch and per deliberate stop, and the release profile unwinds so a panic in a polling thread is caught, logged and restarted instead of ending the process; the autostart plugin sets login autostart. Built with `npm run native:build` (NSIS installer, WebView2 ensured). Requires the Rust toolchain; icons must exist in `src-tauri/icons/` before the first build. `src-tauri/src/webview_guard.rs` (Linux) hears WebKit's `web-process-terminated` and reloads the page instead of leaving the white window a dead render process produces, writing the reason into the crash diary first and capping the retries so a crash loop is not reloaded forever.
 
 **Linux/macOS bundles** come from `npm run build:linux` / `npm run build:mac` inside `apps/native/`; Tauri merges `tauri.linux.conf.json` (`appimage`, `deb`, `rpm`) or `tauri.macos.conf.json` automatically. On Fedora the build needs `rust cargo gcc gcc-c++ webkit2gtk4.1-devel openssl-devel librsvg2-devel libappindicator-gtk3-devel patchelf`, plus `fuse-libs` to *run* the AppImage; Debian/Ubuntu equivalents are in the Tauri prerequisites. `patchelf` is not optional once the media framework is bundled — the GStreamer plugin exits 2 without it, and it reports that by printing its usage text, which reads like a bad argument rather than a missing tool. Fedora also needs the plugin directories named explicitly, because the plugin guesses the Debian multiarch layout: `GSTREAMER_PLUGINS_DIR=/usr/lib64/gstreamer-1.0 GSTREAMER_HELPERS_DIR=/usr/libexec/gstreamer-1.0 npm run build:linux`.
 
@@ -252,6 +252,30 @@ All endpoints are served from `127.0.0.1:3030`. The server validates the `Host`/
 | `PATCH` | `/api/timers/:id` | `{ action: "pause" \| "resume" \| "reset" }`. |
 | `DELETE` | `/api/timers/:id` | Delete. |
 
+### Deck script states
+
+A named value any local script can set, so a Deck key can mirror something Xenon
+has no integration for. Bind a key to the `scriptState` source (Deck key editor →
+*Reflect a script state*) with that name, give it a second face under **Effects →
+Look while active** (icon, label and colour — the icon can be a built-in one, a
+picture or an emoji), and the key follows the script. `POST /state/set` is on the CSRF-sensitive list: a page
+or a sandboxed widget iframe cannot reach it, a local shell can.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/state/set` | `{ name, value }` set a named state (max 64 names, 200 chars per value; name `[A-Za-z0-9][A-Za-z0-9_.-]{0,63}`). Omit `value` or send `null` to clear it. |
+| `GET`  | `/state/get` | Read back every state currently set. |
+
+```bash
+curl -X POST 127.0.0.1:3030/state/set \
+     -H 'Content-Type: application/json' \
+     -d '{"name":"audio-out","value":"speakers"}'
+```
+
+Every change broadcasts the `script_states` SSE event (and the current map is
+seeded on connect), so the dashboard deck and the Virtual Deck popup repaint
+together.
+
 ### Xenon AI
 
 | Method | Endpoint | Purpose |
@@ -307,7 +331,7 @@ Both upgrade on the same server and are rejected unless the request passes the l
 
 ### SSE events
 
-`GET /sse` pushes named events: `status`, `media`, `system`, `audio`, `wake_word`, `timer_update`, `timer_done`, `stop_session`, plus integration streams such as `homeassistant`, `streamerbot_event`, and notification events for the Notifications tile. Do not remove or rename `/sse` without updating `main.js` and the broadcast timers at the end of `server.js`.
+`GET /sse` pushes named events: `status`, `media`, `system`, `audio`, `wake_word`, `timer_update`, `timer_done`, `stop_session`, `script_states`, plus integration streams such as `homeassistant`, `streamerbot_event`, and notification events for the Notifications tile. Do not remove or rename `/sse` without updating `main.js` and the broadcast timers at the end of `server.js`.
 
 ---
 
@@ -414,13 +438,55 @@ The last two are the dropper fingerprint and were the only ones worth paying for
 
 **Every release, until a certificate lands:** after the assets are staged, submit `Xenon-Setup-x64.exe`, `xenon-native.exe` and `xenon-helper.exe` to [microsoft.com/wdsi/filesubmission](https://www.microsoft.com/en-us/wdsi/filesubmission) as *Software developer → Incorrectly detected as malware*. Turnaround is usually 1–3 days. Skipping it means users hit the block before Microsoft ever hears about it.
 
-**The actual fix** is an Authenticode certificate, which also clears SmartScreen and makes the reputation cumulative instead of per-release:
+**The actual fix** is an Authenticode certificate. It does *not* clear SmartScreen on day one — nothing does any more, and that is the first thing to unlearn here — but it makes the reputation **cumulative across releases** instead of resetting with every new file hash.
 
-- **[Azure Trusted Signing](https://learn.microsoft.com/azure/trusted-signing/)** (~$10/month) — the realistic option for a solo maintainer: Microsoft-operated, available to *individual* developers (identity validation requires a few years of verifiable history), no HSM token to buy, and an official GitHub Action.
-- **Certum Open Source Code Signing** (~€30/year) — cheapest, and this repo qualifies, but it is OV: it does not clear SmartScreen on day one, it only starts accumulating reputation.
-- **EV certificate** (SSL.com, DigiCert, Sectigo; €350–600/year) — clears SmartScreen immediately, but normally requires a registered legal entity.
+**What changed, and why the obvious answers are wrong (verified September 2026):**
 
-Wiring, when it happens: `bundle.windows.signCommand` in `tauri.conf.json` covers both `xenon-native.exe` and the NSIS setup; `xenon-helper.exe` needs its own signing step; and `windows/xenon-bootstrap.ps1` should be signed too so `run_backend_bootstrap()` can finally drop `-ExecutionPolicy Bypass`. Add the steps to **both** the `native`/`helper` jobs in `release.yml` **and** their copies in `native-app.yml`/`helper.yml` — those are duplicated on purpose.
+- **EV certificates no longer buy instant trust.** Microsoft stopped granting EV-signed files automatic SmartScreen reputation in 2024, removed the EV code-signing OIDs from its Trusted Root Program requirements, and its developer documentation now states plainly that the behaviour no longer exists. An EV certificate at €350–600/year buys nothing an OV one does not. It is off the table.
+- **[Azure Artifact Signing](https://azure.microsoft.com/products/artifact-signing)** (formerly Trusted Signing, ~$10/month) would be ideal, and is not available: **individual developer onboarding has been paused since April 2025**, and new subscriptions are limited to organisations with several years of verifiable history in a short list of countries. Re-check its eligibility page before assuming otherwise; if it ever reopens to individuals it is the better option.
+- **[Certum Open Source Code Signing](https://certum.store/open-source-code-signing-code.html)** (~€30/year plus SimplySign cloud, or a card + reader) is therefore **the plan**: individual holder, open-source non-commercial project, OV. Confirm with Certum's support *before* buying that this repo's custom non-commercial licence qualifies — it is source-available but not OSI-approved, which is also why [SignPath Foundation](https://signpath.org/) (free, and better) does **not** accept it without relicensing.
+- **[SignPath Foundation](https://signpath.org/)** signs open-source projects for free on its own HSM, but requires a recognised open-source licence. Relicensing is a product decision, not a build one.
+- Since **27 February 2026** a code-signing certificate is valid for at most **459 days**, so multi-year purchases mean re-issues, not one certificate.
+
+**One caveat that outlives the certificate:** a valid signature does not switch off Defender's behavioural and ML classifiers. The install shape above is still what it is, and the discipline that fixed it — no hook spawning PowerShell, no detached download, a console the user can see — is not something a certificate buys back the right to undo.
+
+### How the signing is wired (present, and inert without a certificate)
+
+Everything is opt-in on a **single repository secret, `WINDOWS_SIGN_THUMBPRINT`** — the SHA-1 thumbprint of the certificate in the signing machine's store. Unset, which is the state of this repo until the certificate lands, means every piece below turns itself off and the build is byte-for-byte the unsigned build that shipped before.
+
+| Piece | What it does |
+| --- | --- |
+| `tools/sign-windows.ps1` | Signs one file. `signtool` for binaries, `Set-AuthenticodeSignature` for `.ps1`, RFC 3161 timestamp (default `time.certum.pl`, override with `XENON_SIGN_TIMESTAMP_URL`), three attempts against a flaky timestamp server, then `signtool verify /pa`. It **fails loudly**: it is only ever called when signing was requested. |
+| `tools/sign-windows.sh` | The same job from Linux or macOS, where `signtool` does not exist: `osslsigncode` driving the same cloud key through the SimplySign PKCS#11 module. A SimplySign session must be open, or the module loads and reports no key. For signing by hand off a CI build; the workflows use the PowerShell one. |
+| `apps/native/src-tauri/windows/sign.conf.json` | A **template** for the Tauri config overlay carrying `bundle.windows.signCommand` and nothing else. It is **not** in `tauri.conf.json` on purpose: passed on the command line (`tauri build --config …`) only when there is a certificate, it cannot affect a build that has none. The `__XENON_SIGN_SCRIPT__` placeholder is filled with the absolute script path by the workflow, because Tauri substitutes `%1` **only in an argument that is exactly `%1`** — measured: `"inside-%1-string"` arrives verbatim — so the script is invoked with `-File <abs path> -Path %1`, and the path is only known on the machine building. |
+| `native` job (`release.yml`, `native-app.yml`) | Runs on the **signing machine** (`runs-on: [self-hosted, windows, xenon-signing]`, see below). Asserts the certificate is in `Cert:\CurrentUser\My` with a private key before compiling anything, fills the overlay, signs `windows/xenon-bootstrap.ps1` **before** the build (it is bundled as a resource, so signing it afterwards signs a copy nobody runs), builds with the overlay, then unpacks the installer with 7-Zip and asserts that the setup, the `xenon-native.exe` inside it and the bootstrap script are all validly signed. |
+| `helper` job (`release.yml`, `helper.yml`) | Same runner. Signs `xenon-helper.exe`, which never passes through Tauri. |
+
+Tauri invokes the sign command **once per file it packs** — measured on a real build: `xenon-native.exe`, the five NSIS plugin DLLs, the uninstaller stub and the setup, eight signatures — so the exe inside the installer is covered. That matters: signing the setup alone would leave it unsigned, and it is the one antivirus quarantines mid-session. Two things the log will mislead you about: `target/release/xenon-native.exe` reads **NotSigned** after a signed build, because Tauri signs the copy it packs and restores the unsigned original on disk (which is why the verify step unpacks the installer instead of trusting that file); and the "Signing …" line for the bootstrap `.ps1` never appears, because that file is a resource, not a binary, and is signed by the dedicated step before the build.
+
+**Why a self-hosted runner, and why it is started by hand.** The private key is in Certum's HSM and the certificate reaches Windows only through the SimplySign virtual card, which exists in the interactive session that logged in with the phone OTP — it cannot be exported into a GitHub secret. So the two Windows jobs run on the maintainer's PC, registered as a self-hosted runner with the `xenon-signing` label and **started with `run.cmd` in that session, never installed as a service**: a service runs in session 0 and sees no card. The `WINDOWS_SIGN_THUMBPRINT` secret names the certificate; on a runner whose store lacks it the jobs fail on purpose, before any compile, rather than build unsigned. 7-Zip must be installed on that machine for the inner-exe check (absent, the step warns and skips it). To release unsigned from a hosted runner, put `windows-latest` back in the four `runs-on` lines **and** unset the secret.
+
+**Still unverified until the first signed release ships:** that the **in-app updater applies an update** — the minisign `.sig` must be produced *after* Authenticode signing, or the updater will reject a download whose bytes changed under it. The local rehearsal could not cover it, since the updater key exists only as a GitHub secret. Test it on a throwaway tag before the real one.
+
+**Signing a release by hand, from Linux or macOS** (the fallback when the Windows signing machine is not available; it reaches two of the three binaries and breaks the updater's minisign signature, so it is a fallback, not a plan). Open a SimplySign session first — the virtual card only exists while SimplySign Desktop is logged in — then, once per machine:
+
+```sh
+# the chain, built once: the leaf from Certum's "Download PEM", plus the CA it
+# names in its own CA Issuers URL. The echo matters; see tools/sign-windows.sh.
+curl -sL -o ca.cer "$(openssl x509 -in leaf.pem -noout -text |
+  sed -n 's/.*CA Issuers - URI://p')"
+openssl x509 -inform DER -in ca.cer -out ca.pem
+{ cat leaf.pem; echo; cat ca.pem; } > ~/xenon-codesign-chain.pem
+export XENON_SIGN_CERT_PEM=~/xenon-codesign-chain.pem
+```
+
+Then per release: download `Xenon-Setup-x64.exe` and `xenon-helper.exe` from the draft, `./tools/sign-windows.sh` both, and re-upload them **before** the `publish` job hashes the assets — `SHA256SUMS` is computed over what ships, and signing changes the bytes.
+
+This reaches two of the three binaries. `xenon-native.exe` lives inside the NSIS payload and can only be signed during bundling, which is what the `native` job's `signCommand` does on Windows. Until then a release is signed where users download it and unsigned where antivirus catches it mid-session.
+
+**Still to do once a signed release has actually shipped:** drop `-ExecutionPolicy Bypass` from `run_backend_bootstrap()` in `lib.rs`. Not before — the default execution policy on Windows client SKUs refuses an unsigned script, so dropping the flag while the bundled `.ps1` is unsigned breaks the install for everyone. Sign first, ship, verify, then remove the flag.
+
+Because `native-app.yml` and `helper.yml` are deliberate copies of the `native`/`helper` jobs, a change to either copy belongs in both.
 
 ---
 

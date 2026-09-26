@@ -250,6 +250,9 @@ if (need.audio) startVisibleAudioRefresh();
           mediaPlaying: !!(d && d.active && d.playbackStatus === 'Playing'),
           mediaSource: (d && d.app) || '',
         });
+        // The waveform runs only while something is actually playing — paused
+        // music is a still strip, not a dancing one.
+        if (window.MediaViz) window.MediaViz.setPlaying(!!(d && d.active && d.playbackStatus === 'Playing'));
         // Relay to sandboxed SDK widgets (the bridge forwards only granted streams).
         if (window.CustomWidget) window.CustomWidget.onData('media', d);
       } catch {}
@@ -312,6 +315,9 @@ if (need.audio) startVisibleAudioRefresh();
             ? { peaks: {}, problem: d.problem, minVersion: d.minVersion || '' }
             : ((d && d.peaks) || {}));
         }
+        // ...and the Media tile's waveform, which is the first FIRST-PARTY
+        // consumer of this stream (it used to run only for granted SDK widgets).
+        if (window.MediaViz) window.MediaViz.onLevels(d);
       } catch {}
     });
     es.addEventListener('discord', e => {
@@ -341,6 +347,19 @@ if (need.audio) startVisibleAudioRefresh();
       // Live Home Assistant state (event-driven, not polled) → the Smart Home
       // tile and the Energy widget (its `energy` selection rides the same event).
       try { const d = JSON.parse(e.data); if (window.SmartHome) window.SmartHome.onSSE(d); if (window.PowerWidget) window.PowerWidget.onHaSSE(d); if (window.CustomWidget) window.CustomWidget.onData('homeassistant', d); } catch {}
+    });
+    es.addEventListener('script_states', e => {
+      // States any local script set over POST /state/set — a Deck key bound to
+      // 'scriptState' (and its second face) follows them. Seeded on connect, so
+      // a surface that opens after the script ran still draws the right face.
+      try {
+        const d = JSON.parse(e.data);
+        if (window.Deck) window.Deck.refreshStates({ scriptStates: (d && d.states) || {} });
+        // ...and to sandboxed SDK widgets granted the `scriptStates` stream, so a
+        // widget can react to a state a script set (read-only: a widget publishes
+        // its OWN states with deck.states instead).
+        if (window.CustomWidget) window.CustomWidget.onData('scriptStates', d);
+      } catch {}
     });
     es.addEventListener('ha_states', e => {
       // Live states for the HA entities Deck keys are bound to (the server

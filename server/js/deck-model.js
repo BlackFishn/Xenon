@@ -235,8 +235,8 @@ function normalizeKey(raw, cols, rows) {
     // changes glyph/label/colour per state). Same caps/validation as the base face.
     if (raw.stateStyle && typeof raw.stateStyle === 'object') {
       const ss = {};
-      const ssIconValue = clampStr(raw.stateStyle.icon, ICON_MAX.emoji);
-      if (ssIconValue) ss.icon = ssIconValue;                 // emoji/short glyph only
+      const ssIcon = normalizeStateIcon(raw.stateStyle.icon);
+      if (ssIcon) ss.icon = ssIcon;
       const ssLabel = clampStr(raw.stateStyle.label, 40);
       if (ssLabel) ss.label = ssLabel;
       const ssColor = cleanHex(raw.stateStyle.color);
@@ -279,6 +279,40 @@ function normalizeIcon(raw) {
   // Image fit: how the picture sits in the cap — 'cover' (full-bleed, default),
   // 'contain' (whole image with padding), or 'small' (compact centred icon).
   if (type === 'image') icon.fit = ICON_FITS.includes(raw && raw.fit) ? raw.fit : 'cover';
+  return icon;
+}
+
+// The active face's icon, which is now an icon like any other — a built-in
+// vector, an uploaded image, or an emoji — rather than emoji only.
+//
+// It shipped as a bare string capped at ICON_MAX.emoji, which is what "a deck key
+// can carry two faces" meant in practice: an emoji, a label and a colour. Someone
+// who asked for two ICONS on one key, was told to set "the second icon" and went
+// looking for the picker found a text box that takes 🔴. So it takes what the base
+// face takes, through the same normalizeIcon and therefore the same validation —
+// an image value still has to be a self-contained data:/blob:/https: reference,
+// and anything else is dropped rather than rendered.
+//
+// A stored string keeps working and is read as the emoji it always was: these live
+// in every saved profile and in every shared profile code, so an upgrade must not
+// blank a key someone already set. Returning null for "nothing set" keeps the
+// caller's `if (ssIcon)` test honest — normalizeIcon answers with a shaped object
+// even for an empty value, which would otherwise persist an icon nobody chose.
+function normalizeStateIcon(raw) {
+  if (typeof raw === 'string') {
+    const value = clampStr(raw, ICON_MAX.emoji);
+    return value ? { type: 'emoji', value } : null;
+  }
+  if (!raw || typeof raw !== 'object') return null;
+  const icon = normalizeIcon(raw);
+  if (!icon.value) return null;
+  // An uploaded picture on the ACTIVE face is always the compact centred kind.
+  // The other two fits turn the whole cap into the picture, which means adding a
+  // full-bleed layer and a label scrim to the key and taking them away again on
+  // every flip — a layout change twice a second on a key bound to a busy state,
+  // where what was asked for is a glyph that swaps. Stored as 'small' rather than
+  // quietly ignored at render time, so the saved key says what it will do.
+  if (icon.type === 'image') icon.fit = 'small';
   return icon;
 }
 
@@ -725,6 +759,30 @@ function getProfile(config, profileId) {
 // profiles are never reshaped: installing a big catalog profile used to reflow
 // every other profile's composition, and that coupling is exactly what per-profile
 // grids remove. New normalized config.
+// A profile name that no profile in `profiles` is already using.
+//
+// A copy keeps the name the user recognises it by — right up until a second copy
+// of the same source lands and the switcher is two rows that read identically.
+// Reported with five of them: "I have duplicate Nocturne Control entries (the one
+// with the green bullet is the current one)". There is no way to tell those apart
+// by looking, so from the second one on the copy is numbered, the way a file
+// manager numbers a second download. The first copy is never touched: renaming
+// something that isn't ambiguous yet would be the more annoying bug.
+function uniqueProfileName(profiles, name) {
+  const taken = new Set((profiles || []).map(p => String((p && p.name) || '').toLowerCase()));
+  const base = clampStr(name, 40);
+  if (!base || !taken.has(base.toLowerCase())) return base;
+  for (let n = 2; n <= 99; n++) {
+    const suffix = ' ' + n;
+    // Trim the stem, not the number: "Nocturne Control 2" must stay ≤ the 40 a
+    // name is clamped to, and truncating the suffix away would loop forever.
+    const stem = base.length + suffix.length > 40 ? base.slice(0, 40 - suffix.length).trimEnd() : base;
+    const candidate = stem + suffix;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+  return base;   // 99 namesakes: give up rather than spin
+}
+
 function addProfileFromTemplate(config, profileTemplate) {
   const cfg = cloneConfig(normalizeDeckConfig(config));
   const active = profileOf(cfg, cfg.activeProfile);
@@ -735,6 +793,7 @@ function addProfileFromTemplate(config, profileTemplate) {
   // shared { preserve } core — it grows back as needed to hold every key.
   const prof = normalizeProfile(Object.assign({}, tpl, { id, cols: DECK_MAX, rows: DECK_MAX }), DECK_MAX, DECK_MAX, cfg.profiles.length);
   reshapeProfileInPlace(prof, profileDim(tpl.cols, active.cols), profileDim(tpl.rows, active.rows), { preserve: true });
+  prof.name = uniqueProfileName(cfg.profiles, prof.name);
   cfg.profiles.push(prof);
   cfg.activeProfile = prof.id;
   return normalizeDeckConfig(cfg);
@@ -904,7 +963,7 @@ function applyStyleToPage(config, nav, style) {
 // Live state sources a key can bind to. Booleans (mic/speaker/obsRecording/
 // obsStreaming) read a flag from the snapshot; parameterised ones compare a
 // stored value (obsScene→scene, obsInputMuted→input) against the snapshot.
-const DECK_STATE_SOURCES = ['micMuted', 'speakerMuted', 'obsRecording', 'obsStreaming', 'obsScene', 'obsInputMuted', 'remoteConnected', 'remoteActive', 'sbGlobal', 'sdkState', 'discordMuted', 'discordDeafened', 'mediaPlaying', 'spotifyPlaying', 'haEntity', 'timerRunning'];
+const DECK_STATE_SOURCES = ['micMuted', 'speakerMuted', 'obsRecording', 'obsStreaming', 'obsScene', 'obsInputMuted', 'remoteConnected', 'remoteActive', 'sbGlobal', 'sdkState', 'scriptState', 'discordMuted', 'discordDeafened', 'mediaPlaying', 'spotifyPlaying', 'haEntity', 'timerRunning'];
 
 // HA state strings that read as "on" for an entity binding without an explicit
 // value to match — covers switches/lights, covers, media, presence, locks,
@@ -1092,6 +1151,9 @@ function evaluateKeyState(state, snapshot) {
     // On while the value is truthy, or (when a value is given) exactly equals it.
     case 'sbGlobal':  return matchNamedState(state, snapshot.sbGlobals);
     case 'sdkState':  return matchNamedState(state, snapshot.sdkStates);
+    // A state any local script set over POST /state/set — same named-value rule,
+    // so a shell/AppleScript can drive a key's second face without an SDK widget.
+    case 'scriptState': return matchNamedState(state, snapshot.scriptStates);
     case 'discordMuted':    return !!snapshot.discordMuted;
     case 'discordDeafened': return !!snapshot.discordDeafened;
     case 'mediaPlaying':    return !!snapshot.mediaPlaying;
@@ -1116,7 +1178,7 @@ function evaluateKeyState(state, snapshot) {
   }
 }
 
-const DECK_MODEL_API = { normalizeDeckConfig, normalizeDeckWellImage, normalizeDeckMediaStyle, normalizeDeckLook, effectiveDeckLook, setProfileLook, resolveView, setKeyAt, addPageAt, removePageAt, newKeyId, newProfileId, setActiveProfile, addProfile, renameProfile, removeProfile, getProfile, addProfileFromTemplate, cloneConfig, evaluateKeyState, gridForSize, gridOf, reshapeDeckConfig, fitDeckGrids, foldDeckGrids, swapKeysAt, canMoveKeyToPage, moveKeyToPage, keyStyleOf, applyStyleToPage, KEY_STYLE_FIELDS, KEY_SIZES, KEY_GAPS, DECK_STATE_SOURCES, DECK_LIVE_SOURCES, DECK_SENSOR_METRICS, SLIDER_TARGETS, formatLiveValue, timersByLabel, sensorsFromSystem, batteriesByName, DECK_MIN, DECK_MAX, PRESS_FX, ICON_FITS, GRAD_DIRS, LABEL_POSITIONS, STYLE_SIZES, KEY_ANIMS, CAP_STYLES, KEY_SHAPES, PLATE_STYLES };
+const DECK_MODEL_API = { uniqueProfileName, normalizeStateIcon, normalizeDeckConfig, normalizeDeckWellImage, normalizeDeckMediaStyle, normalizeDeckLook, effectiveDeckLook, setProfileLook, resolveView, setKeyAt, addPageAt, removePageAt, newKeyId, newProfileId, setActiveProfile, addProfile, renameProfile, removeProfile, getProfile, addProfileFromTemplate, cloneConfig, evaluateKeyState, gridForSize, gridOf, reshapeDeckConfig, fitDeckGrids, foldDeckGrids, swapKeysAt, canMoveKeyToPage, moveKeyToPage, keyStyleOf, applyStyleToPage, KEY_STYLE_FIELDS, KEY_SIZES, KEY_GAPS, DECK_STATE_SOURCES, DECK_LIVE_SOURCES, DECK_SENSOR_METRICS, SLIDER_TARGETS, formatLiveValue, timersByLabel, sensorsFromSystem, batteriesByName, DECK_MIN, DECK_MAX, PRESS_FX, ICON_FITS, GRAD_DIRS, LABEL_POSITIONS, STYLE_SIZES, KEY_ANIMS, CAP_STYLES, KEY_SHAPES, PLATE_STYLES };
 if (typeof window !== 'undefined') {
   window.DeckModel = DECK_MODEL_API;
 }
