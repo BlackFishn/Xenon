@@ -44,14 +44,35 @@
 .sp-notice-ico { display: inline-flex; color: #1ed760; }
 .sp-notice-ico svg { width: 18px; height: 18px; }
 
-/* Keep the surface neutral when the song changes; artwork belongs in its cover. */
+/* Album color stays inside Playing; the library keeps the dashboard surface. */
 .sp-content { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 .sp-now {
+  position: relative; isolation: isolate;
   flex: 0 0 auto; min-width: 0; overflow: hidden; display: grid;
   grid-template-columns: 64px minmax(0, 1fr);
-  grid-template-areas: "art info" "transport transport" "seek seek" "volume volume";
+  grid-template-areas: "art info" "seek seek" "transport transport" "volume volume";
   align-items: center; gap: 8px 12px; padding: 12px;
   border-radius: 10px; border: 1px solid var(--line); background: var(--card-surface, var(--panel-soft));
+}
+.sp-now.has-artwork { background: var(--bg); }
+.sp-now.has-artwork::before, .sp-now.has-artwork::after {
+  content: ''; position: absolute; pointer-events: none;
+}
+.sp-now.has-artwork::before {
+  inset: -42px; z-index: -2; background: var(--sp-artwork) center 38% / cover no-repeat;
+  filter: blur(40px) saturate(1.05); opacity: .72;
+}
+.sp-now.has-artwork::after {
+  inset: 0; z-index: -1;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--bg) 28%, transparent),
+    color-mix(in srgb, var(--bg) 20%, transparent) 30%,
+    color-mix(in srgb, var(--bg) 72%, transparent) 65%,
+    color-mix(in srgb, var(--bg) 90%, transparent));
+}
+.sp-now.has-artwork .sp-now-art { box-shadow: 0 10px 35px #0005; }
+.sp-now.has-artwork :is(.sp-now-sub, .sp-time, .sp-vol-value) {
+  color: color-mix(in srgb, var(--text) 80%, var(--muted-text));
 }
 .sp-now-art {
   grid-area: art; flex: 0 0 auto; width: 64px; aspect-ratio: 1; border-radius: 7px;
@@ -108,8 +129,12 @@
 .sp-range:hover::-moz-range-thumb, .sp-range:focus-visible::-moz-range-thumb { opacity: 1; }
 .sp-range:disabled { opacity: .5; cursor: default; }
 /* Keep the volume handle visible when the pointer leaves after a release. */
-.sp-vol-range::-webkit-slider-thumb { opacity: 1; }
-.sp-vol-range::-moz-range-thumb { opacity: 1; }
+.sp-vol-range::-webkit-slider-thumb { opacity: 1; width: 8px; height: 8px; margin-top: -2px; }
+.sp-vol-range::-moz-range-thumb { opacity: 1; width: 8px; height: 8px; }
+.sp-vol-range::-webkit-slider-runnable-track {
+  background: linear-gradient(to right, var(--muted-text) 0 var(--sp-fill), var(--line) var(--sp-fill) 100%);
+}
+.sp-vol-range::-moz-range-progress { background: var(--muted-text); }
 .sp-vol { grid-area: volume; display: flex; align-items: center; gap: 8px; }
 .sp-vol-ico { display: inline-flex; flex: 0 0 auto; color: var(--muted-text); }
 .sp-vol-ico svg { width: 15px; height: 15px; }
@@ -189,8 +214,8 @@
   .sp-now-art { align-self: center; width: min(56cqw, 32cqh, 220px); }
   .sp-now-panel { display: flex; flex-direction: column; gap: 4px; }
   .sp-now-head { order: 0; }
-  .sp-transport { order: 1; }
-  .sp-seek { order: 2; }
+  .sp-transport { order: 2; }
+  .sp-seek { order: 1; }
   .sp-vol { order: 3; }
 }
 @container spw (min-width: 440px) and (max-width: 639px) {
@@ -198,9 +223,29 @@
   .sp-now-art { width: min(25cqw, 150px); }
   .sp-now-panel { flex: 1; display: flex; flex-direction: column; gap: 4px; }
   .sp-now-head { order: 0; }
-  .sp-transport { order: 1; }
-  .sp-seek { order: 2; }
+  .sp-transport { order: 2; }
+  .sp-seek { order: 1; }
   .sp-vol { order: 3; }
+}
+/* Give tall, wide players the reviewed cover → title → seek → playback layout. */
+@container spw (min-width: 640px) and (min-height: 560px) {
+  .sp-now { padding: 24px; gap: 0; justify-content: flex-start; }
+  .sp-now-art { width: min(36cqh, 224px); margin: 4px auto 22px; }
+  .sp-now-panel { flex: 1; gap: 0; width: 100%; }
+  .sp-now-head { align-items: flex-start; gap: 10px; }
+  .sp-now-info { gap: 6px; }
+  .sp-now-title {
+    white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+    font-size: 1.125rem; line-height: 1.35;
+  }
+  .sp-now-sub { font-size: .6875rem; line-height: 1.5; }
+  .sp-seek { margin-top: 15px; }
+  .sp-transport { gap: 12px; margin-top: 8px; }
+  .spotify-panel .sp-wrap .sp-play { width: 48px; height: 48px; border-radius: 12px; }
+  .sp-vol {
+    margin-top: auto; align-self: center; width: 84%; padding-top: 18px;
+    border-top: 1px solid color-mix(in srgb, var(--text) 9%, transparent);
+  }
 }
 @container spw (max-height: 350px) {
   .sp-now { padding: 10px; gap: 4px 10px; }

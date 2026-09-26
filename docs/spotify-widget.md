@@ -10,8 +10,15 @@ dispatcher; this redesign does not change authentication or stored settings.
 The player follows the dashboard's semantic palette, panel transparency, typography,
 and control styling. The Spotify logo keeps its brand color; progress and active
 states use the selected dashboard accent. Flat library tabs and compact neutral
-controls match the neighbouring media widgets. Album art stays within its cover
-instead of recoloring the player surface.
+controls match the neighbouring media widgets. Playing fills its card with a
+blurred copy of the current album cover while keeping the foreground artwork
+sharp. A scrim derived from the theme background preserves text and control
+contrast; the header and library retain their neutral surfaces. Missing artwork
+and idle playback clear the backdrop instead of retaining the previous cover.
+
+Tall wide tiles use the reviewed layout: larger cover, a title of up to two lines,
+seek above playback buttons, and a separate neutral volume footer. Compact tiles
+keep their responsive layout and the same control order.
 
 - Wide tiles place the library beside the player. Portrait tiles show larger
   artwork above playback controls. Compact tiles keep every tab reachable by
@@ -46,6 +53,18 @@ last confirmed value. Rapid releases/keyboard steps send one write at a time and
 retain only the newest queued value; older player reads cannot undo newer state.
 Changing playback devices clears the previous device's pending volume.
 
+## Album layout validation (2026-09-26)
+
+- Spotify UI and provider tests: 43 passed, including cover changes across widget
+  copies, missing artwork, idle playback, and the volume regressions below.
+- The implementation was rendered with all 90 local dashboard stylesheets and the
+  active theme tokens, using isolated fixture data. Mouse, keyboard, emulated touch,
+  overlay hit targets, reduced motion, and light-theme colors passed.
+- Edge, portrait, compact and desktop content had no horizontal overflow; tall
+  wide playback follows title → seek → transport → volume with a two-line title.
+- JavaScript syntax, Git whitespace and static demo build checks passed. This is
+  a browser UI change; the native executable and backend do not require rebuilding.
+
 ## Volume regression validation (2026-09-26)
 
 - Reproduced the original 37% → 64% snapback after a stale response and the frozen
@@ -58,9 +77,6 @@ Changing playback devices clears the previous device's pending volume.
   overflow. No live Spotify playback command was sent.
 - Syntax, whitespace and demo build checks passed. Full suite: 3,477 tests,
   3,458 passed, 9 failed, 10 skipped; the same nine baseline failures described below.
-- Layout/album-blur exploration remains a standalone mockup; this fix only changes
-  volume synchronization and persistent handle visibility.
-
 ## Validation (2026-09-26)
 
 - JavaScript syntax and Git whitespace checks passed.
