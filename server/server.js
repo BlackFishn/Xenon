@@ -20360,6 +20360,12 @@ const handleRequest = async (req, res) => {
       } finally { release(); }
     } catch (e) { json({ ok: false, error: String((e && e.message) || e) }); }
 
+  } else if (reqPath === '/stream/spotify/search' && req.method === 'GET') {
+    // Built-in queue picker submits explicitly; provider bounds and resolves the
+    // query. SDK widgets retain their separately granted /query route.
+    try { json(await streamSpotify.searchTracks(urlObj.searchParams.get('q'))); }
+    catch { json({ ok: false, error: 'search_failed' }); }
+
   } else if (reqPath === '/stream/spotify/queue' && req.method === 'GET') {
     // "Up Next": the currently-playing track + the upcoming queue, for the widget.
     // The client polls this only while the tile is visible.

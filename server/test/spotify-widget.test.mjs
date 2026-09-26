@@ -41,7 +41,8 @@ async function setup(options = {}) {
   vm.runInNewContext(source, {
     window, document, makeEl, onVisiblePage: () => true, Date: { now: () => now },
     setInterval(fn, ms) { intervals.set(ms, fn); return ms; },
-    clearInterval(ms) { intervals.delete(ms); }, setTimeout() {}, clearTimeout() {},
+    clearInterval(ms) { intervals.delete(ms); },
+    setTimeout(fn, ms) { if ([450, 900, 1600].includes(ms)) Promise.resolve().then(fn); }, clearTimeout() {},
     apiJson: async (url, init) => {
       requests.push({ url, action: init?.body ? JSON.parse(init.body) : null });
       if (options.api) { const reply = options.api(url, init); if (reply !== undefined) return reply; }
@@ -297,4 +298,118 @@ test('numbered queue rows play within their context in every widget copy', async
     assert.equal(action.uri, 'spotify:track:next');
     assert.equal(action.contextUri, 'spotify:playlist:queue-context');
   }
+});
+
+test('a rejected queue pick preserves the list and explains an old backend', async () => {
+  let resolve;
+  const h = await setup({ api: url => url === '/actions/run' ? new Promise(r => { resolve = r; }) : undefined });
+  const row = h.query('.sp-track');
+  const before = h.requests.filter(r => r.url.endsWith('/queue')).length;
+  row.click();
+  h.query('.sp-track', 1).click();
+  await settle();
+  assert.equal(h.requests.filter(r => r.action).length, 1, 'copies share pending playback');
+  assert.equal(h.requests.filter(r => r.url.endsWith('/queue')).length, before, 'no read before write completes');
+  resolve({ ok: false, error: 'unknown_action' });
+  await settle(30);
+  assert.equal(h.query('.sp-track'), row, 'failure preserves the usable queue');
+  assert.equal(h.requests.filter(r => r.url.endsWith('/queue')).length, before);
+  assert.match(h.query('.sp-queue-feedback').textContent, /Restart Xenon/);
+  assert.equal(row.disabled, false);
+  assert.equal(h.query('.sp-track', 1).disabled, false);
+});
+
+test('queue search is explicit, survives polling, and adds only the selected song without starting playback', async () => {
+  const h = await setup({ api: url => url.startsWith('/stream/spotify/search?') ? {
+    ok: true, results: [{ uri: 'spotify:track:chosen', name: '<Chosen song>', artist: 'Artist' }],
+  } : undefined });
+  h.query('.sp-queue-toggle').click();
+  const input = h.query('.sp-search-input');
+  input.value = 'song & artist';
+  h.fire(input, 'input');
+  h.poll(); await settle(30);
+  assert.equal(h.query('.sp-search-input'), input);
+  assert.equal(input.value, 'song & artist');
+  assert.equal(h.requests.filter(r => r.url.includes('/search?')).length, 0);
+  h.fire(h.query('.sp-search-form'), 'submit');
+  await settle(30);
+  assert.ok(h.requests.some(r => r.url === '/stream/spotify/search?q=song%20%26%20artist'));
+  const result = h.query('.sp-search-result');
+  assert.match(result.getAttribute('aria-label'), /Add to queue: <Chosen song>/);
+  result.click(); await settle(30);
+  const actions = h.requests.filter(r => r.action).map(r => r.action);
+  assert.deepEqual(actions, [{ type: 'spotifyQueueUri', uri: 'spotify:track:chosen' }]);
+  assert.match(h.query('.sp-queue-feedback').textContent, /Added to Spotify queue/);
+  assert.equal(result.disabled, false);
+  h.query('.sp-queue-toggle').click();
+  assert.equal(h.query('.sp-queue-list').hidden, false);
+  assert.equal(h.query('.sp-queue-search').hidden, true);
+});
+
+test('failed queue additions show a reason and can be retried without duplicate writes', async () => {
+  let reject, count = 0;
+  const h = await setup({ api: url => {
+    if (url.includes('/search?')) return { ok: true, results: [{ uri: 'spotify:track:next', name: 'Next' }] };
+    if (url === '/actions/run') { count++; return new Promise((_, r) => { reject = r; }); }
+  } });
+  h.query('.sp-queue-toggle').click();
+  h.query('.sp-search-input').value = 'spotify:track:next';
+  h.fire(h.query('.sp-search-form'), 'submit'); await settle(30);
+  const result = h.query('.sp-search-result');
+  result.click(); result.click(); await settle();
+  assert.equal(count, 1);
+  reject(new Error('offline')); await settle(30);
+  assert.match(h.query('.sp-queue-feedback').textContent, /could not complete/);
+  assert.equal(result.disabled, false);
+});
+
+test('closing search discards an in-flight response and allows a fresh search', async () => {
+  let resolve;
+  const h = await setup({ api: url => url.includes('/search?') ? new Promise(r => { resolve = r; }) : undefined });
+  h.query('.sp-queue-toggle').click();
+  h.query('.sp-search-input').value = 'old search';
+  h.fire(h.query('.sp-search-form'), 'submit');
+  h.query('.sp-queue-toggle').click();
+  resolve({ ok: true, results: [{ uri: 'spotify:track:old', name: 'Old' }] });
+  await settle(30);
+  assert.equal(h.query('.sp-search-result'), null);
+  assert.equal(h.query('.sp-search-submit').disabled, false);
+});
+
+test('a pre-add queue response cannot overwrite the confirmed post-add list', async () => {
+  let hold = false, stale, added = false;
+  const h = await setup({ api: (url, init) => {
+    if (url.includes('/search?')) return { ok: true, results: [{ uri: 'spotify:track:new', name: 'New song' }] };
+    if (url.endsWith('/queue')) {
+      if (hold && !stale) return new Promise(r => { stale = r; });
+      return { ok: true, queue: [{ uri: added ? 'spotify:track:new' : 'spotify:track:old', name: added ? 'New song' : 'Old song' }] };
+    }
+    if (url === '/actions/run' && JSON.parse(init.body).type === 'spotifyQueueUri') { added = true; return { ok: true }; }
+  } });
+  h.query('.sp-queue-toggle').click();
+  h.query('.sp-search-input').value = 'New song';
+  h.fire(h.query('.sp-search-form'), 'submit'); await settle(30);
+  hold = true;
+  h.poll(); await settle(30);
+  assert.equal(typeof stale, 'function');
+  h.query('.sp-search-result').click(); await settle(30);
+  assert.match(h.query('.sp-queue-list').textContent, /New song/);
+  stale({ ok: true, queue: [{ uri: 'spotify:track:old', name: 'Old song' }] });
+  await settle(30);
+  assert.match(h.query('.sp-queue-list').textContent, /New song/);
+  assert.doesNotMatch(h.query('.sp-queue-list').textContent, /Old song/);
+});
+
+test('search rate limits show the returned wait duration and hold automatic polling', async () => {
+  const h = await setup({ api: url => url.includes('/search?')
+    ? { ok: false, error: 'rate_limited', retryAfterMs: 18000000 } : undefined });
+  h.query('.sp-queue-toggle').click();
+  h.query('.sp-search-input').value = 'Song';
+  h.fire(h.query('.sp-search-form'), 'submit'); await settle(30);
+  const feedback = h.query('.sp-queue-feedback').textContent;
+  assert.match(feedback, /300 min/);
+  assert.doesNotMatch(feedback, /shortly/);
+  const reads = h.requests.filter(r => r.url.includes('/player')).length;
+  h.poll(60000); await settle(30);
+  assert.equal(h.requests.filter(r => r.url.includes('/player')).length, reads);
 });

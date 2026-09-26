@@ -68,6 +68,9 @@
   let player = null;         // rich now-playing state from /stream/spotify/player
   let queue = null;          // upcoming tracks (lazy, Up Next tab)
   let queueReliable = true;  // false when playing a loose track (no playlist context) → Spotify's Up Next is only a guess
+  let queueLoadId = 0;
+  let queuePlayPending = false;
+  let queueAddPending = false;
   let queueContext = '';     // the playlist/album the queue belongs to, so a tapped row can resume the rest of it
   let playlists = null;      // cached list (loaded when the Playlists tab opens)
   let devices = null;        // cached list (loaded when the Devices tab opens)
@@ -137,18 +140,29 @@
   function controlToast(r) {
     if (!r || r.ok) return;
     const e = r.error || '';
-    let msg = '';
+    let msg = t('spotify_w_action_failed', 'Spotify could not complete this action. Please try again.');
     if (e === 'premium_required') msg = t('spotify_w_premium', 'Spotify Premium required for playback control');
     else if (e === 'forbidden') msg = t('spotify_w_reconnect', 'Reconnect Spotify in Settings → Spotify to grant permission');
     else if (e === 'no_active_device') msg = t('spotify_w_no_active', 'No active Spotify device — start playback first');
     else if (e === 'nothing_playing') msg = t('spotify_w_nothing', 'Nothing playing right now');
-    else if (e === 'rate_limited') msg = busyLine();
+    else if (e === 'rate_limited') {
+      rateLimited = true;
+      rateLimitMs = Math.max(0, Number(r.retryAfterMs) || 0);
+      backoffUntil = Math.max(backoffUntil, Date.now() + Math.max(30000, rateLimitMs));
+      msg = busyLine();
+    }
+    else if (e === 'unknown_action' || e === 'unsupported') msg = t('spotify_w_restart', 'Restart Xenon to load the updated Spotify controls.');
+    else if (e === 'not_connected') msg = t('spotify_w_reconnect', 'Reconnect Spotify in Settings → Spotify to grant permission');
+    else if (e === 'bad_uri' || e === 'invalid_uri') msg = t('spotify_w_track_link', 'Use a Spotify song link or track URI.');
+    else if (e === 'no_query') msg = t('spotify_w_search_hint', 'Search songs or paste a Spotify song link');
+    else if (e === 'not_found') msg = t('spotify_w_no_matches', 'No songs found. Try a different search.');
     if (msg && typeof showHubToast === 'function') showHubToast('Spotify', msg, '');
+    return msg;
   }
 
   // Actions that move playback to a different track — their resync must WAIT for
   // Spotify to actually flip (an immediate read still reports the old track).
-  const TRACK_CHANGE_ACTIONS = new Set(['spotifyNext', 'spotifyPrev', 'spotifyPlaylist']);
+  const TRACK_CHANGE_ACTIONS = new Set(['spotifyNext', 'spotifyPrev', 'spotifyPlaylist', 'spotifyPlayUri']);
   const sleep = (ms) => new Promise(res => setTimeout(res, ms));
 
   // While Spotify's Web API is rate-limited it refuses even play/next/prev — but
@@ -162,7 +176,11 @@
   // reflects Spotify quickly. Returns the response so callers can react.
   async function runAction(btn, action) {
     if (btn) { btn.disabled = true; btn.classList.remove('ok', 'err'); }
-    let r = await api('/actions/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action) });
+    let r;
+    try {
+      r = await api('/actions/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action) });
+    } catch { r = { ok: false, error: 'network_error' }; }
+    if (!r) r = { ok: false, error: 'network_error' };
     let ok = !!(r && r.ok);
     if (!ok && r && r.error === 'rate_limited' && SMTC_FALLBACK[action.type]) {
       const md = (typeof mediaData === 'object' && mediaData) ? mediaData : null;
@@ -181,7 +199,20 @@
       }
     }
     if (btn) { btn.classList.add(ok ? 'ok' : 'err'); setTimeout(() => { btn.classList.remove('ok', 'err'); btn.disabled = btn.classList.contains('sp-play') && playbackPending; }, 1000); }
-    if (!ok) controlToast(r);
+    if (!ok) {
+      const message = controlToast(r);
+      if (action.type === 'spotifyPlayUri' || action.type === 'spotifyQueueUri') {
+        repaintAll(m => { m.querySelector('.sp-queue-feedback').textContent = message; });
+        return r;
+      }
+    }
+    if (action.type === 'spotifyQueueUri') {
+      // Spotify acknowledges the write before the new queue is visible.
+      await sleep(450);
+      await loadQueue();
+      repaintAll(paintQueue);
+      return r;
+    }
     // Volume writes are serialized below; resync once after the latest write.
     if (action.type === 'spotifyVolume') return r;
     const changesTrack = ok && TRACK_CHANGE_ACTIONS.has(action.type);
@@ -397,6 +428,7 @@
 
     const body = el('div', 'sp-body');
     const pq = el('div', 'sp-panel sp-panel--queue'); pq.dataset.stab = 'queue';
+    buildQueueTools(pq, id);
     const pp = el('div', 'sp-panel sp-panel--playlists'); pp.dataset.stab = 'playlists';
     const pd = el('div', 'sp-panel sp-panel--devices'); pd.dataset.stab = 'devices';
     body.append(pq, pp, pd);
@@ -638,19 +670,114 @@
       row.title = t('spotify_w_play_track', 'Play this track');
       const play = el('span', 'sp-track-play'); play.innerHTML = ICONS.play_s;   // static, trusted SVG
       row.appendChild(play);
-      row.addEventListener('click', () => {
-        runAction(row, { type: 'spotifyPlayUri', uri: tk.uri, contextUri: contextUri || '' });
-        // The queue is about to be a different queue. Drop it so the next paint
-        // refetches instead of leaving the tapped track sitting in Up Next.
-        queue = null;
-        loadQueue().then(paint);
+      row.disabled = queuePlayPending;
+      row.addEventListener('click', async () => {
+        if (queuePlayPending) return;
+        queuePlayPending = true;
+        repaintAll(m => {
+          m.querySelector('.sp-queue-feedback').textContent = '';
+          m.querySelectorAll('.sp-queue-list .sp-track.is-playable').forEach(b => { b.disabled = true; });
+        });
+        try { await runAction(row, { type: 'spotifyPlayUri', uri: tk.uri, contextUri: contextUri || '' }); }
+        finally {
+          queuePlayPending = false;
+          repaintAll(m => m.querySelectorAll('.sp-queue-list .sp-track.is-playable').forEach(b => { b.disabled = false; }));
+        }
       });
     }
     return row;
   }
 
+  // Keep the search form mounted while polling replaces only the queue list.
+  function buildQueueTools(panel, id) {
+    const toggle = el('button', 'sp-queue-toggle', t('spotify_w_add_songs', '+ Add songs'));
+    toggle.type = 'button';
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.setAttribute('aria-controls', id + '-queue-search');
+    const feedback = el('div', 'sp-queue-feedback');
+    feedback.setAttribute('role', 'status');
+    feedback.setAttribute('aria-live', 'polite');
+    const search = el('div', 'sp-queue-search');
+    search.id = id + '-queue-search'; search.hidden = true;
+    const form = el('form', 'sp-search-form');
+    const input = el('input', 'sp-search-input');
+    input.type = 'search'; input.maxLength = 200;
+    input.placeholder = t('spotify_w_search_hint', 'Search songs or paste a Spotify song link');
+    input.setAttribute('aria-label', input.placeholder);
+    const submit = el('button', 'sp-search-submit', t('spotify_w_search', 'Search'));
+    submit.type = 'submit';
+    form.append(input, submit);
+    const results = el('div', 'sp-search-results');
+    const list = el('div', 'sp-queue-list');
+    search.append(form, results);
+    panel.append(toggle, feedback, search, list);
+    let requestId = 0;
+    let searching = false;
+    toggle.addEventListener('click', () => {
+      const open = search.hidden;
+      search.hidden = !open; list.hidden = open;
+      toggle.setAttribute('aria-expanded', String(open));
+      toggle.textContent = open ? t('spotify_w_back_queue', '← Back to queue') : t('spotify_w_add_songs', '+ Add songs');
+      if (open) input.focus();
+      else { requestId++; searching = false; submit.disabled = false; feedback.textContent = ''; }
+    });
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const query = input.value.trim();
+      if (!query || searching) return;
+      const request = ++requestId;
+      searching = true; submit.disabled = true;
+      feedback.textContent = t('spotify_w_searching', 'Searching…');
+      results.replaceChildren();
+      let response;
+      try { response = await api('/stream/spotify/search?q=' + encodeURIComponent(query)); }
+      catch { response = null; }
+      if (request !== requestId) return;
+      searching = false; submit.disabled = false;
+      if (!response || !response.ok) {
+        feedback.textContent = controlToast(response || { ok: false, error: 'search_failed' });
+        return;
+      }
+      const matches = Array.isArray(response.results) ? response.results : [];
+      feedback.textContent = matches.length ? t('spotify_w_choose_add', 'Choose a song to add to your Spotify queue.')
+        : t('spotify_w_no_matches', 'No songs found. Try a different search.');
+      matches.forEach(track => {
+        if (!track || !/^spotify:track:[A-Za-z0-9]{1,40}$/.test(track.uri || '')) return;
+        const row = el('button', 'sp-track sp-search-result is-playable');
+        row.type = 'button';
+        row.disabled = queueAddPending;
+        row.title = t('spotify_w_add_queue', 'Add to queue') + ': ' + (track.name || '');
+        row.setAttribute('aria-label', row.title);
+        const art = el('span', 'sp-track-art');
+        if (track.image) art.style.backgroundImage = 'url("' + encodeURI(track.image) + '")';
+        const meta = el('div', 'sp-track-meta');
+        meta.append(el('span', 'sp-track-name', track.name || '—'), el('span', 'sp-track-artist', track.artist || ''));
+        const add = el('span', 'sp-search-add', '+');
+        add.setAttribute('aria-hidden', 'true');
+        row.append(art, meta, add);
+        row.addEventListener('click', async () => {
+          if (queueAddPending) return;
+          queueAddPending = true;
+          repaintAll(m => m.querySelectorAll('.sp-search-result').forEach(b => { b.disabled = true; }));
+          feedback.textContent = t('spotify_w_adding', 'Adding to queue…');
+          try {
+            const result = await runAction(row, { type: 'spotifyQueueUri', uri: track.uri });
+            if (result && result.ok) {
+              feedback.textContent = t('spotify_w_added', 'Added to Spotify queue') + ': ' + track.name;
+              add.textContent = '✓';
+            }
+          } finally {
+            queueAddPending = false;
+            repaintAll(m => m.querySelectorAll('.sp-search-result').forEach(b => { b.disabled = false; }));
+          }
+        });
+        results.appendChild(row);
+      });
+    });
+  }
+
   function paintQueue(mount) {
-    const panel = mount.querySelector('.sp-panel--queue');
+    const panel = mount.querySelector('.sp-queue-list');
     if (!panel) return;
     // Skip the rebuild when nothing changed — paint() runs every 6s poll tick and the
     // queue is usually identical (avoids re-creating every row + its art each time).
@@ -884,8 +1011,10 @@
     setTimeout(recheck, 2500);
   }
   function loadQueue() {
+    const requestId = ++queueLoadId;
     return api('/stream/spotify/queue')
       .then(d => {
+        if (requestId !== queueLoadId || connected !== true) return;
         if (d && d.ok && Array.isArray(d.queue)) {
           queue = d.queue;
           queueReliable = d.reliable !== false;   // default trusting; only an explicit false marks it a guess
@@ -968,7 +1097,7 @@
           else if (activeTab === 'playlists' && playlists === null) await loadPlaylists();
         }
       } else { player = null; queue = null; }
-      backoffUntil = rateLimited ? Date.now() + 30000 : 0;
+      backoffUntil = rateLimited ? Math.max(backoffUntil, Date.now() + Math.max(30000, rateLimitMs)) : 0;
       paint();
     } finally { refreshing = false; lastRefreshAt = Date.now(); }
   }

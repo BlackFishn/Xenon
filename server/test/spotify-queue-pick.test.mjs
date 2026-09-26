@@ -130,7 +130,7 @@ test('the row is a button that asks to play itself', () => {
   const body = WIDGET.slice(at, WIDGET.indexOf('\n  function paintQueue', at));
   assert.match(body, /el\(playable \? 'button' : 'div'/, 'pressable only when it can act');
   assert.match(body, /type: 'spotifyPlayUri', uri: tk\.uri, contextUri: contextUri \|\| ''/);
-  assert.match(body, /queue = null;/, 'the queue is a different queue afterwards');
+  assert.doesNotMatch(body, /queue = null;/, 'a failed play must keep the current queue');
 });
 
 test('a row with nothing to play stays a plain div', () => {

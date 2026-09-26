@@ -105,3 +105,49 @@ Changing playback devices clears the previous device's pending volume.
 ### Main v4.11.9 integration
 
 Up Next retains numbered, theme-aware rows and now plays a selected track inside its playlist or album context. Rows without a playable URI remain plain rows. The large square cover, lower control group, album backdrop and divider-free volume row remain unchanged.
+
+## Queue controls
+
+Open **Up Next → + Add songs**, enter a song/artist name or paste an
+https://open.spotify.com/track/... link or spotify:track:... URI, then press
+**Search**. Choose a result to **Add to queue**. Search runs only on submission,
+returns up to ten tracks, and the chosen track is added without starting it or
+interrupting the current song. **Back to queue** returns to Spotify's live list.
+
+This uses Spotify's existing queue. There is no local queue, drag reordering or
+position-specific insertion. Spotify's public Player API exposes queue reads and
+additions, not queue reordering. Playback writes need Spotify Premium and an
+active controllable device. Provider and connection errors stay visible.
+
+Queue picks share a pending state across widget copies. The list stays mounted
+while the action runs; only a successful action triggers track-change resync.
+Failed requests retain the list and show a reason instead of silently clearing it.
+
+If newly served controls report an unknown action, check the running backend's
+/status and /actions/catalog: static JavaScript can update on disk while the
+Node process still holds an older action catalog. Restart the **correct source
+backend**, preserving its settings store, then reload the dashboard. This feature
+changes browser/backend JavaScript only; no native or Helper rebuild is required.
+
+See Spotify's [queue API](https://developer.spotify.com/documentation/web-api/reference/add-to-queue)
+and [playback API](https://developer.spotify.com/documentation/web-api/reference/start-a-users-playback).
+
+### Queue controls validation (2026-09-26)
+
+- Widget behavior: 19 tests passed, including shared pending actions, failure
+  feedback, explicit search, stale queue responses and long rate-limit cooldowns.
+- Provider/queue/SDK checks: 105 passed, including URI/link validation, actionable
+  errors, restricted context retry and unchanged SDK grants.
+- Isolated browser: 28 checks passed with mocked Spotify responses; mouse,
+  keyboard and touch; wide, short Edge, portrait, compact and desktop layouts;
+  search focus/caret/text retained across polling. No live playback was changed.
+- Final full suite with one test file at a time: 4,221 tests, 4,207 passed,
+  14 skipped, zero failed. The concurrent run had one Discord voice timing
+  failure; that unchanged test passed separately on production and this branch.
+- Changed JavaScript syntax, whitespace checks and dashboard demo build passed.
+
+The daily production backend was separately restarted from its existing source
+launcher, activating the already-merged v4.11.10 spotifyPlayUri action. Its live
+catalog now contains that action. Existing settings values and store identity
+were preserved; only new schema defaults and revision metadata were added.
+The new search/add controls are retained on develop until promotion.
