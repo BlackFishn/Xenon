@@ -9,8 +9,8 @@
 // spotify* actions the Deck uses); the widget only READS state, via
 // /stream/spotify/{player,queue,playlists,devices}. The Web API has no push
 // channel, so state is polled — but ONLY while a tile is placed AND the page is
-// visible (an idle/backgrounded dashboard does zero network work). A 1-second
-// LOCAL ticker advances the progress bar between polls so it stays smooth without
+// visible (an idle/backgrounded dashboard does zero network work). A local
+// elapsed-time ticker advances the progress bar between polls so it stays smooth without
 // hammering the API. Requires the account linked in Settings → Spotify; playback
 // control needs Premium. Renders into .spotify-widget-mount.
 (function () {
@@ -104,6 +104,9 @@
     { id: 'devices', labelKey: 'spotify_w_devices', fb: 'Devices' },
   ];
   let activeTab = 'queue';   // shared across this widget's tiles (session-scoped)
+  let mountId = 0;
+  let playbackPending = false;
+  const tabLoads = new Map();
 
   function openSpotifySettings() {
     const overlay = document.getElementById('settings-overlay');
@@ -166,7 +169,7 @@
         }
       }
     }
-    if (btn) { btn.classList.add(ok ? 'ok' : 'err'); setTimeout(() => { btn.classList.remove('ok', 'err'); btn.disabled = false; }, 1000); }
+    if (btn) { btn.classList.add(ok ? 'ok' : 'err'); setTimeout(() => { btn.classList.remove('ok', 'err'); btn.disabled = btn.classList.contains('sp-play') && playbackPending; }, 1000); }
     if (!ok) controlToast(r);
     const changesTrack = ok && TRACK_CHANGE_ACTIONS.has(action.type);
     const fromTid = lastTrackId;   // the track we're skipping AWAY from
@@ -189,7 +192,7 @@
         }
         suppressSyncUntil = 0;   // resync settled — normal adoption resumes
       } else {
-        await loadPlayer();
+        await loadPlayer(true);
       }
       if (activeTab === 'queue') await loadQueue();
       else if (activeTab === 'devices') await loadDevices();
@@ -201,6 +204,7 @@
   // ── Skeleton (built once per mount, idempotent) ───────────────────────────
   function ctlBtn(cls, icon, title) {
     const b = el('button', 'sp-ctl ' + cls); b.type = 'button'; b.title = title;
+    b.setAttribute('aria-label', title);
     b.innerHTML = icon;   // static, trusted SVG
     return b;
   }
@@ -209,13 +213,20 @@
     if (mount.dataset.spBuilt === '1' && mount.firstChild) return;
     mount.dataset.spBuilt = '1';
     const wrap = el('div', 'sp-wrap');
+    const id = 'sp-widget-' + (++mountId);
 
     // Header: logo + username, and a live device chip on the right.
     const head = el('div', 'sp-head');
     const brand = el('div', 'sp-brand');
     const logo = el('span', 'sp-logo'); logo.innerHTML = ICONS.logo;   // static, trusted SVG
-    brand.append(logo, el('span', 'sp-user'));
-    const chip = el('div', 'sp-dev-chip'); chip.hidden = true;
+    const brandText = el('div', 'sp-brand-text');
+    brandText.append(el('span', 'sp-brand-name', 'Spotify'), el('span', 'sp-user'));
+    brand.append(logo, brandText);
+    const chip = el('button', 'sp-dev-chip'); chip.type = 'button'; chip.hidden = true;
+    chip.addEventListener('click', () => {
+      selectTab('devices');
+      mount.querySelector('.sp-tab[data-stab="devices"]').focus();
+    });
     chip.append(el('span', 'sp-dev-chip-ico'), el('span', 'sp-dev-chip-name'));
     head.append(brand, chip);
     wrap.appendChild(head);
@@ -226,6 +237,8 @@
     notice.append(nIco, el('span', 'sp-notice-txt', t('spotify_w_connect', 'Connect in Settings → Spotify')));
     notice.addEventListener('click', openSpotifySettings);
     wrap.appendChild(notice);
+    const content = el('div', 'sp-content');
+    wrap.appendChild(content);
 
     // ── Now-playing hero ─────────────────────────────────────────────────
     const now = el('div', 'sp-now');
@@ -257,6 +270,8 @@
     range.setAttribute('aria-label', t('spotify_w_seek', 'Seek'));
     const tot = el('span', 'sp-time sp-tot', '0:00');
     range.addEventListener('input', () => { dragging = true; previewSeek(mount); });
+    range.addEventListener('pointercancel', () => { dragging = false; paintSeek(mount); });
+    range.addEventListener('blur', () => { dragging = false; });
     range.addEventListener('change', () => {
       dragging = false;
       const dur = (player && player.durationMs) || 0;
@@ -280,10 +295,18 @@
     const prev = ctlBtn('sp-prev', ICONS.prev, t('spotify_w_prev', 'Previous'));
     prev.addEventListener('click', () => runAction(prev, { type: 'spotifyPrev' }));
     const playBtn = ctlBtn('sp-play', ICONS.play, t('spotify_w_play', 'Play'));
-    playBtn.addEventListener('click', () => {
-      // Optimistic flip for instant feedback; the resync corrects if it failed.
-      if (player) { player.playing = !player.playing; paintTransport(mount); }
-      runAction(playBtn, { type: 'spotifyPlay', mode: 'toggle' });
+    playBtn.addEventListener('click', async () => {
+      if (playbackPending) return;
+      playbackPending = true;
+      const wasPlaying = !!(player && player.playing);
+      if (player) { player.playing = !wasPlaying; repaintAll(paintTransport); }
+      try {
+        const result = await runAction(playBtn, { type: 'spotifyPlay', mode: wasPlaying ? 'pause' : 'play' });
+        if ((!result || !result.ok) && player) player.playing = wasPlaying;
+      } finally {
+        playbackPending = false;
+        repaintAll(paintTransport);
+      }
     });
     const next = ctlBtn('sp-next', ICONS.next, t('spotify_w_next', 'Next'));
     next.addEventListener('click', () => runAction(next, { type: 'spotifyNext' }));
@@ -299,9 +322,12 @@
     vol.type = 'range'; vol.className = 'sp-range sp-vol-range';
     vol.min = '0'; vol.max = '100'; vol.value = '50'; vol.step = '1';
     vol.setAttribute('aria-label', t('spotify_w_volume', 'Volume'));
-    vol.addEventListener('input', () => { dragging = true; setRangeFill(vol); });
+    const volValue = el('span', 'sp-vol-value');
+    vol.addEventListener('input', () => { dragging = true; setRangeFill(vol); volValue.textContent = vol.value + '%'; });
+    vol.addEventListener('pointercancel', () => { dragging = false; paintHero(mount); });
+    vol.addEventListener('blur', () => { dragging = false; });
     vol.addEventListener('change', () => { dragging = false; runAction(null, { type: 'spotifyVolume', mode: 'set', value: vol.value }); });
-    volRow.append(volIco, vol);
+    volRow.append(volIco, vol, volValue);
     panel.appendChild(volRow);
 
     now.appendChild(panel);
@@ -320,34 +346,59 @@
     empty.append(eIco, el('span', 'sp-now-empty-lbl', t('spotify_w_nothing', 'Nothing playing right now')), emptyBtn, eHint);
     now.appendChild(empty);
 
-    wrap.appendChild(now);
+    content.appendChild(now);
 
     // ── Tabs ─────────────────────────────────────────────────────────────
     const tabs = el('div', 'sp-tabs');
+    tabs.setAttribute('role', 'tablist');
+    tabs.setAttribute('aria-label', 'Spotify');
     TABS.forEach(tb => {
       const b = el('button', 'sp-tab', t(tb.labelKey, tb.fb));
       b.type = 'button'; b.dataset.stab = tb.id;
+      b.id = id + '-tab-' + tb.id;
+      b.setAttribute('role', 'tab');
+      b.setAttribute('aria-controls', id + '-panel-' + tb.id);
       b.addEventListener('click', () => selectTab(tb.id));
+      b.addEventListener('keydown', event => {
+        const index = TABS.findIndex(item => item.id === tb.id);
+        const next = event.key === 'ArrowRight' ? (index + 1) % TABS.length
+          : event.key === 'ArrowLeft' ? (index + TABS.length - 1) % TABS.length
+          : event.key === 'Home' ? 0 : event.key === 'End' ? TABS.length - 1 : -1;
+        if (next < 0) return;
+        event.preventDefault();
+        selectTab(TABS[next].id);
+        tabs.querySelectorAll('.sp-tab')[next].focus();
+      });
       tabs.appendChild(b);
     });
-    wrap.appendChild(tabs);
+    const library = el('div', 'sp-library');
+    library.appendChild(tabs);
 
     const body = el('div', 'sp-body');
     const pq = el('div', 'sp-panel sp-panel--queue'); pq.dataset.stab = 'queue';
     const pp = el('div', 'sp-panel sp-panel--playlists'); pp.dataset.stab = 'playlists';
     const pd = el('div', 'sp-panel sp-panel--devices'); pd.dataset.stab = 'devices';
     body.append(pq, pp, pd);
-    wrap.appendChild(body);
+    [pq, pp, pd].forEach(p => {
+      p.id = id + '-panel-' + p.dataset.stab;
+      p.setAttribute('role', 'tabpanel');
+      p.setAttribute('aria-labelledby', id + '-tab-' + p.dataset.stab);
+      p.tabIndex = 0;
+    });
+    library.appendChild(body);
+    content.appendChild(library);
     mount.replaceChildren(wrap);
   }
 
   // Switch the active internal tab and lazy-load its data the first time it opens.
   function selectTab(id) {
     activeTab = id;
-    if (id === 'queue' && queue === null && connected) loadQueue().then(paint);
-    else if (id === 'playlists' && playlists === null && connected) loadPlaylists().then(paint);
-    else if (id === 'devices' && devices === null && connected) loadDevices().then(paint);
-    else paint();
+    paint(); // Show the selected panel immediately, including its loading state.
+    if (!connected || tabLoads.has(id)) return;
+    const load = id === 'queue' && queue === null ? loadQueue
+      : id === 'playlists' && playlists === null ? loadPlaylists
+      : id === 'devices' && devices === null ? loadDevices : null;
+    if (load) tabLoads.set(id, load().finally(() => { tabLoads.delete(id); paint(); }));
   }
 
   // ── Hero paint helpers (update in place — never rebuild, so drags survive) ──
@@ -363,21 +414,33 @@
     const cur = mount.querySelector('.sp-cur');
     setRangeFill(range);
     const dur = (player && player.durationMs) || 0;
-    if (cur && dur > 0) cur.textContent = fmt(Number(range.value) / 1000 * dur);
+    if (cur && dur > 0) {
+      cur.textContent = fmt(Number(range.value) / 1000 * dur);
+      range.setAttribute('aria-valuetext', cur.textContent + ' / ' + fmt(dur));
+    }
   }
 
   function paintTransport(mount) {
     const playing = !!(player && player.playing);
     const pb = mount.querySelector('.sp-play');
-    if (pb) { pb.innerHTML = playing ? ICONS.pause : ICONS.play; pb.title = playing ? t('spotify_w_pause', 'Pause') : t('spotify_w_play', 'Play'); }
-    mount.querySelector('.sp-shuffle').classList.toggle('is-on', !!(player && player.shuffle));
+    if (pb) {
+      pb.disabled = playbackPending;
+      pb.innerHTML = playing ? ICONS.pause : ICONS.play;
+      pb.title = playing ? t('spotify_w_pause', 'Pause') : t('spotify_w_play', 'Play');
+      pb.setAttribute('aria-label', pb.title);
+    }
+    mount.querySelector('.sp-now').classList.toggle('is-playing', !!(playing && player.track));
+    const shuffle = mount.querySelector('.sp-shuffle');
+    shuffle.classList.toggle('is-on', !!(player && player.shuffle));
+    shuffle.setAttribute('aria-pressed', String(!!(player && player.shuffle)));
     const rp = mount.querySelector('.sp-repeat');
     const rep = (player && player.repeat) || 'off';
     rp.classList.toggle('is-on', rep !== 'off');
     rp.classList.toggle('is-one', rep === 'track');
+    rp.setAttribute('aria-pressed', String(rep !== 'off'));
   }
 
-  // Update just the seek bar + times (called by the 1s ticker and on paint).
+  // Update just the seek bar + times (called by the local ticker and on paint).
   function paintSeek(mount) {
     if (dragging) return;
     const dur = (player && player.durationMs) || 0;
@@ -391,6 +454,7 @@
     setRangeFill(range);
     if (cur) cur.textContent = fmt(pos);
     if (tot) tot.textContent = dur > 0 ? fmt(dur) : '0:00';
+    range.setAttribute('aria-valuetext', fmt(pos) + ' / ' + fmt(dur));
   }
 
   function paintHero(mount) {
@@ -409,8 +473,10 @@
     now.style.setProperty('--sp-cover', img ? 'url("' + encodeURI(img) + '")' : 'none');
 
     mount.querySelector('.sp-now-title').textContent = has ? (player.track.name || '—') : '';
+    mount.querySelector('.sp-now-title').title = has ? (player.track.name || '') : '';
     const sub = has ? [player.track.artist, player.track.album].filter(Boolean).join(' · ') : '';
     mount.querySelector('.sp-now-sub').textContent = sub;
+    mount.querySelector('.sp-now-sub').title = sub;
 
     // Empty state: label + one action (+ a hint). When no Spotify Connect device is
     // available we can't tell "app closed" from "app open but idle" — the Web API
@@ -454,6 +520,7 @@
     const liked = has && player.liked === true;
     like.innerHTML = liked ? ICONS.heartFilled : ICONS.heart;   // static, trusted SVG
     like.classList.toggle('is-on', liked);
+    like.setAttribute('aria-pressed', String(liked));
     like.hidden = !has;
 
     paintTransport(mount);
@@ -463,7 +530,11 @@
     const volRow = mount.querySelector('.sp-vol');
     const showVol = has && player.supportsVolume && player.volume != null;
     volRow.hidden = !showVol;
-    if (showVol && !dragging) { const vol = mount.querySelector('.sp-vol-range'); vol.value = String(player.volume); setRangeFill(vol); }
+    if (showVol && !dragging) {
+      const vol = mount.querySelector('.sp-vol-range');
+      vol.value = String(player.volume); setRangeFill(vol);
+      mount.querySelector('.sp-vol-value').textContent = vol.value + '%';
+    }
 
     // Device chip (where playback lives).
     const chip = mount.querySelector('.sp-dev-chip');
@@ -472,17 +543,20 @@
     if (!chip.hidden) {
       chip.querySelector('.sp-dev-chip-ico').innerHTML = ICONS.speaker;   // static, trusted SVG
       chip.querySelector('.sp-dev-chip-name').textContent = devName;
+      chip.title = t('spotify_w_devices', 'Devices') + ' · ' + devName;
+      chip.setAttribute('aria-label', chip.title);
     }
   }
 
   // ── Track / list rows ─────────────────────────────────────────────────────
-  function trackRow(tk) {
+  function trackRow(tk, index) {
     const row = el('div', 'sp-track');
     const art = el('span', 'sp-track-art');
     if (tk.image) art.style.backgroundImage = 'url("' + encodeURI(tk.image) + '")';
     const meta = el('div', 'sp-track-meta');
     meta.append(el('span', 'sp-track-name', tk.name || '—'), el('span', 'sp-track-artist', tk.artist || ''));
-    row.append(art, meta);
+    row.append(el('span', 'sp-track-index', String(index + 1).padStart(2, '0')), art, meta);
+    row.title = [tk.name, tk.artist].filter(Boolean).join(' · ');
     return row;
   }
 
@@ -510,7 +584,7 @@
     if (!queueReliable) {
       frag.appendChild(el('div', 'sp-queue-note', t('spotify_w_queue_guess', 'Approximate — Spotify only knows the exact order inside a playlist or album')));
     }
-    queue.forEach(tk => frag.appendChild(trackRow(tk)));
+    queue.forEach((tk, index) => frag.appendChild(trackRow(tk, index)));
     panel.replaceChildren(frag);
   }
 
@@ -527,6 +601,7 @@
     const frag = document.createDocumentFragment();
     playlists.forEach(p => {
       const b = el('button', 'sp-pl'); b.type = 'button';
+      b.title = p.name || '';
       const art = el('span', 'sp-pl-art');
       if (p.image) art.style.backgroundImage = 'url("' + encodeURI(p.image) + '")';
       const meta = el('div', 'sp-pl-meta');
@@ -553,6 +628,7 @@
     const frag = document.createDocumentFragment();
     devices.forEach(dv => {
       const b = el('button', 'sp-dev' + (dv.active ? ' is-active' : '')); b.type = 'button';
+      b.setAttribute('aria-pressed', String(!!dv.active));
       const ico = el('span', 'sp-dev-ico'); ico.innerHTML = deviceIcon(dv.type);   // static, trusted SVG
       const meta = el('div', 'sp-dev-meta');
       meta.append(el('span', 'sp-dev-name', dv.name || '—'));
@@ -599,7 +675,12 @@
       const notice = mount.querySelector('.sp-notice');
       if (notice) notice.hidden = linked;
 
-      mount.querySelectorAll('.sp-tab').forEach(tb => tb.classList.toggle('is-active', tb.dataset.stab === activeTab));
+      mount.querySelectorAll('.sp-tab').forEach(tb => {
+        const selected = tb.dataset.stab === activeTab;
+        tb.classList.toggle('is-active', selected);
+        tb.setAttribute('aria-selected', String(selected));
+        tb.tabIndex = selected ? 0 : -1;
+      });
       mount.querySelectorAll('.sp-panel').forEach(p => { p.hidden = p.dataset.stab !== activeTab; });
 
       paintHero(mount);
@@ -752,7 +833,7 @@
     // paused, stale) session before the first /player read even lands.
     if (!lastSyncAt) lastSyncAt = Date.now();
     if (!pollTimer) pollTimer = setInterval(() => { if (!document.hidden && visibleTiles().length) refresh(); }, POLL_MS);
-    if (!tickTimer) tickTimer = setInterval(tick, 1000);
+    if (!tickTimer) { lastTickAt = Date.now(); tickTimer = setInterval(tick, 250); }
   }
   function stopPoll() {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
@@ -772,10 +853,14 @@
       || ((md.active && /spotify/i.test(String(md.app || ''))) ? md : null);
   }
 
-  // 1s local ticker: advance the progress bar between polls without any network
+  // Local ticker: advance the progress bar between polls without any network
   // call, so the hero feels live. No-ops when idle / hidden / not playing.
   let wasVisible = false;
+  let lastTickAt = 0;
   function tick() {
+    const now = Date.now();
+    const elapsed = Math.max(0, Math.min(now - lastTickAt, 2000));
+    lastTickAt = now; // Hidden time and slider drags must not accumulate a later jump.
     const vis = !document.hidden && visibleTiles().length > 0;
     // A widget revealed by a tab/page switch resyncs NOW — while hidden it does
     // zero polling (quota), so its painted state may be minutes old.
@@ -848,7 +933,7 @@
     // hero's playback may be live on a remote device.)
     if (sp === false && sameTrack) return;
     const dur = player.durationMs || 0;
-    localProgressMs = dur > 0 ? Math.min(localProgressMs + 1000, dur) : localProgressMs + 1000;
+    localProgressMs = dur > 0 ? Math.min(localProgressMs + elapsed, dur) : localProgressMs + elapsed;
     repaintAll(paintSeek);
   }
 
