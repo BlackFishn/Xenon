@@ -14,6 +14,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+- **Spotify has a cleaner, responsive player.** Wide widgets place the library beside playback; small and portrait widgets retain access to every tab. Larger touch targets, visible volume percentages, numbered queue rows, and a device shortcut make controls easier to use.
+- **Spotify interactions respond immediately.** Tabs reveal loading states without waiting for requests, playback feedback stays in sync across widget copies, and the local progress bar follows elapsed time every 250 ms without extra Spotify polling. Keyboard tabs, screen-reader states, and reduced-motion support are included. See the [Spotify widget guide](docs/spotify-widget.md).
+
 ### Added
 - Restore the System power-plan picker alongside live AI Usage while retaining the existing dashboard data store.
 - **Turning the crosshair ON in Xenon opens its Game Bar widget automatically.** Xenon waits for connection, applies pending edits, and confirms the overlay before showing ON. Duplicate clicks share one launch; startup failures stay visible and can be retried.
