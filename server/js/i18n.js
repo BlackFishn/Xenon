@@ -31865,6 +31865,11 @@ Object.assign(i18n.it, {
   perf_plan_failed: 'Impossibile cambiare il piano di alimentazione',
 });
 
+Object.assign(i18n.en, {
+  spotify_w_cooldown: "Spotify is limiting requests. Retry in {time}. Queue and devices may be out of date.",
+  spotify_w_waiting: "Waiting for Spotify. Saved data may be out of date.",
+});
+
 function t(key) {
   // Fallback: selected language → English → key name (never silently shows Italian to non-Italian users)
   return (i18n[lang] && i18n[lang][key]) ?? (i18n.en && i18n.en[key]) ?? key;

@@ -105,3 +105,29 @@ Changing playback devices clears the previous device's pending volume.
 ### Main v4.11.9 integration
 
 Up Next retains numbered, theme-aware rows and now plays a selected track inside its playlist or album context. Rows without a playable URI remain plain rows. The large square cover, lower control group, album backdrop and divider-free volume row remain unchanged.
+
+## Spotify request limits and recovery
+
+Spotify's API can temporarily reject requests with HTTP 429 while music continues
+playing in its desktop client. Windows media metadata can still update the
+dashboard during this period. Seeing a live title/cover therefore does not prove
+that queue, device or volume API controls are available.
+
+The dashboard shares cached reads between consumers and slows regular polling.
+The progress animation remains local, so fewer API reads do not make its clock
+less smooth. Queue and device lists refresh less often than playback and refresh
+after relevant user actions.
+
+When Spotify sends Retry-After, all provider calls wait for its full deadline.
+The provider persists only cooldown metadata in a companion file beside its
+token store; credentials and settings are not copied into that file. A normal
+backend restart retains the wait. This does not change Spotify's quota or shorten
+a restriction already imposed by Spotify.
+
+The widget and media strip display the restriction, retain their last known
+lists, and pause API-only controls until the wait ends. Local Windows media
+transport remains available when the active media session is Spotify.
+
+Recovery is automatic after the reported wait; the account can remain connected.
+Spotify may return a new deadline if a restriction is still active.
+See [Spotify's rate-limit guidance](https://developer.spotify.com/documentation/web-api/concepts/rate-limits).

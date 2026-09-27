@@ -39,7 +39,7 @@ async function setup(options = {}) {
     device: 'Desktop', supportsVolume: true, volume: 64 };
   const window = {};
   vm.runInNewContext(source, {
-    window, document, makeEl, onVisiblePage: () => true, Date: { now: () => now },
+    window, document, makeEl, mediaData: options.mediaData || null, onVisiblePage: () => options.visible !== false, Date: { now: () => now },
     setInterval(fn, ms) { intervals.set(ms, fn); return ms; },
     clearInterval(ms) { intervals.delete(ms); }, setTimeout() {}, clearTimeout() {},
     apiJson: async (url, init) => {
@@ -62,7 +62,7 @@ async function setup(options = {}) {
   await settle(30);
   return { mounts, requests, document, player, widget: window.SpotifyWidget,
     tick(ms = 250) { now += ms; intervals.get(250)(); },
-    poll(ms = 6000) { now += ms; intervals.get(6000)(); },
+    poll(ms = 15000) { now += ms; intervals.get(15000)(); },
     query: (selector, index = 0) => mounts[index].querySelector(selector),
     fire(node, type, event = {}) { (node._handlers[type] || []).forEach(fn => fn({ preventDefault() {}, ...event })); },
   };
@@ -224,7 +224,7 @@ test('unconfirmed volume is bounded and does not carry over to another device', 
   const vol = h.query('.sp-vol-range');
   vol.value = '37'; h.fire(vol, 'input'); h.fire(vol, 'change');
   await settle(30);
-  h.tick(9000);
+  h.tick(20000);
   h.widget.renderWidgets();
   assert.equal(vol.value, '64');
   vol.value = '37'; h.fire(vol, 'input'); h.fire(vol, 'change');
@@ -297,4 +297,101 @@ test('numbered queue rows play within their context in every widget copy', async
     assert.equal(action.uri, 'spotify:track:next');
     assert.equal(action.contextUri, 'spotify:playlist:queue-context');
   }
+});
+
+
+test('normal polling shares widget copies and reads lists only every thirty seconds', async () => {
+  const h = await setup();
+  for (let i = 0; i < 4; i++) { h.poll(); await settle(30); }
+  assert.equal(h.requests.filter(r => r.url.includes('/player')).length, 5);
+  assert.equal(h.requests.filter(r => r.url.endsWith('/queue')).length, 3);
+  h.query('.sp-tab[data-stab="devices"]').click(); await settle(30);
+  const devices = h.requests.filter(r => r.url.endsWith('/devices')).length;
+  h.poll(); await settle(30);
+  assert.equal(h.requests.filter(r => r.url.endsWith('/devices')).length, devices);
+  h.poll(); await settle(30);
+  assert.equal(h.requests.filter(r => r.url.endsWith('/devices')).length, devices + 1);
+});
+
+test('an hour-long status cooldown prevents seed, poll, tab and manual API controls from making reads', async () => {
+  let waiting = true;
+  const h = await setup({ api: url => url.endsWith('/status') && waiting
+    ? { connected: true, error: 'rate_limited', retryAfterMs: 3600000, retryAt: 3700000 } : undefined });
+  assert.equal(h.requests.length, 1, 'status informs the whole seed before any Spotify read');
+  assert.equal(h.query('.sp-cooldown').hidden, false);
+  assert.match(h.query('.sp-cooldown').textContent, /1:00:00/);
+  assert.equal(h.query('.sp-shuffle').disabled, true);
+  assert.equal(h.query('.sp-play').disabled, true, 'no selected local Spotify session to control');
+  for (let i = 0; i < 3; i++) {
+    h.poll(60000); h.tick(250);
+    h.query('.sp-tab[data-stab="devices"]').click();
+    h.query('.sp-tab[data-stab="playlists"]').click();
+    h.query('.sp-shuffle').click(); await settle(30);
+  }
+  assert.equal(h.requests.length, 1, 'all UI paths honor the same deadline');
+  assert.match(h.query('.sp-cooldown').textContent, /57:00/);
+  waiting = false;
+  h.poll(3600000); await settle(30); h.tick();
+  assert.equal(h.query('.sp-cooldown').hidden, true);
+  assert.equal(h.query('.sp-shuffle').disabled, false);
+  assert.ok(h.requests.some(r => r.url.includes('/player')), 'normal reads resume after expiry');
+});
+
+test('a queue refusal replaces a stale empty claim with a visible cooldown and preserves cached tracks', async () => {
+  for (const empty of [true, false]) {
+    let reject = false;
+    const h = await setup({ api: url => url.endsWith('/queue')
+      ? reject ? { ok: false, error: 'rate_limited', retryAfterMs: 3600000, retryAt: 3730000 }
+        : empty ? { ok: true, queue: [] } : undefined : undefined });
+    reject = true;
+    h.poll(30000); await settle(30);
+    assert.equal(h.query('.sp-cooldown').hidden, false);
+    const text = h.query('.sp-panel--queue').textContent;
+    if (empty) { assert.match(text, /Waiting for Spotify/); assert.doesNotMatch(text, /queue is empty/); }
+    else { assert.match(text, /Next song/); assert.equal(h.query('.sp-track').disabled, true); }
+    const reads = h.requests.length;
+    h.poll(30000); await settle(30);
+    assert.equal(h.requests.length, reads);
+  }
+});
+
+test('the first rejected row action retains cached queue and skips every resync read', async () => {
+  const h = await setup({ api: url => url === '/actions/run'
+    ? { ok: false, error: 'rate_limited', retryAfterMs: 3600000, retryAt: 3700000 } : undefined });
+  const count = h.requests.length, row = h.query('.sp-track');
+  row.click(); await settle(30);
+  assert.equal(h.requests.length, count + 1);
+  assert.equal(h.query('.sp-track'), row);
+  assert.equal(h.query('.sp-cooldown').hidden, false);
+  const volume = h.query('.sp-vol-range'); volume.value = '30'; h.fire(volume, 'change');
+  row.click(); await settle(30);
+  assert.equal(h.requests.length, count + 1, 'manual disabled controls do not bypass the guard');
+});
+
+test('local Spotify transport remains usable during cooldown without a Web API request', async () => {
+  const mediaData = { active: true, app: 'Spotify', playbackStatus: 'Playing', title: 'Local song', artist: 'Artist', position: 10, duration: 180 };
+  const h = await setup({ mediaData, api: url => {
+    if (url.endsWith('/status')) return { connected: true, error: 'rate_limited', retryAt: 3700000 };
+    if (url === '/media/playpause') return { ok: true };
+  } });
+  h.tick();
+  assert.equal(h.query('.sp-play').disabled, false);
+  h.query('.sp-play').click(); await settle(30);
+  assert.equal(h.requests.filter(r => r.url === '/media/playpause').length, 1);
+  assert.equal(h.requests.filter(r => r.url === '/actions/run').length, 0);
+  assert.equal(h.requests.filter(r => r.url.startsWith('/stream/spotify/')).length, 1);
+  assert.equal(h.query('.sp-cooldown').hidden, false, 'SMTC hero never hides the refusal');
+});
+
+test('a healthy fifteen-second poll does not trigger stale SMTC replacement after ten seconds', async () => {
+  const mediaData = { active: true, app: 'Spotify', playbackStatus: 'Playing', title: 'Stale local song', artist: 'Other', position: 10, duration: 180 };
+  const h = await setup({ mediaData });
+  h.tick(11000);
+  assert.equal(h.query('.sp-now-title').textContent, 'Song');
+});
+
+test('hidden mounted Spotify tiles do not seed background reads', async () => {
+  const h = await setup({ visible: false });
+  h.poll(); await settle(30);
+  assert.equal(h.requests.length, 0);
 });

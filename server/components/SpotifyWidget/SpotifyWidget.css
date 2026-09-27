@@ -40,6 +40,12 @@
   padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line);
   text-align: left; font-size: .78rem !important; color: var(--text); background: var(--control-bg);
 }
+.sp-cooldown {
+  flex: 0 0 auto; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--control-bg);
+  color: var(--muted-text); font-size: .7rem; line-height: 1.4;
+}
+.sp-stale .sp-library { --sp-soft: transparent; }
 .sp-notice:hover { background: var(--hover-bg); }
 .sp-notice-ico { display: inline-flex; color: #1ed760; }
 .sp-notice-ico svg { width: 18px; height: 18px; }

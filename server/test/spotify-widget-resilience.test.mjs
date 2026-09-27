@@ -144,18 +144,19 @@ test('every reason has a line to print', () => {
 // simply never said.
 const SERVER = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'stream-spotify.js'), 'utf8');
 
-test('the refusal carries how long the breaker holds', () => {
-  const m = /async function apiRequest\(method, pathWithQuery, bodyObj\) \{[\s\S]*?\n  \}/.exec(SERVER);
-  assert.ok(m, 'apiRequest is gone');
-  const refusals = m[0].match(/error: 'rate_limited'[^}]*/g) || [];
-  assert.equal(refusals.length, 2, 'expected the pre-check and the live 429');
-  for (const r of refusals) assert.match(r, /retryAfterMs: retryAfterMs\(\)/, `a refusal says nothing about the wait: ${r}`);
+test('all request refusals use the shared deadline result', () => {
+  assert.match(SERVER, /function cooldownFields\(\).*retryAfterMs: retryAfterMs\(\), retryAt: _rateLimitedUntil/);
+  assert.match(SERVER, /function rateLimitResult\(\).*error: 'rate_limited'.*cooldownFields\(\)/);
+  const precheck = /async function apiRequest\([^)]*\) \{[\s\S]*?\n  \}/.exec(SERVER);
+  const request = /async function requestUncached\([^)]*\) \{[\s\S]*?\n  \}/.exec(SERVER);
+  assert.match(precheck[0], /if \(rateLimited\(\)\) return rateLimitResult\(\)/);
+  assert.match(request[0], /res.status === 429.*await noteRateLimit\(res\); return rateLimitResult\(\)/);
 });
 
-test('the device list passes the wait on rather than flattening it', () => {
+test('the device list uses the shared read error mapper', () => {
   const m = /async function getDevices\(\) \{[\s\S]*?\n  \}/.exec(SERVER);
   assert.ok(m, 'getDevices is gone');
-  assert.match(m[0], /error: r\.error \|\| 'failed', retryAfterMs: r\.retryAfterMs/);
+  assert.match(m[0], /return readError\(r, 'failed'\)/);
 });
 
 test('the widget names the wait once it is worth naming', () => {
