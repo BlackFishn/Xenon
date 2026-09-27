@@ -6,6 +6,12 @@
 - Wait for queue playback commands before refreshing; keep the list on failure and explain missing backend actions, account permissions, device errors and network failures.
 - Preserve Spotify's queue order; reordering and insertion at a chosen position are not offered by its public playback API.
 
+## Unreleased — Spotify request recovery
+
+- Reduce duplicate Spotify polling across the widget and media strip; share short-lived playback, queue and device reads.
+- Honor the complete Spotify Retry-After deadline, retain cooldown across backend restarts, and stop API-only controls from repeatedly sending rejected requests.
+- Show Spotify's temporary API restriction with its remaining wait instead of an empty queue/device list; preserve the last known state and local media transport.
+
 ## Unreleased — live AI quotas and dynamic layout
 
 - Compact List rows now expand to reveal charts and details, while preserving the full ring and usage overview.

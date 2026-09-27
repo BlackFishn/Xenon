@@ -35,7 +35,12 @@
 
   const t = (k, fb) => (typeof window.t === 'function' ? window.t(k) : (fb != null ? fb : k));
   const el = (tag, cls, txt) => (typeof makeEl === 'function' ? makeEl(tag, cls, txt) : (() => { const n = document.createElement(tag); if (cls) n.className = cls; if (txt != null) n.textContent = txt; return n; })());
-  const api = (url, opt) => (typeof apiJson === 'function' ? apiJson(url, opt) : fetch((typeof SERVER === 'string' ? SERVER : '') + url, opt).then(r => r.json()).catch(() => null));
+  async function api(url, opt) {
+    if (cooldownActive()) return { ok: false, error: 'rate_limited', retryAfterMs: rateBackoffUntil - Date.now(), retryAt: rateBackoffUntil };
+    const response = await (typeof apiJson === 'function' ? apiJson(url, opt) : fetch((typeof SERVER === 'string' ? SERVER : '') + url, opt).then(r => r.json()).catch(() => null));
+    noteCooldown(response);
+    return response;
+  }
 
   let player = null;         // rich state from /stream/spotify/player
   let playlists = null;
@@ -57,7 +62,34 @@
   let active = false;        // strip lifecycle running (source is Spotify)
   let lastKey = '';          // last media track key, to resync promptly on song change
   let rateBackoffUntil = 0;  // while Spotify 429s us, hold off polling until this time
-  const POLL_MS = 5000;
+  const POLL_MS = 15000;
+  const LIST_POLL_MS = 30000;
+  let devicesReadAt = 0, pokeTimer = null, lastCooldownSecond = '';
+  let playlistsProblem = '', devicesProblem = '';
+
+  function cooldownActive() { return Date.now() < rateBackoffUntil; }
+  function noteCooldown(response) {
+    if (!response) return;
+    const until = Number(response.retryAt) || Date.now() + (Number(response.retryAfterMs) || 0);
+    if (response.error !== 'rate_limited' && until <= Date.now()) return;
+    rateBackoffUntil = Math.max(rateBackoffUntil, until > Date.now() ? until : Date.now() + 30000);
+    if (pokeTimer) { clearTimeout(pokeTimer); pokeTimer = null; }
+  }
+  function cooldownLine() {
+    const seconds = Math.ceil(Math.max(0, rateBackoffUntil - Date.now()) / 1000);
+    const time = seconds >= 3600 ? Math.floor(seconds / 3600) + ':' + String(Math.floor(seconds / 60) % 60).padStart(2, '0') + ':' + String(seconds % 60).padStart(2, '0')
+      : Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
+    return t('spotify_w_cooldown', 'Spotify is limiting requests. Retry in {time}. Queue and devices may be out of date.').replace('{time}', time);
+  }
+  function paintCooldown() {
+    const p = pane(); if (!p) return;
+    const waiting = cooldownActive();
+    p.querySelectorAll('.msp-cooldown').forEach(n => { n.hidden = !waiting; n.textContent = waiting ? cooldownLine() : ''; });
+    p.querySelectorAll('.msp-ctl, .msp-range, .msp-item').forEach(b => {
+      if (waiting) { b.dataset.mspCooldown = '1'; b.disabled = true; }
+      else if (b.dataset.mspCooldown === '1') { delete b.dataset.mspCooldown; b.disabled = b.classList.contains('msp-range') ? !(dur0() > 0) : false; }
+    });
+  }
 
   const pane = () => document.getElementById('media-pane-play');
   // Enrich only when the current media source is Spotify (the SMTC app resolves to
@@ -90,16 +122,19 @@
     else if (e === 'forbidden') msg = t('spotify_w_reconnect', 'Reconnect Spotify in Settings → Spotify to grant permission');
     else if (e === 'no_active_device') msg = t('spotify_w_no_active', 'No active Spotify device — start playback first');
     else if (e === 'nothing_playing') msg = t('spotify_w_nothing', 'Nothing playing right now');
-    else if (e === 'rate_limited') msg = t('spotify_w_busy', 'Spotify is busy — retrying shortly');
+    else if (e === 'rate_limited') msg = cooldownLine();
     if (msg && typeof showHubToast === 'function') showHubToast('Spotify', msg, '');
   }
 
   async function runAction(btn, action) {
     if (btn) { btn.disabled = true; btn.classList.remove('ok', 'err'); }
-    const r = await api('/actions/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action) });
+    let r;
+    try { r = await api('/actions/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action) }); }
+    catch { r = { ok: false, error: 'network' }; }
     const ok = !!(r && r.ok);
-    if (btn) { btn.classList.add(ok ? 'ok' : 'err'); setTimeout(() => { btn.classList.remove('ok', 'err'); btn.disabled = false; }, 1000); }
+    if (btn) { btn.classList.add(ok ? 'ok' : 'err'); setTimeout(() => { btn.classList.remove('ok', 'err'); btn.disabled = cooldownActive(); }, 1000); }
     if (!ok) controlToast(r);
+    if (!ok || cooldownActive()) { paint(); return r; }
     await loadPlayer();
     if (drawer === 'devices') await loadDevices();
     paint();
@@ -121,6 +156,8 @@
     if (content.querySelector('.msp')) return true;
 
     const strip = el('div', 'msp'); strip.hidden = true;
+    const notice = el('div', 'msp-hint msp-cooldown'); notice.hidden = true; notice.setAttribute('role', 'status');
+    strip.appendChild(notice);
 
     // Seek row
     const seek = el('div', 'msp-seek');
@@ -180,7 +217,8 @@
     close.innerHTML = ICONS.close;   // static, trusted SVG
     close.addEventListener('click', () => { drawer = ''; paint(); });
     shead.appendChild(close);
-    sheet.append(shead, el('div', 'msp-sheet-list'));
+    const sheetNotice = el('div', 'msp-hint msp-cooldown'); sheetNotice.hidden = true;
+    sheet.append(shead, sheetNotice, el('div', 'msp-sheet-list'));
     p.appendChild(sheet);
     return true;
   }
@@ -203,7 +241,7 @@
   function toggleDrawer(which) {
     drawer = (drawer === which) ? '' : which;
     if (drawer === 'playlists' && playlists === null) loadPlaylists().then(paint);
-    else if (drawer === 'devices' && devices === null) loadDevices().then(paint);
+    else if (drawer === 'devices' && !cooldownActive()) loadDevices().then(paint);
     else paint();
   }
 
@@ -215,7 +253,7 @@
     const dur = dur0();
     const pos = Math.min(localProgressMs, dur || localProgressMs);
     range.value = String(dur > 0 ? Math.round(pos / dur * 1000) : 0);
-    range.disabled = !(dur > 0);
+    range.disabled = !(dur > 0) || cooldownActive();
     setFill(range);
     const cur = p.querySelector('.msp-cur'); if (cur) cur.textContent = fmt(pos);
     const tot = p.querySelector('.msp-tot'); if (tot) tot.textContent = dur > 0 ? fmt(dur) : '0:00';
@@ -223,6 +261,14 @@
 
   function drawerRows() {
     const frag = document.createDocumentFragment();
+    const list = drawer === 'playlists' ? playlists : devices;
+    const problem = drawer === 'playlists' ? playlistsProblem : devicesProblem;
+    if ((!list || !list.length) && (cooldownActive() || problem)) {
+      frag.appendChild(el('div', 'msp-hint', cooldownActive()
+        ? t('spotify_w_waiting', 'Waiting for Spotify. Saved data may be out of date.')
+        : t('spotify_w_unreachable', 'Could not reach Spotify — retrying')));
+      return frag;
+    }
     if (drawer === 'playlists') {
       if (playlists === null) { frag.appendChild(el('div', 'msp-hint', t('spotify_w_loading', 'Loading…'))); return frag; }
       if (!playlists.length) { frag.appendChild(el('div', 'msp-hint', t('spotify_w_no_playlists', 'No playlists'))); return frag; }
@@ -290,14 +336,14 @@
         sheet.querySelector('.msp-sheet-list').replaceChildren(drawerRows());
       }
     }
+    paintCooldown();
   }
 
   // ── Data ────────────────────────────────────────────────────────────
   async function loadPlayer(fresh) {
     const r = await api('/stream/spotify/player' + (fresh ? '?fresh=1' : ''));
-    // Rate-limited: keep the last state and ease off hard (every ~30s), so we stop
-    // restarting Spotify's window and the limit can actually clear.
-    if (r && r.error === 'rate_limited') { rateBackoffUntil = Date.now() + 30000; return; }
+    // Keep the last state; api() holds every path until Spotify's deadline.
+    if (r && r.error === 'rate_limited') return;
     if (r && r.error === 'not_connected') { player = null; shown = false; return; }
     // Transient failure (network / http_5xx / forbidden) → KEEP the last known state
     // so the strip doesn't blink away on a hiccup. Only a real unlink clears it.
@@ -319,10 +365,16 @@
     shown = true;                     // source is Spotify AND the API is linked
   }
   function loadPlaylists() {
-    return api('/stream/spotify/playlists').then(d => { playlists = (d && d.ok && Array.isArray(d.playlists)) ? d.playlists : []; }).catch(() => { playlists = []; });
+    return api('/stream/spotify/playlists').then(d => {
+      if (d && d.ok && Array.isArray(d.playlists)) { playlists = d.playlists; playlistsProblem = ''; }
+      else playlistsProblem = (d && d.error) || 'failed';
+    }).catch(() => { playlistsProblem = 'failed'; });
   }
   function loadDevices() {
-    return api('/stream/spotify/devices').then(d => { devices = (d && d.ok && Array.isArray(d.devices)) ? d.devices : []; }).catch(() => { devices = []; });
+    return api('/stream/spotify/devices').then(d => {
+      if (d && d.ok && Array.isArray(d.devices)) { devices = d.devices; devicesProblem = ''; devicesReadAt = Date.now(); }
+      else devicesProblem = (d && d.error) || 'failed';
+    }).catch(() => { devicesProblem = 'failed'; });
   }
 
   async function refresh(fresh) {
@@ -330,13 +382,23 @@
     if (Date.now() < rateBackoffUntil) return;   // rate-limit backoff
     if (loading) return; loading = true;
     try {
-      await loadPlayer(fresh);
-      if (shown && drawer === 'devices') await loadDevices();
+      const status = await api('/stream/spotify/status');
+      if (status && status.connected === false) { shown = false; player = null; paint(); return; }
+      if (status && status.connected === true) shown = true;
+      if (!cooldownActive()) await loadPlayer(fresh);
+      if (!cooldownActive() && shown && drawer === 'devices' && (fresh || devices === null || Date.now() - devicesReadAt >= LIST_POLL_MS)) await loadDevices();
       paint();
     } finally { loading = false; }
   }
 
   function tick() {
+    const waiting = cooldownActive();
+    const second = waiting ? String(Math.ceil((rateBackoffUntil - Date.now()) / 1000)) : '';
+    if (second !== lastCooldownSecond) {
+      const expired = !!lastCooldownSecond && !waiting;
+      lastCooldownSecond = second; paintCooldown();
+      if (expired) refresh();
+    }
     if (!shown || !paneVisible() || dragging) return;
     if (!player || !player.track) return;
     // The strip only exists when the LOCAL SMTC source is Spotify, so Windows'
@@ -357,6 +419,7 @@
   function stopTimers() {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+    if (pokeTimer) { clearTimeout(pokeTimer); pokeTimer = null; }
   }
 
   const mediaKey = () => (typeof mediaData === 'object' && mediaData) ? (String(mediaData.title || '') + '|' + String(mediaData.artist || mediaData.album || '')) : '';
@@ -364,7 +427,7 @@
   // Called from media.js on every media update (fires often — SSE ticks). Manages
   // the strip lifecycle but only forces a /player refresh on the RISING edge
   // (source became Spotify) and when the TRACK actually changes — otherwise the
-  // periodic 5s poll handles it, so idle media ticks don't drive extra requests.
+  // periodic 15s poll handles it, so idle media ticks don't drive extra requests.
   function sync() {
     if (!sourceIsSpotify()) {
       if (active) {
@@ -414,7 +477,7 @@
       lastSmtcPos = pos;
       lastSmtcAt = Date.now();
       // 5s threshold: an adopted API snapshot can lag real playback by up to its
-      // 4s cache TTL, so smaller disagreements are normal jitter, not events.
+      // snapshot cache, so smaller disagreements are normal jitter, not events.
       if (jumped && shown && !dragging && Date.now() >= suppressSyncUntil
           && Math.abs(pos * 1000 - localProgressMs) > 5000) {
         localProgressMs = pos * 1000;
@@ -430,8 +493,9 @@
   // Re-read the player promptly with the snapshot cache bypassed, so the outcome
   // lands on the seek bar in about a second instead of waiting out poll + cache TTL.
   function poke() {
-    if (!active) return;
-    [600, 1800].forEach(d => setTimeout(() => refresh(true), d));
+    if (!active || cooldownActive()) return;
+    if (pokeTimer) clearTimeout(pokeTimer);
+    pokeTimer = setTimeout(() => { pokeTimer = null; refresh(true); }, 600);
   }
 
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });

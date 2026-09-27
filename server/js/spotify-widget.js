@@ -41,7 +41,14 @@
 
   const t = (k, fb) => (typeof window.t === 'function' ? window.t(k) : (fb != null ? fb : k));
   const el = makeEl;   // shared DOM factory from utils.js
-  const api = apiJson; // shared fetch-JSON helper from utils.js
+  // A local deadline guards every path, including tab clicks and post-action reads.
+  async function api(url, options) {
+    if (cooldownActive() && (url.startsWith('/stream/spotify/') || url === '/actions/run')
+        && url !== '/stream/spotify/launch') return cooldownResult();
+    const response = await apiJson(url, options);
+    noteCooldown(response);
+    return response;
+  }
 
   // Only tiles actually placed on a dashboard page count. A hidden / never-added
   // widget sits in the #widget-pool (outside any .pager-page), so it does no polling.
@@ -110,7 +117,46 @@
   // time and why the message has to read without it.
   let rateLimitMs = 0;
   let backoffUntil = 0;      // while rate-limited, hold off polling until this time
-  const POLL_MS = 6000;      // network refresh cadence while a tile is visible
+  const POLL_MS = 15000;      // network refresh cadence while a tile is visible
+
+  const LIST_POLL_MS = 30000;
+  let queueReadAt = 0, devicesReadAt = 0, queueTrackId = null;
+  let cooldownPaintKey = '';
+
+  function cooldownActive() { return Date.now() < backoffUntil; }
+  function cooldownResult() {
+    return { ok: false, error: 'rate_limited', retryAfterMs: Math.max(0, backoffUntil - Date.now()), retryAt: backoffUntil };
+  }
+  function noteCooldown(response) {
+    if (!response) return;
+    const until = Number(response.retryAt) || Date.now() + (Number(response.retryAfterMs) || 0);
+    if (response.error !== 'rate_limited' && until <= Date.now()) return;
+    backoffUntil = Math.max(backoffUntil, until > Date.now() ? until : Date.now() + 30000);
+    rateLimited = true;
+    rateLimitMs = backoffUntil - Date.now();
+    repaintAll(paintCooldown);
+  }
+  function localTransportAvailable() {
+    const md = typeof mediaData === 'object' && mediaData;
+    return !!(md && md.active && /spotify/i.test(String(md.app || '')));
+  }
+  function paintCooldown(mount) {
+    const waiting = cooldownActive();
+    const notice = mount.querySelector('.sp-cooldown');
+    if (notice) { notice.hidden = !waiting; notice.textContent = waiting ? busyLine() : ''; }
+    mount.querySelector('.sp-wrap').classList.toggle('sp-stale', waiting);
+    const apiOnly = '.sp-like, .sp-shuffle, .sp-repeat, .sp-seek-range, .sp-vol-range, .sp-track.is-playable, .sp-pl, .sp-dev, .sp-search-input, .sp-search-submit, .sp-search-result';
+    mount.querySelectorAll(apiOnly + ', .sp-play, .sp-prev, .sp-next').forEach(control => {
+      const transport = control.classList.contains('sp-play') || control.classList.contains('sp-prev') || control.classList.contains('sp-next');
+      const blocked = waiting && (!transport || !localTransportAvailable());
+      if (blocked) { control.dataset.spCooldown = '1'; control.disabled = true; }
+      else if (control.dataset.spCooldown === '1') {
+        delete control.dataset.spCooldown;
+        control.disabled = control.classList.contains('sp-play') ? playbackPending
+          : control.classList.contains('sp-seek-range') ? !(player && player.durationMs > 0) : false;
+      }
+    });
+  }
 
   const TABS = [
     { id: 'queue', labelKey: 'spotify_w_upnext', fb: 'Up Next' },
@@ -146,9 +192,7 @@
     else if (e === 'no_active_device') msg = t('spotify_w_no_active', 'No active Spotify device — start playback first');
     else if (e === 'nothing_playing') msg = t('spotify_w_nothing', 'Nothing playing right now');
     else if (e === 'rate_limited') {
-      rateLimited = true;
-      rateLimitMs = Math.max(0, Number(r.retryAfterMs) || 0);
-      backoffUntil = Math.max(backoffUntil, Date.now() + Math.max(30000, rateLimitMs));
+      noteCooldown(r);
       msg = busyLine();
     }
     else if (e === 'unknown_action' || e === 'unsupported') msg = t('spotify_w_restart', 'Restart Xenon to load the updated Spotify controls.');
@@ -198,19 +242,19 @@
         }
       }
     }
-    if (btn) { btn.classList.add(ok ? 'ok' : 'err'); setTimeout(() => { btn.classList.remove('ok', 'err'); btn.disabled = btn.classList.contains('sp-play') && playbackPending; }, 1000); }
+    if (btn) { btn.classList.add(ok ? 'ok' : 'err'); setTimeout(() => { btn.classList.remove('ok', 'err'); btn.disabled = (btn.classList.contains('sp-play') && playbackPending) || (cooldownActive() && (!SMTC_FALLBACK[action.type] || !localTransportAvailable())); }, 1000); }
     if (!ok) {
       const message = controlToast(r);
       if (action.type === 'spotifyPlayUri' || action.type === 'spotifyQueueUri') {
         repaintAll(m => { m.querySelector('.sp-queue-feedback').textContent = message; });
-        return r;
       }
     }
+    if (!ok || cooldownActive()) { paint(); return r; }
     if (action.type === 'spotifyQueueUri') {
       // Spotify acknowledges the write before the new queue is visible.
       await sleep(450);
-      await loadQueue();
-      repaintAll(paintQueue);
+      if (!cooldownActive()) await loadQueue();
+      repaintAll(m => { paintQueue(m); paintCooldown(m); });
       return r;
     }
     // Volume writes are serialized below; resync once after the latest write.
@@ -231,6 +275,7 @@
         for (const d of [450, 900, 1600]) {
           await sleep(d);
           await loadPlayer(true);
+          if (cooldownActive()) break;
           const tid = (player && player.track && (player.track.uri || player.track.id)) || null;
           if (!player || tid !== fromTid) break;   // flipped (or state gone) → done
         }
@@ -238,8 +283,8 @@
       } else {
         await loadPlayer(true);
       }
-      if (activeTab === 'queue') await loadQueue();
-      else if (activeTab === 'devices') await loadDevices();
+      if (!cooldownActive() && activeTab === 'queue') await loadQueue();
+      else if (!cooldownActive() && activeTab === 'devices') await loadDevices();
       paint();
     }
     return r;
@@ -281,6 +326,9 @@
     notice.append(nIco, el('span', 'sp-notice-txt', t('spotify_w_connect', 'Connect in Settings → Spotify')));
     notice.addEventListener('click', openSpotifySettings);
     wrap.appendChild(notice);
+    const cooldown = el('div', 'sp-cooldown'); cooldown.hidden = true;
+    cooldown.setAttribute('role', 'status');
+    wrap.appendChild(cooldown);
     const content = el('div', 'sp-content');
     wrap.appendChild(content);
 
@@ -445,12 +493,13 @@
 
   // Switch the active internal tab and lazy-load its data the first time it opens.
   function selectTab(id) {
+    const changed = activeTab !== id;
     activeTab = id;
     paint(); // Show the selected panel immediately, including its loading state.
-    if (!connected || tabLoads.has(id)) return;
-    const load = id === 'queue' && queue === null ? loadQueue
+    if (!connected || cooldownActive() || tabLoads.has(id)) return;
+    const load = id === 'queue' && (changed || queue === null) ? loadQueue
       : id === 'playlists' && playlists === null ? loadPlaylists
-      : id === 'devices' && devices === null ? loadDevices : null;
+      : id === 'devices' && (changed || devices === null) ? loadDevices : null;
     if (load) tabLoads.set(id, load().finally(() => { tabLoads.delete(id); paint(); }));
   }
 
@@ -478,7 +527,7 @@
   }
 
   async function commitVolume(value) {
-    if (!player || !player.supportsVolume || !Number.isFinite(value)) return;
+    if (!player || !player.supportsVolume || !Number.isFinite(value) || cooldownActive()) { repaintAll(paintVolume); return; }
     volumeIntent = { value: Math.max(0, Math.min(100, Math.round(value))), device: player.device, pending: true, sent: false };
     repaintAll(paintVolume);
     if (volumeSending) return;
@@ -495,16 +544,16 @@
         if (volumeIntent === intent) {
           if (result && result.ok) {
             intent.pending = false;
-            // One normal poll can confirm the write even if the immediate read
-            // still contains Spotify's pre-action volume.
-            intent.until = Date.now() + 8000;
+            // Hold through the next normal poll if the immediate read still
+            // contains Spotify's pre-action volume.
+            intent.until = Date.now() + POLL_MS + 4000;
           } else volumeIntent = null;
         }
         repaintAll(paintVolume);
       }
     } finally {
       volumeSending = false;
-      if (tiles().length) { await loadPlayer(true); paint(); }
+      if (visibleTiles().length && !cooldownActive()) { await loadPlayer(true); paint(); }
     }
   }
 
@@ -524,7 +573,7 @@
     const playing = !!(player && player.playing);
     const pb = mount.querySelector('.sp-play');
     if (pb) {
-      pb.disabled = playbackPending;
+      pb.disabled = playbackPending || (cooldownActive() && !localTransportAvailable());
       pb.innerHTML = playing ? ICONS.pause : ICONS.play;
       pb.title = playing ? t('spotify_w_pause', 'Pause') : t('spotify_w_play', 'Play');
       pb.setAttribute('aria-label', pb.title);
@@ -550,7 +599,7 @@
     if (!range) return;
     const pos = Math.min(localProgressMs, dur || localProgressMs);
     range.value = String(dur > 0 ? Math.round(pos / dur * 1000) : 0);
-    range.disabled = !(dur > 0);
+    range.disabled = !(dur > 0) || cooldownActive();
     setRangeFill(range);
     if (cur) cur.textContent = fmt(pos);
     if (tot) tot.textContent = dur > 0 ? fmt(dur) : '0:00';
@@ -681,7 +730,10 @@
         try { await runAction(row, { type: 'spotifyPlayUri', uri: tk.uri, contextUri: contextUri || '' }); }
         finally {
           queuePlayPending = false;
-          repaintAll(m => m.querySelectorAll('.sp-queue-list .sp-track.is-playable').forEach(b => { b.disabled = false; }));
+          repaintAll(m => {
+            m.querySelectorAll('.sp-queue-list .sp-track.is-playable').forEach(b => { b.disabled = false; });
+            paintCooldown(m);
+          });
         }
       });
     }
@@ -720,11 +772,12 @@
       toggle.textContent = open ? t('spotify_w_back_queue', '← Back to queue') : t('spotify_w_add_songs', '+ Add songs');
       if (open) input.focus();
       else { requestId++; searching = false; submit.disabled = false; feedback.textContent = ''; }
+      repaintAll(paintCooldown);
     });
     form.addEventListener('submit', async event => {
       event.preventDefault();
       const query = input.value.trim();
-      if (!query || searching) return;
+      if (!query || searching || cooldownActive()) return;
       const request = ++requestId;
       searching = true; submit.disabled = true;
       feedback.textContent = t('spotify_w_searching', 'Searching…');
@@ -734,6 +787,7 @@
       catch { response = null; }
       if (request !== requestId) return;
       searching = false; submit.disabled = false;
+      repaintAll(paintCooldown);
       if (!response || !response.ok) {
         feedback.textContent = controlToast(response || { ok: false, error: 'search_failed' });
         return;
@@ -768,23 +822,29 @@
             }
           } finally {
             queueAddPending = false;
-            repaintAll(m => m.querySelectorAll('.sp-search-result').forEach(b => { b.disabled = false; }));
+            repaintAll(m => {
+              m.querySelectorAll('.sp-search-result').forEach(b => { b.disabled = false; });
+              paintCooldown(m);
+            });
           }
         });
         results.appendChild(row);
       });
+      repaintAll(paintCooldown);
     });
   }
 
   function paintQueue(mount) {
     const panel = mount.querySelector('.sp-queue-list');
     if (!panel) return;
-    // Skip the rebuild when nothing changed — paint() runs every 6s poll tick and the
+    // Skip the rebuild when nothing changed — paint() runs every poll tick and the
     // queue is usually identical (avoids re-creating every row + its art each time).
-    const sig = connected !== true ? 'x' : queue === null ? (rateLimited ? 'b' : 'l') : !queue.length ? 'e'
+    const waiting = cooldownActive() && (!queue || !queue.length);
+    const sig = waiting ? 'waiting' : connected !== true ? 'x' : queue === null ? (rateLimited ? 'b' : 'l') : !queue.length ? 'e'
       : 'q' + (queueReliable ? '' : '~') + queueContext + ':' + queue.map(tk => (tk.uri || tk.name || '')).join('|');
     if (panel.dataset.spSig === sig) return;
     panel.dataset.spSig = sig;
+    if (waiting) { panel.replaceChildren(el('div', 'sp-empty', t('spotify_w_waiting', 'Waiting for Spotify. Saved data may be out of date.'))); return; }
     if (connected !== true) { panel.replaceChildren(el('div', 'sp-empty', t('spotify_w_notlinked', 'Not linked'))); return; }
     if (queue === null) {
       panel.replaceChildren(el('div', 'sp-empty', rateLimited
@@ -807,10 +867,12 @@
   function paintPlaylists(mount) {
     const panel = mount.querySelector('.sp-panel--playlists');
     if (!panel) return;
-    const sig = connected !== true ? 'x' : playlists === null ? 'l' + playlistsProblem : !playlists.length ? 'e'
+    const waiting = cooldownActive() && (!playlists || !playlists.length);
+    const sig = waiting ? 'waiting' : connected !== true ? 'x' : playlists === null ? 'l' + playlistsProblem : !playlists.length ? 'e'
       : 'p' + playlists.map(p => (p.uri || p.name || '') + ':' + (p.tracks != null ? p.tracks : '')).join('|');
     if (panel.dataset.spSig === sig) return;
     panel.dataset.spSig = sig;
+    if (waiting) { panel.replaceChildren(el('div', 'sp-empty', t('spotify_w_waiting', 'Waiting for Spotify. Saved data may be out of date.'))); return; }
     if (connected !== true) { panel.replaceChildren(el('div', 'sp-empty', t('spotify_w_notlinked', 'Not linked'))); return; }
     if (playlists === null) {
       panel.replaceChildren(el('div', 'sp-empty',
@@ -838,10 +900,12 @@
   function paintDevices(mount) {
     const panel = mount.querySelector('.sp-panel--devices');
     if (!panel) return;
-    const sig = connected !== true ? 'x' : devices === null ? 'l' + devicesProblem : !devices.length ? 'e'
+    const waiting = cooldownActive() && (!devices || !devices.length);
+    const sig = waiting ? 'waiting' : connected !== true ? 'x' : devices === null ? 'l' + devicesProblem : !devices.length ? 'e'
       : 'd' + devices.map(dv => (dv.name || '') + ':' + (dv.active ? 1 : 0) + ':' + (dv.volume != null ? dv.volume : '')).join('|');
     if (panel.dataset.spSig === sig) return;
     panel.dataset.spSig = sig;
+    if (waiting) { panel.replaceChildren(el('div', 'sp-empty', t('spotify_w_waiting', 'Waiting for Spotify. Saved data may be out of date.'))); return; }
     if (connected !== true) { panel.replaceChildren(el('div', 'sp-empty', t('spotify_w_notlinked', 'Not linked'))); return; }
     if (devices === null) {
       panel.replaceChildren(el('div', 'sp-empty',
@@ -875,6 +939,12 @@
   // shortly" reads as a broken integration rather than as a wait with an end.
   // So the wait is named once it is long enough to be worth naming.
   function busyLine() {
+    if (cooldownActive()) {
+      const seconds = Math.ceil((backoffUntil - Date.now()) / 1000);
+      const time = seconds >= 3600 ? Math.floor(seconds / 3600) + ':' + String(Math.floor(seconds / 60) % 60).padStart(2, '0') + ':' + String(seconds % 60).padStart(2, '0')
+        : Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
+      return t('spotify_w_cooldown', 'Spotify is limiting requests. Retry in {time}. Queue and devices may be out of date.').replace('{time}', time);
+    }
     const mins = Math.round(rateLimitMs / 60000);
     if (mins >= 2) return t('spotify_w_busy_for', 'Spotify is busy — about {m} min').replace('{m}', String(mins));
     return t('spotify_w_busy', 'Spotify is busy — retrying shortly');
@@ -930,13 +1000,14 @@
       paintQueue(mount);
       paintPlaylists(mount);
       paintDevices(mount);
+      paintCooldown(mount);
     });
   }
 
   // ── Data loads ────────────────────────────────────────────────────────────
   async function loadStatus() {
     const s = await api('/stream/spotify/status');
-    if (s) { connected = !!s.connected; username = s.login || ''; }
+    if (s && typeof s.connected === 'boolean') { connected = s.connected; username = s.login || ''; }
   }
   async function loadPlayer(fresh) {
     if (connected !== true) { player = null; spotifyOpen = null; return; }
@@ -946,8 +1017,10 @@
     // Rate-limited (429): Spotify is briefly refusing us. Keep the last known state
     // and don't fire the extra devices call — hammering only extends the cooldown.
     if (p && p.error === 'rate_limited') { rateLimited = true; rateLimitMs = Number(p.retryAfterMs) || 0; return; }
-    rateLimited = false;
-    rateLimitMs = 0;
+    if (!cooldownActive()) {
+      rateLimited = false;
+      rateLimitMs = 0;
+    }
     playbackForbidden = !!(p && p.error === 'forbidden');
     if (p && p.ok) {
       player = p;
@@ -1000,11 +1073,11 @@
     await api('/stream/spotify/launch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
     let tries = 0;
     const recheck = () => {
-      if (!tiles().length) { if (btn) btn.disabled = false; return; }
+      if (!visibleTiles().length || cooldownActive()) { if (btn) btn.disabled = false; return; }
       loadPlayer().then(() => {
         paint();
         tries += 1;
-        if (!spotifyOpen && (!player || !player.track) && tries < 6) setTimeout(recheck, 2000);
+        if (!cooldownActive() && !spotifyOpen && (!player || !player.track) && tries < 6) setTimeout(recheck, 2000);
         else if (btn) btn.disabled = false;
       });
     };
@@ -1017,6 +1090,7 @@
         if (requestId !== queueLoadId || connected !== true) return;
         if (d && d.ok && Array.isArray(d.queue)) {
           queue = d.queue;
+          queueReadAt = Date.now(); queueTrackId = lastTrackId;
           queueReliable = d.reliable !== false;   // default trusting; only an explicit false marks it a guess
           queueContext = typeof d.contextUri === 'string' ? d.contextUri : '';
         } else if (d && d.error === 'no_playback') {
@@ -1055,7 +1129,7 @@
   function loadDevices() {
     return api('/stream/spotify/devices')
       .then(d => {
-        if (d && d.ok && Array.isArray(d.devices)) { devices = d.devices; devicesProblem = ''; }
+        if (d && d.ok && Array.isArray(d.devices)) { devices = d.devices; devicesProblem = ''; devicesReadAt = Date.now(); }
         else devicesProblem = reasonFor(d);
       })
       .catch(() => { devicesProblem = 'failed'; });
@@ -1063,28 +1137,20 @@
 
   // One-shot seed on mount: status + (if linked) the now-playing state, for an
   // instant hero paint.
-  async function seed() {
-    if (!tiles().length) return;
-    await loadStatus();
-    if (connected) { await loadPlayer(); if (activeTab === 'queue') await loadQueue(); }
-    else { player = null; queue = null; playlists = null; devices = null; playlistsProblem = ''; devicesProblem = ''; }
-    lastRefreshAt = Date.now();   // the first tick's reveal edge must not repeat this round
-    paint();
-  }
+  async function seed() { await refresh(); }
 
   // Poll only while a tile is placed AND the page is visible (never on the idle
   // path). Refreshes status + player, and the open list tab so it stays current.
   let refreshing = false;    // the reveal edge in tick(), visibilitychange and the poll can converge here
   let lastRefreshAt = 0;
   async function refresh() {
-    if (!tiles().length || document.hidden) return;
+    if (!visibleTiles().length || document.hidden) return;
     // One refresh at a time, never two within 2s: a tab reveal fires both the
     // visibilitychange listener and tick()'s rising edge — unguarded, every
     // reveal cost a doubled round of Spotify reads (quota this file fights for).
     if (refreshing || Date.now() - lastRefreshAt < 2000) return;
-    // Rate-limit backoff: while Spotify is 429-ing us, probe far less often (every
-    // ~30s, not 6s). Each probe that leaks after the server cooldown restarts
-    // Spotify's window, so easing right off is what actually lets the limit clear.
+    // Honor Spotify's full deadline; local ticks keep the countdown moving
+    // without probing reads or extending the wait.
     if (Date.now() < backoffUntil) return;
     refreshing = true;
     try {
@@ -1092,12 +1158,12 @@
       if (connected) {
         await loadPlayer();
         if (!rateLimited) {
-          if (activeTab === 'queue') await loadQueue();
-          else if (activeTab === 'devices') await loadDevices();   // devices change often
+          if (activeTab === 'queue' && (queue === null || queueTrackId !== lastTrackId || Date.now() - queueReadAt >= LIST_POLL_MS)) await loadQueue();
+          else if (activeTab === 'devices' && (devices === null || Date.now() - devicesReadAt >= LIST_POLL_MS)) await loadDevices();   // devices change often
           else if (activeTab === 'playlists' && playlists === null) await loadPlaylists();
         }
-      } else { player = null; queue = null; }
-      backoffUntil = rateLimited ? Math.max(backoffUntil, Date.now() + Math.max(30000, rateLimitMs)) : 0;
+      } else { player = null; queue = null; playlists = null; devices = null; playlistsProblem = ''; devicesProblem = ''; }
+      if (!cooldownActive()) rateLimited = false;
       paint();
     } finally { refreshing = false; lastRefreshAt = Date.now(); }
   }
@@ -1136,6 +1202,14 @@
     const now = Date.now();
     const elapsed = Math.max(0, Math.min(now - lastTickAt, 2000));
     lastTickAt = now; // Hidden time and slider drags must not accumulate a later jump.
+    const waiting = cooldownActive();
+    const cooldownKey = waiting ? String(Math.ceil((backoffUntil - now) / 1000)) : '';
+    if (cooldownKey !== cooldownPaintKey) {
+      const expired = !!cooldownPaintKey && !waiting;
+      cooldownPaintKey = cooldownKey;
+      if (expired) { rateLimited = false; rateLimitMs = 0; paint(); refresh(); }
+      else repaintAll(paintCooldown);
+    }
     const vis = !document.hidden && visibleTiles().length > 0;
     // A widget revealed by a tab/page switch resyncs NOW — while hidden it does
     // zero polling (quota), so its painted state may be minutes old.
@@ -1157,7 +1231,7 @@
     // and the track itself (title/artist/cover/duration/position) when the song
     // moved on while Spotify's API was silent. While reads succeed the API stays
     // authoritative.
-    if (connected === true && Date.now() - lastSyncAt > 10000 && s && (s.title || s.artist)) {
+    if (connected === true && (cooldownActive() || Date.now() - lastSyncAt > POLL_MS * 2) && s && (s.title || s.artist)) {
       if (!player) player = { ok: true, playing: false, track: null };
       const pos = Number.isFinite(Number(s.position)) ? Number(s.position) : null;
       // Mirror play/pause only when the local session is provably THIS playback:
@@ -1194,7 +1268,7 @@
         if (moved && Date.now() >= suppressSyncUntil && Math.abs(pos * 1000 - localProgressMs) > 5000) {
           localProgressMs = Math.max(0, pos * 1000);
           // Hold the recovering API off for a beat: its first answer can come from
-          // the server's up-to-4s-old snapshot cache still holding the pre-seek
+          // the server's cached pre-action snapshot cache still holding the pre-seek
           // progress, which would yank the bar right back (media-spotify.js does
           // the same after adopting).
           suppressSyncUntil = Date.now() + 4000;

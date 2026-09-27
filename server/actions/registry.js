@@ -691,10 +691,15 @@ function createRegistry(deps) {
           // Spotify Premium — the provider surfaces a 'premium_required' error.
           if (typeof d.spotify !== 'function') return { ok: false, error: 'spotify_unavailable' };
           const r = await d.spotify(action);
-          if (!r || r.ok !== false) return { ok: true };
-          const result = { ok: false, error: r.error || 'spotify_failed' };
-          if (Number.isFinite(r.retryAfterMs)) result.retryAfterMs = Math.max(0, r.retryAfterMs);
-          return result;
+          if (r && r.ok === false) {
+            const result = { ok: false, error: r.error || 'spotify_failed' };
+            // Keep Spotify's deadline through the action boundary so controls wait
+            // as long as reads do, without exposing other provider response fields.
+            if (Number.isFinite(r.retryAfterMs) && r.retryAfterMs > 0) result.retryAfterMs = r.retryAfterMs;
+            if (Number.isSafeInteger(r.retryAt) && r.retryAt > 0) result.retryAt = r.retryAt;
+            return result;
+          }
+          return { ok: true };
         }
         case 'haToggle':
         case 'haScene':

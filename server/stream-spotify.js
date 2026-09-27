@@ -17,6 +17,8 @@
 
 const path = require('path');
 const crypto = require('crypto');
+const fs = require('fs');
+const { updateFileAtomic } = require('./atomic-write');
 const { makeCredsNormalizer, createTokenStore, FORM } = require('./stream-common');
 
 const AUTH_URL = 'https://accounts.spotify.com/authorize';
@@ -57,6 +59,7 @@ function b64url(buf) {
 //   fetch — fetch implementation (defaults to global fetch)
 function createSpotifyProvider(deps) {
   const d = deps || {};
+  const now = () => typeof d.now === 'function' ? d.now() : Date.now();
   const _fetch = d.fetch || ((...a) => fetch(...a));
   const clientId = d.clientId || '';
   const tokensFile = d.tokensFile || path.join(__dirname, 'stream-tokens.json');
@@ -68,8 +71,8 @@ function createSpotifyProvider(deps) {
   // memory only — an unfinished login simply expires; nothing sensitive persists.
   const pending = new Map();
   function sweepPending() {
-    const now = Date.now();
-    for (const [k, v] of pending) if (now - v.at > PENDING_TTL_MS) pending.delete(k);
+    const at = now();
+    for (const [k, v] of pending) if (at - v.at > PENDING_TTL_MS) pending.delete(k);
   }
 
   function configured() { return !!clientId; }
@@ -84,7 +87,7 @@ function createSpotifyProvider(deps) {
     const verifier = b64url(crypto.randomBytes(48));               // 64-char verifier
     const challenge = b64url(crypto.createHash('sha256').update(verifier).digest());
     const state = b64url(crypto.randomBytes(16));
-    pending.set(state, { verifier, redirectUri, at: Date.now() });
+    pending.set(state, { verifier, redirectUri, at: now() });
     const params = new URLSearchParams({
       response_type: 'code',
       client_id: clientId,
@@ -109,6 +112,8 @@ function createSpotifyProvider(deps) {
     if (!configured()) return { ok: false, error: 'no_client_id' };
     const p = state && pending.get(state);
     if (!p) return { ok: false, error: 'bad_state' };       // unknown/expired/forged → reject
+    await cooldownReady;
+    if (rateLimited()) return rateLimitResult();
     pending.delete(state);
     if (!code) return { ok: false, error: 'no_code' };
     try {
@@ -119,6 +124,7 @@ function createSpotifyProvider(deps) {
           client_id: clientId, code_verifier: p.verifier,
         }),
       });
+      if (res.status === 429) { await noteRateLimit(res); return rateLimitResult(); }
       const data = await res.json().catch(() => null);
       if (!res.ok || !data || !data.access_token) return { ok: false, error: 'token_failed' };
       await persistToken(data);
@@ -128,7 +134,16 @@ function createSpotifyProvider(deps) {
     } catch { return { ok: false, error: 'network' }; }
   }
 
+  let _refreshPending = null;
   async function refresh() {
+    await cooldownReady;
+    if (rateLimited()) return false;
+    if (_refreshPending) return _refreshPending;
+    _refreshPending = refreshOnce();
+    try { return await _refreshPending; } finally { _refreshPending = null; }
+  }
+
+  async function refreshOnce() {
     const c = await creds();
     if (!c.refreshToken) return false;
     if (rateLimited()) return false;   // honour the 429 breaker — the token endpoint is rate-limited too
@@ -137,7 +152,7 @@ function createSpotifyProvider(deps) {
         method: 'POST', headers: FORM,
         body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: c.refreshToken, client_id: clientId }),
       });
-      if (res.status === 429) { noteRateLimit(res); return false; }   // rate-limited: KEEP creds, retry after cooldown
+      if (res.status === 429) { await noteRateLimit(res); return false; }   // rate-limited: KEEP creds, retry after cooldown
       const data = await res.json().catch(() => null);
       if (res.ok && data && data.access_token) { await persistToken(data); return true; }
       // Only a DEFINITIVE auth rejection should disconnect the account. Spotify
@@ -157,28 +172,61 @@ function createSpotifyProvider(deps) {
   // ── 429 circuit breaker ─────────────────────────────────────────────────────
   // Spotify rate-limits over a rolling window and answers 429 with a Retry-After
   // (seconds). The dashboard polls several endpoints every few seconds, so once we
-  // trip the limit, blindly retrying keeps us pinned in the penalty box forever —
-  // every call (even /me) 429s and the integration looks permanently broken. When we
-  // see a 429 we back off for Retry-After and short-circuit every call until then,
-  // so we stop adding load and the limit clears on its own. Dev-mode apps have low
-  // limits, so this matters most there.
+  // receive a 429, stop requests until the full Retry-After deadline. The limit
+  // is shared by all surfaces using this provider, including profile and token
+  // requests. Resuming after that deadline does not guarantee spare account quota.
   let _rateLimitedUntil = 0;
-  function rateLimited() { return Date.now() < _rateLimitedUntil; }
-  // How long the breaker still holds. Handed to SDK widgets so a widget can
-  // wait exactly that long instead of guessing — a widget guessing short is
-  // what keeps the whole account pinned in the penalty box.
-  function retryAfterMs() { return Math.max(0, _rateLimitedUntil - Date.now()); }
-  function noteRateLimit(res) {
-    let secs = 5;
-    try { const h = res && res.headers && res.headers.get('retry-after'); const n = h && parseInt(h, 10); if (n) secs = Math.min(3600, Math.max(1, n)); } catch { /* default */ }
-    _rateLimitedUntil = Date.now() + secs * 1000;
+  const cooldownFile = tokensFile + '.spotify-cooldown.json';
+  function readDeadline(raw) {
+    try {
+      const value = JSON.parse(raw).retryAt;
+      return Number.isSafeInteger(value) && value > 0 && value <= 8640000000000000 ? value : 0;
+    } catch { return 0; }
+  }
+  // Only the deadline is durable, never credentials or provider responses.
+  // Every network path awaits this read, so a restart cannot bypass Spotify's wait.
+  const cooldownReady = fs.promises.readFile(cooldownFile, 'utf8').then(raw => {
+    _rateLimitedUntil = Math.max(_rateLimitedUntil, readDeadline(raw));
+  }).catch(() => {});
+  function rateLimited() { return now() < _rateLimitedUntil; }
+  function retryAfterMs() { return Math.max(0, _rateLimitedUntil - now()); }
+  function cooldownFields() { return { retryAfterMs: retryAfterMs(), retryAt: _rateLimitedUntil }; }
+  function rateLimitResult() { return { ok: false, error: 'rate_limited', status: 429, ...cooldownFields() }; }
+  async function pauseUntil(deadline) {
+    await cooldownReady;
+    if (!Number.isSafeInteger(deadline) || deadline <= 0 || deadline > 8640000000000000) return { ok: false, error: 'bad_deadline' };
+    _rateLimitedUntil = Math.max(_rateLimitedUntil, deadline);
+    try {
+      await updateFileAtomic(cooldownFile, raw => {
+        _rateLimitedUntil = Math.max(_rateLimitedUntil, readDeadline(raw));
+        return JSON.stringify({ retryAt: _rateLimitedUntil });
+      });
+      return { ok: true, ...cooldownFields() };
+    } catch {
+      // Keep the in-memory guard even when the disk is temporarily unwritable.
+      return { ok: false, error: 'cooldown_persist_failed', ...cooldownFields() };
+    }
+  }
+  async function noteRateLimit(res) {
+    let waitMs = 60000; // Missing/malformed headers must not create a rapid retry loop.
+    try {
+      const header = res && res.headers && res.headers.get('retry-after');
+      const value = String(header || '').trim();
+      const seconds = /^[0-9]+(?:\.[0-9]+)?$/.test(value) ? Number(value) : NaN;
+      const date = Date.parse(value);
+      if (Number.isFinite(seconds) && seconds >= 0) waitMs = Math.max(1000, seconds * 1000);
+      else if (Number.isFinite(date) && date > now()) waitMs = date - now();
+    } catch { /* conservative default */ }
+    const deadline = Math.min(8640000000000000, Math.ceil(now() + waitMs));
+    await pauseUntil(deadline);
   }
 
   async function fetchMe(token) {
+    await cooldownReady;
     if (rateLimited()) return null;
     try {
       const res = await _fetch(API + '/me', { headers: { Authorization: 'Bearer ' + token } });
-      if (res.status === 429) { noteRateLimit(res); return null; }
+      if (res.status === 429) { await noteRateLimit(res); return null; }
       const data = await res.json().catch(() => null);
       return (data && data.id) ? { id: data.id, name: data.display_name || data.id } : null;
     } catch { return null; }
@@ -187,17 +235,15 @@ function createSpotifyProvider(deps) {
   // Authenticated Web API call. Returns { ok, status, data } (data is null on a
   // 204 No Content, which most control endpoints return on success). Returns a
   // `rate_limited` error while the 429 cooldown is active, without hitting Spotify.
-  // Micro-cache for the full player snapshot. The Media strip (5s) and the widget
-  // (6s) poll /me/player independently, and paused playback costs a 2nd call (the
-  // currently-playing fallback) — so with both surfaces open we can hit ~40 Spotify
-  // calls/min and flirt with the 429 breaker. A short TTL + in-flight dedup collapses
-  // that to at most one upstream call per ~2.5s no matter how many surfaces poll; the
-  // client's 1s local ticker interpolates progress between snapshots. Any mutating
-  // request (play/pause/next/seek/volume) drops the cache so control feels instant.
+  // Media, built-in widgets and SDK widgets share playback reads. Paused playback
+  // can need a second currently-playing read, so fold concurrent requests and keep
+  // successful snapshots for ten seconds. The frontend interpolates progress;
+  // mutations invalidate snapshots and explicit post-control reads bypass the TTL.
   let _playerCache = null;      // { at, data }
   let _playerPending = null;    // in-flight promise shared by concurrent callers
+  let _playerPendingGen = 0;
   let _playerGen = 0;           // bumped on every mutation; a read tagged with a stale gen won't cache
-  const PLAYER_TTL_MS = 4000;   // upstream cap: a 204 (paused) costs a 2nd call, so with two surfaces polling this bounds /me/player to ~30 Spotify calls/min; the 1s client ticker hides the coarser snapshot
+  const PLAYER_TTL_MS = 10000;  // the frontend clock interpolates progress between snapshots
 
   // ── SDK read cache ──────────────────────────────────────────────────────────
   // Every `query` op below spends the USER's Spotify quota, and that quota is
@@ -227,30 +273,69 @@ function createSpotifyProvider(deps) {
   function queryCacheGet(path) {
     const hit = _queryCache.get(path);
     if (!hit) return null;
-    if (Date.now() - hit.at > hit.ttl) { _queryCache.delete(path); return null; }
+    if (now() - hit.at > hit.ttl) { _queryCache.delete(path); return null; }
     return hit.res;
   }
   function queryCachePut(path, ttl, res) {
     _queryCache.delete(path);           // re-set keeps a Map's ORIGINAL position, and position is the eviction order
-    _queryCache.set(path, { at: Date.now(), ttl, res });
+    _queryCache.set(path, { at: now(), ttl, res });
     while (_queryCache.size > QUERY_CACHE_MAX) _queryCache.delete(_queryCache.keys().next().value);
   }
 
-  async function apiRequest(method, pathWithQuery, bodyObj) {
-    if (method !== 'GET') { _playerCache = null; _playerGen++; queryCacheClear(); }   // a mutation invalidates the snapshot AND any in-flight read — including the widgets', or a widget's own play lands on a stale queue
-    // How long the breaker still holds travels with the refusal. Without it every
-    // caller could say only "busy", which is fine for the few seconds this
-    // usually lasts and wrong for the hours Spotify imposes on an app that has
-    // burnt its quota — reported as "waited 24 hours and the limit persists",
-    // against a dashboard that kept saying "retrying shortly".
-    if (rateLimited()) return { ok: false, status: 429, error: 'rate_limited', retryAfterMs: retryAfterMs() };
+  const READ_TTLS = new Map([
+    ['/me/player', PLAYER_TTL_MS],
+    ['/me/player/queue', 15000],
+    ['/me/player/devices', 15000],
+  ]);
+  const _readCache = new Map();
+  const _readPending = new Map();
+
+  function invalidatePlayback() {
+    _playerCache = null;
+    _playerGen++;
+    _readCache.clear();
+    queryCacheClear();
+    _queryPending.clear();
+  }
+
+  async function apiRequest(method, pathWithQuery, bodyObj, opts) {
+    await cooldownReady;
+    if (rateLimited()) return rateLimitResult();
+    if (method !== 'GET') invalidatePlayback();
+    const ttl = method === 'GET' ? READ_TTLS.get(pathWithQuery) : 0;
+    if (!ttl) {
+      const result = await requestUncached(method, pathWithQuery, bodyObj);
+      // Reads started while a command was in flight may contain its old state.
+      if (method !== 'GET') invalidatePlayback();
+      return result;
+    }
+    const cached = _readCache.get(pathWithQuery);
+    if (!(opts && opts.fresh) && cached && now() - cached.at < ttl) return cached.result;
+    const pendingRead = _readPending.get(pathWithQuery);
+    if (pendingRead && pendingRead.gen === _playerGen) return pendingRead.promise;
+    const gen = _playerGen;
+    const entry = { gen, promise: null };
+    entry.promise = requestUncached(method, pathWithQuery, bodyObj).then(result => {
+      if (result.ok && gen === _playerGen) _readCache.set(pathWithQuery, { at: now(), result });
+      return result;
+    }).finally(() => {
+      if (_readPending.get(pathWithQuery) === entry) _readPending.delete(pathWithQuery);
+    });
+    _readPending.set(pathWithQuery, entry);
+    return entry.promise;
+  }
+
+  async function requestUncached(method, pathWithQuery, bodyObj) {
     const token = await getAccessToken();
+    // A refresh or concurrent request may have raised the breaker while token
+    // acquisition was pending. Do not send one final request through that race.
+    if (rateLimited()) return rateLimitResult();
     if (!token) return { ok: false, error: 'not_connected' };
     const init = { method, headers: { Authorization: 'Bearer ' + token } };
     if (bodyObj != null) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(bodyObj); }
     try {
       const res = await _fetch(API + pathWithQuery, init);
-      if (res.status === 429) { noteRateLimit(res); return { ok: false, status: 429, error: 'rate_limited', retryAfterMs: retryAfterMs() }; }
+      if (res.status === 429) { await noteRateLimit(res); return rateLimitResult(); }
       const data = (res.status === 204) ? null : await res.json().catch(() => null);
       return { ok: res.ok, status: res.status, data };
     } catch { return { ok: false, error: 'network' }; }
@@ -263,9 +348,11 @@ function createSpotifyProvider(deps) {
   // here, throttled, so it self-heals on the next status poll without any action.
   let _meRetryAt = 0;
   async function status() {
+    await cooldownReady;
     const c = await creds();
-    if (c.accessToken && !c.login && Date.now() - _meRetryAt > 15000) {
-      _meRetryAt = Date.now();
+    if (rateLimited()) return { connected: !!c.accessToken, login: c.login, configured: configured(), error: 'rate_limited', ...cooldownFields() };
+    if (c.accessToken && !c.login && now() - _meRetryAt > 15000) {
+      _meRetryAt = now();
       try {
         const token = await getAccessToken();
         const me = token ? await fetchMe(token) : null;
@@ -275,12 +362,12 @@ function createSpotifyProvider(deps) {
         }
       } catch { /* fall through to the token-only state */ }
     }
-    return { connected: !!c.accessToken, login: c.login, configured: configured() };
+    return { connected: !!c.accessToken, login: c.login, configured: configured(), ...(rateLimited() ? { error: 'rate_limited', ...cooldownFields() } : {}) };
   }
 
   // Spotify has no token-revocation endpoint for the PKCE flow; clearing the
   // stored creds fully disconnects the account from this app's perspective.
-  async function logout() { await clearCreds(); queryCacheClear(); return { ok: true }; }
+  async function logout() { await clearCreds(); queryCacheClear(); invalidatePlayback(); return { ok: true }; }
 
   // ── Reads for the dashboard widget (trimmed, client-safe shapes) ───────────
   // Smallest album image for a compact list; the full array is widest-first.
@@ -369,7 +456,9 @@ function createSpotifyProvider(deps) {
 
   async function getQueue() {
     const r = await apiRequest('GET', '/me/player/queue');
-    if (!r.ok || !r.data) return { ok: false, error: r.error || 'no_playback' };
+    if (!r.ok) return readError(r, 'queue_failed');
+    if (r.status === 204) return { ok: false, error: 'no_playback' };
+    if (!r.data || !Array.isArray(r.data.queue)) return { ok: false, error: 'queue_failed' };
     // Spotify's queue is the REAL upcoming order only when playback has a context
     // (playlist/album/artist). Playing a loose "random" track — a single, Liked
     // Songs, or radio — makes this endpoint return autoplay GUESSES that routinely
@@ -377,6 +466,7 @@ function createSpotifyProvider(deps) {
     // annotate the list instead of presenting a wrong "next" as fact. getPlayer is
     // cached, so this rarely costs an extra call.
     const p = await getPlayer();
+    if (p.error === 'rate_limited') return p;
     const reliable = !!(p && p.ok && p.context);
     const current = trackLite(r.data.currently_playing);
     const raw = Array.isArray(r.data.queue) ? r.data.queue.slice(0, 20).map(trackLite).filter(Boolean) : [];
@@ -392,7 +482,7 @@ function createSpotifyProvider(deps) {
 
   async function getPlaylists() {
     const r = await apiRequest('GET', '/me/playlists?limit=50');
-    if (!r.ok || !r.data) return { ok: false, error: r.error || 'failed' };
+    if (!r.ok || !r.data) return readError(r, 'failed');
     const items = Array.isArray(r.data.items) ? r.data.items : [];
     return {
       ok: true,
@@ -408,7 +498,7 @@ function createSpotifyProvider(deps) {
   async function getDevices() {
     const r = await apiRequest('GET', '/me/player/devices');
     if (r.status === 403) return { ok: false, error: 'forbidden' };   // missing user-read-playback-state
-    if (!r.ok || !r.data) return { ok: false, error: r.error || 'failed', retryAfterMs: r.retryAfterMs };
+    if (!r.ok || !r.data) return readError(r, 'failed');
     const list = Array.isArray(r.data.devices) ? r.data.devices : [];
     return {
       ok: true,
@@ -465,32 +555,36 @@ function createSpotifyProvider(deps) {
   // by the client's post-control resync (next/prev/seek), where a cached snapshot
   // would keep serving the pre-action state for the whole TTL.
   async function getPlayer(opts) {
-    const now = Date.now();
+    await cooldownReady;
+    if (rateLimited()) return rateLimitResult();
+    const at = now();
     const fresh = !!(opts && opts.fresh);
-    if (!fresh && _playerCache && (now - _playerCache.at) < PLAYER_TTL_MS) return _playerCache.data;
-    if (_playerPending) return _playerPending;              // fold concurrent callers into one call
+    if (!fresh && _playerCache && (at - _playerCache.at) < PLAYER_TTL_MS) return _playerCache.data;
+    if (_playerPending && _playerPendingGen === _playerGen) return _playerPending;              // fold concurrent callers into one call
     const gen = _playerGen;
+    _playerPendingGen = gen;
     _playerPending = (async () => {
       try {
-        const data = await _getPlayerUncached();
+        const data = await _getPlayerUncached(opts);
+        if (rateLimited()) return rateLimitResult();
         // Skip caching if a control action (play/pause/…) raced in during this read —
         // otherwise the pre-action snapshot would poison the cache for the whole TTL.
-        if (gen === _playerGen) _playerCache = { at: Date.now(), data };
+        if (data.ok && gen === _playerGen) _playerCache = { at: now(), data };
         return data;
-      } finally { _playerPending = null; }
+      } finally { if (_playerPendingGen === gen) _playerPending = null; }
     })();
     return _playerPending;
   }
 
-  async function _getPlayerUncached() {
-    const r = await apiRequest('GET', '/me/player');
+  async function _getPlayerUncached(opts) {
+    const r = await apiRequest('GET', '/me/player', undefined, opts);
     if (r.error === 'not_connected') return { ok: false, error: 'not_connected' };
     // 403 on a playback READ = the stored token is missing user-read-playback-state
     // (an old login from before we requested it). Surface it distinctly so the UI can
     // say "reconnect to grant permission" instead of the misleading "no active device"
     // — the app can be playing and we still can't see it.
     if (r.status === 403) return { ok: false, error: 'forbidden' };
-    if (!r.ok) return { ok: false, error: r.error || ('http_' + (r.status || '?')) };
+    if (!r.ok) return readError(r, 'http_' + (r.status || '?'));
     // A 204 (or a body with no item) means there is no ACTIVE Spotify Connect
     // device — which happens shortly after you PAUSE, even though a track is
     // still loaded. `/me/player/currently-playing` keeps reporting that paused
@@ -500,7 +594,8 @@ function createSpotifyProvider(deps) {
     let data = r.data;
     if (r.status === 204 || !data || !data.item) {
       const cp = await apiRequest('GET', '/me/player/currently-playing');
-      if (cp.ok && cp.status !== 204 && cp.data && cp.data.item) data = cp.data;
+      if (!cp.ok) return readError(cp, 'player_failed');
+      if (cp.status !== 204 && cp.data && cp.data.item) data = cp.data;
       else return { ok: true, playing: false, track: null };
     }
     const dev = data.device || null;
@@ -552,9 +647,17 @@ function createSpotifyProvider(deps) {
   // Map a control response to a stable result the UI turns into a friendly hint.
   // 404 NO_ACTIVE_DEVICE = nothing to control; a 403 is disambiguated above.
   // `kind` defaults to playback (the common case); pass 'library' for /me/tracks.
-  function apiResult(r, fallbackError, kind) {
-    if (r.ok) return { ok: true };
+  function readError(r, fallbackError) {
+    if (r.error === 'rate_limited' || r.status === 429) return rateLimitResult();
     if (r.status === 401) return { ok: false, error: 'not_connected' };
+    if (r.status === 403) return { ok: false, error: 'forbidden' };
+    return { ok: false, error: r.error || fallbackError || 'failed' };
+  }
+
+  function apiResult(r, fallbackError, kind) {
+    if (r.error === 'rate_limited' || r.status === 429) return rateLimitResult();
+    if (r.status === 401) return { ok: false, error: 'not_connected' };
+    if (r.ok) return { ok: true };
     if (r.status === 404) return { ok: false, error: 'no_active_device' };
     if (r.status === 403) return { ok: false, error: classify403(r, kind) };
     const result = { ok: false, error: r.error || fallbackError || ('http_' + (r.status || '?')) };
@@ -576,7 +679,7 @@ function createSpotifyProvider(deps) {
 
   async function saveCurrent() {
     const q = await apiRequest('GET', '/me/player/currently-playing');
-    if (q.error === 'not_connected') return { ok: false, error: 'not_connected' };
+    if (!q.ok) return readError(q, 'player_failed');
     const id = q.ok && q.data && q.data.item && q.data.item.id;
     if (!id) return { ok: false, error: 'nothing_playing' };
     return apiResult(await apiRequest('PUT', '/me/tracks?ids=' + encodeURIComponent(id)), 'save_failed', 'library');
@@ -603,7 +706,7 @@ function createSpotifyProvider(deps) {
     const name = String(input == null ? '' : input).trim().toLowerCase();
     if (!name) return { ok: false, error: 'bad_device' };
     const dv = await getDevices();
-    if (!dv.ok) return { ok: false, error: dv.error || 'no_devices' };
+    if (!dv.ok) return dv;
     const match = dv.devices.find(x => x.name.toLowerCase() === name)
       || dv.devices.find(x => x.name.toLowerCase().includes(name));
     if (!match || !match.id) return { ok: false, error: 'device_not_found' };
@@ -646,7 +749,8 @@ function createSpotifyProvider(deps) {
   // "Play" button always gets music going rather than erroring on no-active-device.
   async function startPlayback() {
     const dv = await getDevices();
-    if (!dv.ok || !dv.devices.length) return { ok: false, error: 'no_active_device' };
+    if (!dv.ok) return dv;
+    if (!dv.devices.length) return { ok: false, error: 'no_active_device' };
     const target = dv.devices.find(x => x.active) || dv.devices.find(x => x.type === 'computer') || dv.devices[0];
     if (!target || !target.id) return { ok: false, error: 'no_active_device' };
     const r = await apiRequest('PUT', '/me/player', { device_ids: [target.id], play: true });
@@ -693,7 +797,7 @@ function createSpotifyProvider(deps) {
   // current saved state and flips it.
   async function toggleLike(mode) {
     const q = await apiRequest('GET', '/me/player/currently-playing');
-    if (q.error === 'not_connected') return { ok: false, error: 'not_connected' };
+    if (!q.ok) return readError(q, 'player_failed');
     const id = q.ok && q.data && q.data.item && q.data.item.id;
     if (!id) return { ok: false, error: 'nothing_playing' };
     let add;
@@ -734,8 +838,7 @@ function createSpotifyProvider(deps) {
     const t = ['track', 'album', 'artist', 'playlist'].includes(String(type)) ? String(type) : 'track';
     const n = clampInt(limit || 5, 1, 10);
     const r = await apiRequest('GET', '/search?type=' + t + '&limit=' + n + '&q=' + encodeURIComponent(q));
-    if (!r.ok) return apiResult(r, 'search_failed', 'library');
-    if (!r.data) return { ok: false, error: 'search_failed' };
+    if (!r.ok || !r.data) return readError(r, 'search_failed');
     const bucket = r.data[t + 's'];
     const items = (bucket && Array.isArray(bucket.items)) ? bucket.items : [];
     return {
@@ -947,31 +1050,37 @@ function createSpotifyProvider(deps) {
     const path = build(params && typeof params === 'object' ? params : {});
     if (!path) return { ok: false, error: 'bad_params' };
 
+    await cooldownReady;
+    if (rateLimited()) return rateLimitResult();
     const cached = queryCacheGet(path);
     if (cached) return cached;
     const inflight = _queryPending.get(path);
     if (inflight) return inflight;
 
     const ttl = QUERY_VOLATILE.has(name) ? QUERY_TTL_VOLATILE_MS : QUERY_TTL_MS;
+    const gen = _playerGen;
     const p = apiRequest('GET', path).then(async (r) => {
-      if (r.ok) return { ok: true, data: await shapeQueryAnswer(name, r.data) };
+      if (r.ok) {
+        const data = await shapeQueryAnswer(name, r.data);
+        return rateLimited() ? rateLimitResult() : { ok: true, data };
+      }
       // The two new scopes are the one failure worth naming: a user connected
       // before they existed holds a perfectly valid token that simply cannot read
       // these, and "reconnect" is the fix rather than anything the widget did.
       if (r.status === 403) return { ok: false, error: 'insufficient_scope', status: 403 };
       // Say how long, so a widget can wait rather than retry into the same wall.
-      if (r.status === 429) return { ok: false, error: 'rate_limited', status: 429, retryAfterMs: retryAfterMs() };
+      if (r.status === 429) return rateLimitResult();
       return { ok: false, error: r.error || 'failed', status: r.status || 0 };
     }).then((res) => {
       // Only an answer is worth keeping. Caching a failure would turn one blip
       // into ten seconds of a widget that looks broken, and a rate-limit answer
       // held past its own cooldown would keep telling a widget to wait when the
       // way is already clear.
-      if (res.ok) queryCachePut(path, ttl, res);
+      if (res.ok && gen === _playerGen) queryCachePut(path, ttl, res);
       return res;
     });
     _queryPending.set(path, p);
-    try { return await p; } finally { _queryPending.delete(path); }
+    try { return await p; } finally { if (_queryPending.get(path) === p) _queryPending.delete(path); }
   }
 
   // Start a specific Spotify URI. The four kinds a browser needs, and no others:
@@ -1023,7 +1132,7 @@ function createSpotifyProvider(deps) {
   }
 
   return {
-    configured, status, logout, buildAuthUrl, exchangeCode, getAccessToken,
+    configured, status, logout, buildAuthUrl, exchangeCode, getAccessToken, pauseUntil,
     getQueue, getPlaylists, getDevices, getPlayer, search, searchTracks, query, playUri, queueUri,
     normalizeQueue,   // pure, and exported so the wrap rules can be pinned without an account
     saveCurrent, playPlaylist, playSearch, queueSearch, setShuffle, transferDevice, transferToId,

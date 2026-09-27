@@ -31881,6 +31881,8 @@ Object.assign(i18n.en, {
   spotify_w_add_queue: 'Add to queue',
   spotify_w_adding: 'Adding to queue…',
   spotify_w_added: 'Added to Spotify queue',
+  spotify_w_cooldown: "Spotify is limiting requests. Retry in {time}. Queue and devices may be out of date.",
+  spotify_w_waiting: "Waiting for Spotify. Saved data may be out of date.",
 });
 
 function t(key) {

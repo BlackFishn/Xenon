@@ -172,9 +172,8 @@ export function makeDom() {
     return out;
   }
   function find(root, sel) {
-    // Comma-separated selector lists are not supported on purpose: none of the
-    // modules under test use one, and half-supporting it would return a wrong
-    // answer rather than an obvious failure.
+    // Selector groups used by shared control-state updates.
+    if (sel.includes(',')) return [...new Set(sel.split(',').flatMap(part => find(root, part)))];
     const parts = sel.trim().split(/\s+/);
     let scope = [root];
     for (const part of parts) {
