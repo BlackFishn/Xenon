@@ -177,3 +177,22 @@ transport remains available when the active media session is Spotify.
 Recovery is automatic after the reported wait; the account can remain connected.
 Spotify may return a new deadline if a restriction is still active.
 See [Spotify's rate-limit guidance](https://developer.spotify.com/documentation/web-api/concepts/rate-limits).
+
+## Debugging recurring restrictions
+
+The source backend writes private Spotify diagnostics to
+server/data/spotify-debug.jsonl. Records distinguish actual outbound requests
+from cache/coalescing decisions and requests stopped by the existing cooldown.
+Each provider instance has an identifier and process ID, so separate runs do not
+look like one uninterrupted counter.
+
+The log captures safe endpoint categories, HTTP status, duration, Retry-After and
+the Spotify 429 reason when available. It omits authorization headers, tokens,
+client IDs, query strings, request bodies, track IDs and music metadata.
+The current log is capped at approximately 2 MiB with one previous file (.1).
+Logging failures never change playback results or relax the cooldown.
+
+A deadline restored from an older installation has an unknown reason: previous
+versions saved only the deadline. Enabling diagnostics does not make a probe
+request or clear that wait. If a normal request receives another 429 after the
+wait ends, its reason will be recorded; the earlier response cannot be recovered.
