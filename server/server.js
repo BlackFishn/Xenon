@@ -10824,7 +10824,7 @@ deckRegistryDeps.ytBroadcast = (mode) => streamYouTube.transitionBroadcast(mode)
 // Spotify integration (Authorization Code + PKCE — no client secret). `let` so it
 // can be re-created when the user saves a Client ID in Settings → Streaming (see
 // saveStreamConfig). Tokens persist to the same server-only stream-tokens.json.
-let streamSpotify = createSpotifyProvider({ clientId: readStreamClientId('spotifyClientId', 'SPOTIFY_CLIENT_ID'), tokensFile: STREAM_TOKENS_FILE });
+let streamSpotify = createSpotifyProvider({ clientId: readStreamClientId('spotifyClientId', 'SPOTIFY_CLIENT_ID'), tokensFile: STREAM_TOKENS_FILE, debugLogFile: path.join(DATA_DIR, 'spotify-debug.jsonl') });
 // All Spotify Deck actions funnel through the provider. Reads `streamSpotify` at
 // call time so a re-created provider is picked up automatically.
 deckRegistryDeps.spotify = (action) => streamSpotify.runAction(action);
@@ -11439,7 +11439,7 @@ async function saveStreamConfig(patch) {
     clientSecret: readStreamClientId('youtubeClientSecret', 'YOUTUBE_CLIENT_SECRET'),
     tokensFile: STREAM_TOKENS_FILE,
   });
-  streamSpotify = createSpotifyProvider({ clientId: readStreamClientId('spotifyClientId', 'SPOTIFY_CLIENT_ID'), tokensFile: STREAM_TOKENS_FILE });
+  streamSpotify = createSpotifyProvider({ clientId: readStreamClientId('spotifyClientId', 'SPOTIFY_CLIENT_ID'), tokensFile: STREAM_TOKENS_FILE, debugLogFile: path.join(DATA_DIR, 'spotify-debug.jsonl') });
   // Stop any live watch on the OLD provider first — closing it with a watcher
   // still attached would spin up a reconnect loop against the stale socket.
   if (discordStopWatch) { discordStopWatch(); discordStopWatch = null; }

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — Spotify diagnostics
+
+- Record actual Spotify requests separately from cached reads and cooldown blocks in a bounded private debug log.
+- Capture safe 429 reasons and retry timing so quota exhaustion can be distinguished from short-term rate limits without exposing credentials or music/search data.
+
 ## Unreleased — Spotify request recovery
 
 - Reduce duplicate Spotify polling across the widget and media strip; share short-lived playback, queue and device reads.

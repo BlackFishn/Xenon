@@ -19,6 +19,7 @@ const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
 const { updateFileAtomic } = require('./atomic-write');
+const { createSpotifyDebugLog, endpointTemplate, rateLimitReason } = require('./spotify-debug-log');
 const { makeCredsNormalizer, createTokenStore, FORM } = require('./stream-common');
 
 const AUTH_URL = 'https://accounts.spotify.com/authorize';
@@ -65,6 +66,83 @@ function createSpotifyProvider(deps) {
   const tokensFile = d.tokensFile || path.join(__dirname, 'stream-tokens.json');
   const { creds, patchCreds, clearCreds, persistToken, makeGetAccessToken } =
     createTokenStore({ tokensFile, storeKey: 'spotify', normalize: normalizeStreamSpotify });
+
+  const instanceId = crypto.randomBytes(8).toString('hex');
+  const debugLog = createSpotifyDebugLog(d.debugLogFile, instanceId, now);
+  const startedAt = now();
+  const counts = { upstreamStarted: 0, upstreamCompleted: 0, networkErrors: 0, rateLimits: 0, blockedCalls: 0, cacheHits: 0, coalescedHits: 0 };
+  const endpointCounts = {};
+  let summaryAt = startedAt;
+  let summaryCounts = { ...counts };
+  function getDiagnostics() {
+    return { instanceId, startedAt, totals: { ...counts }, endpoints: { ...endpointCounts }, ...cooldownFields() };
+  }
+  function emitSummary() {
+    if (now() - summaryAt < 60000) return;
+    const intervalCounts = {};
+    for (const key of Object.keys(counts)) intervalCounts[key] = counts[key] - summaryCounts[key];
+    debugLog.write('summary', { intervalMs: now() - summaryAt, counts: intervalCounts, ...getDiagnostics() });
+    summaryAt = now();
+    summaryCounts = { ...counts };
+  }
+  function count(key) { counts[key]++; emitSummary(); }
+  function blockedResult() { count('blockedCalls'); return rateLimitResult(); }
+  debugLog.write('provider_created', { startedAt });
+
+  // Bound diagnostics separately from ordinary response parsing. A large or hung
+  // error body must not hold a command open or allocate an unbounded debug buffer.
+  async function read429Reason(res) {
+    let reader, timer;
+    const body = (async () => {
+      if (!res.body || typeof res.body.getReader !== 'function') return res.json();
+      reader = res.body.getReader();
+      const chunks = [];
+      let bytes = 0;
+      for (;;) {
+        const part = await reader.read();
+        if (part.done) break;
+        bytes += part.value.byteLength;
+        if (bytes > 4096) return null;
+        chunks.push(Buffer.from(part.value));
+      }
+      return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    })();
+    try {
+      const data = await Promise.race([body, new Promise(resolve => { timer = setTimeout(() => resolve(null), 1000); })]);
+      return rateLimitReason(data);
+    } catch { return 'unknown'; }
+    finally {
+      clearTimeout(timer);
+      if (reader) { try { Promise.resolve(reader.cancel()).catch(() => {}); } catch { /* closed stream */ } }
+    }
+  }
+
+  async function spotifyFetch(url, init) {
+    const method = ['GET', 'POST', 'PUT', 'DELETE'].includes(init && init.method) ? init.method : 'GET';
+    const endpoint = endpointTemplate(url);
+    const requestId = ++counts.upstreamStarted;
+    endpointCounts[method + ' ' + endpoint] = (endpointCounts[method + ' ' + endpoint] || 0) + 1;
+    const start = now();
+    debugLog.write('request_start', { requestId, method, endpoint });
+    let res;
+    try { res = await _fetch(url, init); }
+    catch (error) {
+      count('networkErrors');
+      debugLog.write('request_end', { requestId, method, endpoint, status: 0, durationMs: Math.max(0, now() - start), error: 'network' });
+      throw error;
+    }
+    count('upstreamCompleted');
+    debugLog.write('request_end', { requestId, method, endpoint, status: Number(res.status) || 0, durationMs: Math.max(0, now() - start) });
+    if (res.status === 429) {
+      count('rateLimits');
+      const observedAt = new Date(now()).toISOString();
+      // Raise and persist the guard BEFORE awaiting diagnostic JSON.
+      const retryAfter = await noteRateLimit(res);
+      const reason = debugLog.enabled ? await read429Reason(res) : 'unknown';
+      debugLog.write('rate_limit', { requestId, method, endpoint, source: 'spotify_429', observedAt, reason, retryAfter, ...cooldownFields() });
+    }
+    return res;
+  }
 
   // Short-lived PKCE state between /login (authorize) and /callback (token
   // exchange), keyed by the opaque `state`: { verifier, redirectUri, at }. In
@@ -113,18 +191,18 @@ function createSpotifyProvider(deps) {
     const p = state && pending.get(state);
     if (!p) return { ok: false, error: 'bad_state' };       // unknown/expired/forged → reject
     await cooldownReady;
-    if (rateLimited()) return rateLimitResult();
+    if (rateLimited()) return blockedResult();
     pending.delete(state);
     if (!code) return { ok: false, error: 'no_code' };
     try {
-      const res = await _fetch(TOKEN_URL, {
+      const res = await spotifyFetch(TOKEN_URL, {
         method: 'POST', headers: FORM,
         body: new URLSearchParams({
           grant_type: 'authorization_code', code, redirect_uri: p.redirectUri,
           client_id: clientId, code_verifier: p.verifier,
         }),
       });
-      if (res.status === 429) { await noteRateLimit(res); return rateLimitResult(); }
+      if (res.status === 429) { return rateLimitResult(); }
       const data = await res.json().catch(() => null);
       if (!res.ok || !data || !data.access_token) return { ok: false, error: 'token_failed' };
       await persistToken(data);
@@ -137,8 +215,8 @@ function createSpotifyProvider(deps) {
   let _refreshPending = null;
   async function refresh() {
     await cooldownReady;
-    if (rateLimited()) return false;
-    if (_refreshPending) return _refreshPending;
+    if (rateLimited()) { count('blockedCalls'); return false; }
+    if (_refreshPending) { count('coalescedHits'); return _refreshPending; }
     _refreshPending = refreshOnce();
     try { return await _refreshPending; } finally { _refreshPending = null; }
   }
@@ -146,13 +224,13 @@ function createSpotifyProvider(deps) {
   async function refreshOnce() {
     const c = await creds();
     if (!c.refreshToken) return false;
-    if (rateLimited()) return false;   // honour the 429 breaker — the token endpoint is rate-limited too
+    if (rateLimited()) { count('blockedCalls'); return false; }   // honour the 429 breaker — the token endpoint is rate-limited too
     try {
-      const res = await _fetch(TOKEN_URL, {
+      const res = await spotifyFetch(TOKEN_URL, {
         method: 'POST', headers: FORM,
         body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: c.refreshToken, client_id: clientId }),
       });
-      if (res.status === 429) { await noteRateLimit(res); return false; }   // rate-limited: KEEP creds, retry after cooldown
+      if (res.status === 429) { return false; }   // rate-limited: KEEP creds, retry after cooldown
       const data = await res.json().catch(() => null);
       if (res.ok && data && data.access_token) { await persistToken(data); return true; }
       // Only a DEFINITIVE auth rejection should disconnect the account. Spotify
@@ -187,12 +265,13 @@ function createSpotifyProvider(deps) {
   // Every network path awaits this read, so a restart cannot bypass Spotify's wait.
   const cooldownReady = fs.promises.readFile(cooldownFile, 'utf8').then(raw => {
     _rateLimitedUntil = Math.max(_rateLimitedUntil, readDeadline(raw));
+    if (rateLimited()) debugLog.write('cooldown_restored', { source: 'persisted', reason: 'not_recorded', ...cooldownFields() });
   }).catch(() => {});
   function rateLimited() { return now() < _rateLimitedUntil; }
   function retryAfterMs() { return Math.max(0, _rateLimitedUntil - now()); }
   function cooldownFields() { return { retryAfterMs: retryAfterMs(), retryAt: _rateLimitedUntil }; }
   function rateLimitResult() { return { ok: false, error: 'rate_limited', status: 429, ...cooldownFields() }; }
-  async function pauseUntil(deadline) {
+  async function pauseUntil(deadline, source) {
     await cooldownReady;
     if (!Number.isSafeInteger(deadline) || deadline <= 0 || deadline > 8640000000000000) return { ok: false, error: 'bad_deadline' };
     _rateLimitedUntil = Math.max(_rateLimitedUntil, deadline);
@@ -201,6 +280,7 @@ function createSpotifyProvider(deps) {
         _rateLimitedUntil = Math.max(_rateLimitedUntil, readDeadline(raw));
         return JSON.stringify({ retryAt: _rateLimitedUntil });
       });
+      if (source !== 'spotify_429') debugLog.write('cooldown_updated', { source: 'manual_pause', reason: 'not_recorded', ...cooldownFields() });
       return { ok: true, ...cooldownFields() };
     } catch {
       // Keep the in-memory guard even when the disk is temporarily unwritable.
@@ -208,25 +288,32 @@ function createSpotifyProvider(deps) {
     }
   }
   async function noteRateLimit(res) {
+    let retryAfter = { kind: 'missing' };
     let waitMs = 60000; // Missing/malformed headers must not create a rapid retry loop.
     try {
       const header = res && res.headers && res.headers.get('retry-after');
       const value = String(header || '').trim();
       const seconds = /^[0-9]+(?:\.[0-9]+)?$/.test(value) ? Number(value) : NaN;
       const date = Date.parse(value);
-      if (Number.isFinite(seconds) && seconds >= 0) waitMs = Math.max(1000, seconds * 1000);
-      else if (Number.isFinite(date) && date > now()) waitMs = date - now();
+      if (Number.isFinite(seconds) && seconds >= 0) {
+        waitMs = Math.max(1000, seconds * 1000);
+        retryAfter = { kind: 'seconds', value: seconds };
+      } else if (Number.isFinite(date) && date > now()) {
+        waitMs = date - now();
+        retryAfter = { kind: 'date', value: new Date(date).toISOString() };
+      } else if (value) retryAfter = { kind: 'invalid' };
     } catch { /* conservative default */ }
     const deadline = Math.min(8640000000000000, Math.ceil(now() + waitMs));
-    await pauseUntil(deadline);
+    await pauseUntil(deadline, 'spotify_429');
+    return retryAfter;
   }
 
   async function fetchMe(token) {
     await cooldownReady;
-    if (rateLimited()) return null;
+    if (rateLimited()) { count('blockedCalls'); return null; }
     try {
-      const res = await _fetch(API + '/me', { headers: { Authorization: 'Bearer ' + token } });
-      if (res.status === 429) { await noteRateLimit(res); return null; }
+      const res = await spotifyFetch(API + '/me', { headers: { Authorization: 'Bearer ' + token } });
+      if (res.status === 429) { return null; }
       const data = await res.json().catch(() => null);
       return (data && data.id) ? { id: data.id, name: data.display_name || data.id } : null;
     } catch { return null; }
@@ -274,6 +361,7 @@ function createSpotifyProvider(deps) {
     const hit = _queryCache.get(path);
     if (!hit) return null;
     if (now() - hit.at > hit.ttl) { _queryCache.delete(path); return null; }
+    count('cacheHits');
     return hit.res;
   }
   function queryCachePut(path, ttl, res) {
@@ -300,7 +388,7 @@ function createSpotifyProvider(deps) {
 
   async function apiRequest(method, pathWithQuery, bodyObj, opts) {
     await cooldownReady;
-    if (rateLimited()) return rateLimitResult();
+    if (rateLimited()) return blockedResult();
     if (method !== 'GET') invalidatePlayback();
     const ttl = method === 'GET' ? READ_TTLS.get(pathWithQuery) : 0;
     if (!ttl) {
@@ -310,9 +398,9 @@ function createSpotifyProvider(deps) {
       return result;
     }
     const cached = _readCache.get(pathWithQuery);
-    if (!(opts && opts.fresh) && cached && now() - cached.at < ttl) return cached.result;
+    if (!(opts && opts.fresh) && cached && now() - cached.at < ttl) { count('cacheHits'); return cached.result; }
     const pendingRead = _readPending.get(pathWithQuery);
-    if (pendingRead && pendingRead.gen === _playerGen) return pendingRead.promise;
+    if (pendingRead && pendingRead.gen === _playerGen) { count('coalescedHits'); return pendingRead.promise; }
     const gen = _playerGen;
     const entry = { gen, promise: null };
     entry.promise = requestUncached(method, pathWithQuery, bodyObj).then(result => {
@@ -329,13 +417,13 @@ function createSpotifyProvider(deps) {
     const token = await getAccessToken();
     // A refresh or concurrent request may have raised the breaker while token
     // acquisition was pending. Do not send one final request through that race.
-    if (rateLimited()) return rateLimitResult();
+    if (rateLimited()) return blockedResult();
     if (!token) return { ok: false, error: 'not_connected' };
     const init = { method, headers: { Authorization: 'Bearer ' + token } };
     if (bodyObj != null) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(bodyObj); }
     try {
-      const res = await _fetch(API + pathWithQuery, init);
-      if (res.status === 429) { await noteRateLimit(res); return rateLimitResult(); }
+      const res = await spotifyFetch(API + pathWithQuery, init);
+      if (res.status === 429) { return rateLimitResult(); }
       const data = (res.status === 204) ? null : await res.json().catch(() => null);
       return { ok: res.ok, status: res.status, data };
     } catch { return { ok: false, error: 'network' }; }
@@ -350,7 +438,8 @@ function createSpotifyProvider(deps) {
   async function status() {
     await cooldownReady;
     const c = await creds();
-    if (rateLimited()) return { connected: !!c.accessToken, login: c.login, configured: configured(), error: 'rate_limited', ...cooldownFields() };
+    emitSummary();
+    if (rateLimited()) { count('blockedCalls'); return { connected: !!c.accessToken, login: c.login, configured: configured(), error: 'rate_limited', ...cooldownFields() }; }
     if (c.accessToken && !c.login && now() - _meRetryAt > 15000) {
       _meRetryAt = now();
       try {
@@ -556,11 +645,11 @@ function createSpotifyProvider(deps) {
   // would keep serving the pre-action state for the whole TTL.
   async function getPlayer(opts) {
     await cooldownReady;
-    if (rateLimited()) return rateLimitResult();
+    if (rateLimited()) return blockedResult();
     const at = now();
     const fresh = !!(opts && opts.fresh);
-    if (!fresh && _playerCache && (at - _playerCache.at) < PLAYER_TTL_MS) return _playerCache.data;
-    if (_playerPending && _playerPendingGen === _playerGen) return _playerPending;              // fold concurrent callers into one call
+    if (!fresh && _playerCache && (at - _playerCache.at) < PLAYER_TTL_MS) { count('cacheHits'); return _playerCache.data; }
+    if (_playerPending && _playerPendingGen === _playerGen) { count('coalescedHits'); return _playerPending; }              // fold concurrent callers into one call
     const gen = _playerGen;
     _playerPendingGen = gen;
     _playerPending = (async () => {
@@ -1010,11 +1099,11 @@ function createSpotifyProvider(deps) {
     if (!path) return { ok: false, error: 'bad_params' };
 
     await cooldownReady;
-    if (rateLimited()) return rateLimitResult();
+    if (rateLimited()) return blockedResult();
     const cached = queryCacheGet(path);
     if (cached) return cached;
     const inflight = _queryPending.get(path);
-    if (inflight) return inflight;
+    if (inflight) { count('coalescedHits'); return inflight; }
 
     const ttl = QUERY_VOLATILE.has(name) ? QUERY_TTL_VOLATILE_MS : QUERY_TTL_MS;
     const gen = _playerGen;
@@ -1083,7 +1172,7 @@ function createSpotifyProvider(deps) {
   }
 
   return {
-    configured, status, logout, buildAuthUrl, exchangeCode, getAccessToken, pauseUntil,
+    configured, status, logout, buildAuthUrl, exchangeCode, getAccessToken, pauseUntil, getDiagnostics,
     getQueue, getPlaylists, getDevices, getPlayer, search, query, playUri,
     normalizeQueue,   // pure, and exported so the wrap rules can be pinned without an account
     saveCurrent, playPlaylist, playSearch, queueSearch, setShuffle, transferDevice, transferToId,

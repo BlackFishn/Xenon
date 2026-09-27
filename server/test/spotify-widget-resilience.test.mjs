@@ -149,8 +149,10 @@ test('all request refusals use the shared deadline result', () => {
   assert.match(SERVER, /function rateLimitResult\(\).*error: 'rate_limited'.*cooldownFields\(\)/);
   const precheck = /async function apiRequest\([^)]*\) \{[\s\S]*?\n  \}/.exec(SERVER);
   const request = /async function requestUncached\([^)]*\) \{[\s\S]*?\n  \}/.exec(SERVER);
-  assert.match(precheck[0], /if \(rateLimited\(\)\) return rateLimitResult\(\)/);
-  assert.match(request[0], /res.status === 429.*await noteRateLimit\(res\); return rateLimitResult\(\)/);
+  assert.match(SERVER, /function blockedResult\(\).*return rateLimitResult\(\)/);
+  assert.match(precheck[0], /if \(rateLimited\(\)\) return blockedResult\(\)/);
+  assert.match(request[0], /await spotifyFetch\(API \+ pathWithQuery, init\)/);
+  assert.match(request[0], /res.status === 429.*return rateLimitResult\(\)/);
 });
 
 test('the device list uses the shared read error mapper', () => {
