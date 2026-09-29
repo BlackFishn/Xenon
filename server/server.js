@@ -151,6 +151,8 @@ const { createTwitchProvider } = require('./stream-twitch');
 const { createDiscordProvider } = require('./discord-rpc');
 const { createYouTubeProvider } = require('./stream-youtube');
 const { createSpotifyProvider } = require('./stream-spotify');
+const { createLocalVideo } = require('./local-video');
+const localVideo = createLocalVideo({ getFfmpegPath });
 const { normalizeMediaSeekResult } = require('./media-seek-result');
 
 // App version — read once from package.json so the in-app indicator always
@@ -12352,7 +12354,27 @@ const JSONP_PATHS = new Set([
   '/toggle', '/mic/volume', '/volume/set', '/speaker/mute',
 ]);
 function isJsonpAllowed(pathname) {
+  if (pathname.startsWith('/media/local/')) return false;
   return JSONP_PATHS.has(pathname) || pathname.startsWith('/media/');
+}
+
+// File selection and playback belong to the local dashboard, not paired phones
+// or sandboxed widgets. The socket/Host loopback boundary is checked first.
+function isAllowedLocalMediaRequest(req, isRemote) {
+  if (isRemote) return false;
+  const headers = req.headers || {};
+  const host = String(headers.host || '').toLowerCase();
+  if (!/^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/.test(host)) return false;
+  const site = String(headers['sec-fetch-site'] || '').toLowerCase();
+  if (site && site !== 'same-origin') return false;
+  if (String(headers['sec-fetch-mode'] || '').toLowerCase() === 'navigate') return false;
+  if (headers.origin !== undefined) {
+    try {
+      const origin = new URL(String(headers.origin));
+      if (origin.origin !== new URL('http://' + host).origin || origin.username || origin.password) return false;
+    } catch { return false; }
+  }
+  return true;
 }
 
 // State-mutating endpoints that also accept GET so the iCUE widget can reach
@@ -12361,6 +12383,7 @@ function isJsonpAllowed(pathname) {
 // sends no Origin, so the loopback/Origin checks below can't catch it. They are
 // guarded by the Sec-Fetch-Site check in the request handler.
 const CSRF_MUTATION_PATHS = new Set([
+  '/media/local/status', '/media/local/pick', '/media/local/prepare', '/media/local/subtitle', '/media/local/stream', '/media/local/stop', '/media/local/release',
   '/api/crosshair', '/api/crosshair/open', '/api/crosshair/assets', '/api/crosshair/presets',
   // OAuth and account reads start a local Codex process; opaque-origin widgets
   // and cross-site navigations must never operate on this account session.
@@ -13615,6 +13638,18 @@ const handleRequest = async (req, res) => {
   // to GRANT anything: authorization is the allowlist's job, not a handler's.
   const isRemote = remote !== null;
 
+  const isLocalMedia = new URL(req.url, 'http://localhost').pathname.startsWith('/media/local/');
+  if (isLocalMedia) {
+    if (!isAllowedLocalMediaRequest(req, isRemote)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      res.end('Forbidden');
+      return;
+    }
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'no-store');
+  }
+
   // CORS headers required for the iCUE widget WebView (opaque origin, qrc:// or file://).
   // Access-Control-Allow-Private-Network is required by Chrome 104+ (Private Network
   // Access spec) when a non-secure context (file://) fetches a private-network address.
@@ -13629,7 +13664,7 @@ const handleRequest = async (req, res) => {
   // server — Private Network Access stopped them in the browser. Behind that
   // sit SameSite=Strict (no cookie on a cross-site-initiated request) and the
   // exact-Origin check; see remote-access.js.
-  if (!isRemote) {
+  if (!isRemote && !isLocalMedia) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -14318,6 +14353,56 @@ const handleRequest = async (req, res) => {
       json(await getWeather(urlObj.searchParams.get('lang') || 'en', requestedWeather));
     }
     catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/media/local/status' && req.method === 'GET') {
+    try { json(await localVideo.status()); }
+    catch { json({ ok: false, error: 'engine_unavailable' }); }
+
+  } else if (reqPath === '/media/local/pick' && req.method === 'POST') {
+    try {
+      await readBody(req, 2048);
+      json(await localVideo.pickVideos());
+    } catch (error) { json({ ok: false, error: ['library_full', 'picker_busy', 'unsupported_platform', 'ffmpeg_missing'].includes(error?.code) ? error.code : 'pick_failed' }); }
+
+  } else if (reqPath === '/media/local/prepare' && req.method === 'GET') {
+    try { json(await localVideo.prepare(Object.fromEntries(urlObj.searchParams))); }
+    catch { json({ ok: false, error: 'prepare_failed' }); }
+
+  } else if (reqPath === '/media/local/subtitle' && req.method === 'POST') {
+    try {
+      const body = JSON.parse(await readBody(req, 2048) || '{}');
+      json(await localVideo.pickSubtitle(body.id));
+    } catch { json({ ok: false, error: 'subtitle_failed' }); }
+
+  } else if (reqPath === '/media/local/subtitle' && req.method === 'GET') {
+    try {
+      const text = await localVideo.subtitles(Object.fromEntries(urlObj.searchParams));
+      res.writeHead(200, { 'Content-Type': 'text/vtt; charset=utf-8' });
+      res.end(text);
+    }
+    catch {
+      if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('Subtitle unavailable');
+    }
+
+  } else if (reqPath === '/media/local/stream' && req.method === 'GET') {
+    try { await localVideo.stream(req, res, Object.fromEntries(urlObj.searchParams)); }
+    catch {
+      if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('Video unavailable');
+    }
+
+  } else if (reqPath === '/media/local/stop' && req.method === 'POST') {
+    try {
+      const body = JSON.parse(await readBody(req, 2048) || '{}');
+      json(await localVideo.stop({ owner: body.owner, generation: body.generation }));
+    } catch { json({ ok: false, error: 'bad_request' }); }
+
+  } else if (reqPath === '/media/local/release' && req.method === 'POST') {
+    try {
+      const body = JSON.parse(await readBody(req, 4096) || '{}');
+      json(await localVideo.releaseFiles(body.ids));
+    } catch { json({ ok: false, error: 'bad_request' }); }
 
   } else if (reqPath === '/media' && req.method === 'GET') {
     try {
@@ -21990,6 +22075,7 @@ function _gracefulShutdown() {
   try { embeddedBrowser.shutdown(); } catch {}
   // Stop the second-screen capture host (if one is running).
   try { screenCapture.shutdown(); } catch {}
+  try { localVideo.close(); } catch {}
   // Stop the PresentMon FPS reader (holds an admin ETW tracing session) and the
   // foreground game probe. Both spawn long-lived children with no job object, so
   // without an explicit stop process.exit orphans them across every restart.

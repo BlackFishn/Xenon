@@ -46,7 +46,7 @@ function setup({ stored = '{}', denied = false, native = false } = {}) {
     localStorage: { getItem() { if (denied) throw new Error('denied'); return stored; }, setItem(key, value) { if (denied) throw new Error('denied'); writes.push({ key, value }); } },
   });
   const instrumented = source.replace('window.YouTubeWidget = { renderWidgets, playFromSdk };',
-    'window.YouTubeWidget = { parseVideoLink, normalizeVideo, player, saved, playList, playAt, playNext, applyState, toggleFavorite, stopPlayer, loadTab, setFocus, focusBackdropClick };');
+    'window.YouTubeWidget = { parseVideoLink, normalizeVideo, player, saved, playList, playAt, playNext, applyState, toggleFavorite, stopPlayer, loadTab, setFocus, focusBackdropClick, mediaViews, suspendForVideo() { youtubeSuspended = true; } };');
   vm.runInContext(instrumented, context);
   return { ...window.YouTubeWidget, stage, messages, events, documentEvents, document, writes, advanceClock() { now += 2000; } };
 }
@@ -102,6 +102,21 @@ test('autoplay off stops at the current video, repeat restarts it, manual Next s
   assert.deepEqual(r.messages.filter(m => m.event === 'command').slice(-2).map(m => m.func), ['seekTo', 'playVideo']);
   r.playNext();
   assert.equal(r.player.qi, 1);
+});
+
+test('a late YouTube ended message cannot resume a hidden source after local playback takes over', () => {
+  const r = setup(); r.playList([{ id: A }, { id: B }], 0, r.stage); r.applyState(1);
+  r.suspendForVideo(); const messages = r.messages.length; r.applyState(0);
+  assert.equal(r.player.qi, 0); assert.equal(r.messages.length, messages);
+  r.playNext(); assert.equal(r.player.qi, 1, 'a deliberate YouTube action still resumes its queue');
+});
+
+test('pager notifications pause hidden local decoding without a full widget render', () => {
+  const r = setup(); let paused = 0, focused = false;
+  const mount = { closest: () => ({ getClientRects: () => [] }) };
+  r.mediaViews.set(mount, { video: { isActive: () => true, isFocused: () => focused, pause() { paused += 1; } } });
+  r.events['xenon:page-change'](); assert.equal(paused, 1);
+  focused = true; r.events['xenon:page-change'](); assert.equal(paused, 1, 'a visible Focus dialog can stay playing above the pager');
 });
 
 test('message handling rejects foreign frames and wrong origins, then updates matching video metadata', () => {

@@ -135,6 +135,14 @@ function stripDiscordClone(clone) {
     delete mount.dataset.dcTab;   // a fresh copy opens on Controls, like a fresh tile
   });
 }
+// A cloned live media URL must never start a second request with the original
+// player's stream owner. Rebuild controls and file grants per widget instance.
+function stripYouTubeClone(clone) {
+  clone.querySelectorAll('.youtube-widget-mount').forEach((mount) => {
+    mount.replaceChildren();
+    delete mount.dataset.ytBuilt;
+  });
+}
 function stripChatClone(clone) {
   clone.querySelectorAll('.ai-chat, .ai-status, .ai-attach-preview, .ai-input-row, .ai-voice-view')
     .forEach(el => el.remove());
@@ -225,6 +233,7 @@ const CLONE_STRIPPERS = {
   tasks: stripTasksClone,
   timer: stripTimerClone,
   discord: stripDiscordClone,
+  youtube: stripYouTubeClone,
   chat: stripChatClone,
   deck: stripDeckClone,
   custom: stripCustomClone,

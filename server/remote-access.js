@@ -152,8 +152,9 @@ const REMOTE_DENY = new Set([
   '/api/phone/send',
 ]);
 
-// Prefix denials, for routes that carry an id tail.
-const REMOTE_DENY_PREFIXES = [];
+// Local video opens native file dialogs and streams files selected on this PC.
+// A paired screen must not operate those dialogs or inherit their file access.
+const REMOTE_DENY_PREFIXES = ['/media/local/'];
 
 // GET must never mutate on this door. Several endpoints answer both GET and
 // POST — that GET shape exists for the iCUE widget, whose Qt WebEngine cannot

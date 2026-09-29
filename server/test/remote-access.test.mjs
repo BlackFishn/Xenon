@@ -147,6 +147,11 @@ test('the refused surface matches an explicit, reviewed list', () => {
     // at the PC with the picker, the Slideshow folder-source shape. (The POST
     // is further down: this list is sorted.)
     'GET /api/transfer/settings',
+    // These sessions belong to files selected at the PC, not a paired screen.
+    'GET /media/local/prepare',
+    'GET /media/local/status',
+    'GET /media/local/stream',
+    'GET /media/local/subtitle',
     // The GET that SAVES the whole notes store (the iCUE ?save= shape). Reading
     // notes goes through /notes/list, which is allowed.
     'GET /notes',
@@ -206,6 +211,10 @@ test('the refused surface matches an explicit, reviewed list', () => {
     // the folder arrivals land in.
     'POST /api/transfer/settings',
     'POST /embedded-browser/adblock/install',
+    'POST /media/local/pick',
+    'POST /media/local/release',
+    'POST /media/local/stop',
+    'POST /media/local/subtitle',
     'POST /remote/install',
     'POST /second-screen/create-display',
     'POST /second-screen/install',

@@ -1,6 +1,7 @@
-# YouTube player
+# Media player: YouTube and local video
 
-Add **YouTube** from the dashboard’s **+** widget picker. Paste a video link and
+Add **Media** from the dashboard’s **+** widget picker, then select **YouTube**. Existing
+YouTube widgets keep their placement, settings and saved library. Paste a video link and
 choose **Play now** or **Add to queue**. An account connection is not required
 for pasted links, the queue, favorites, or recent videos.
 
@@ -32,7 +33,7 @@ below it and no overlay intercepting touches on a working embed.
   Each upcoming item can be removed. Closing the player clears the current queue.
 - The heart saves or removes the current video in **Favorites**. **Recent** records
   videos opened here. These lists, autoplay and repeat preferences are stored in this
-  browser, not synced across devices. Favorites are limited to 100 and recent videos
+browser, not synced across devices. Favorites are limited to 100 and recent videos
   to 30; the current session queue is limited to 100 entries. Reloading does not autoplay.
 - **YouTube account library** retains liked videos, playlists, subscriptions and
   search. Connect the account under **Settings → Streaming** to use these features.
@@ -55,3 +56,54 @@ cover signed-out playback, persisted favorites, iframe identity during fill/rest
 and desktop, 2560 × 720 Edge, portrait and phone layouts. Live Chromium playback was
 verified using the Blender Foundation’s Big Buck Bunny video. Native window behavior
 still requires a platform smoke test; its existing fullscreen guard is retained.
+
+## Local video
+
+Select **Video → Open files** to use the Windows file picker on the PC running Xenon.
+The dashboard must be opened locally; paired phones and remote dashboards cannot
+open or read the PC's video files. FFmpeg and its companion ffprobe must be installed
+on that PC. Xenon reuses its existing FFmpeg discovery, including `XEH_FFMPEG` and
+WinGet installations. No native-shell rebuild is required for this feature.
+
+Supported file containers are MKV, MP4/M4V, MOV, WebM and AVI. Playback depends on
+the contained codecs and the installed FFmpeg build. The session queue is not saved
+across reloads, and files stay on the PC. File paths are never sent to the browser.
+The local library holds up to 32 file grants. Use **Queue → Clear queue** to release
+them and choose different files. Removing the widget or leaving the dashboard also
+releases its file grants; switching between YouTube and Video retains the queue.
+
+- **Audio & subtitles** lists the file's language tracks. Audio changes resume at
+  the current position. Text subtitle changes do not restart the video.
+- Embedded text subtitles and external SRT, ASS, SSA and VTT are displayed as
+  WebVTT captions. **ASS (text only)** preserves dialogue and timing, without advanced
+  fonts, positioning or karaoke effects. Bitmap/PGS subtitles are shown as
+  unsupported; use a text subtitle file for these videos.
+- **Focus**, **Fill widget** and **Restore layout** retain the same video element.
+  Escape or a tap outside the Focus dialog returns to the dashboard. Audio, subtitle,
+  seek and volume controls stay available in Focus.
+- Switching to YouTube, hiding the page, removing the widget or pausing stops the
+  local stream. Press Play to resume from the saved position. Only one local player
+  in the same dashboard plays at a time.
+
+### Resource usage
+
+Compatible H.264 video is copied into a browser-compatible MP4 stream without
+decoding/re-encoding the picture. AAC audio is copied when possible; other selected
+audio is converted to stereo AAC. Other video formats use compatibility conversion,
+limited to 720p and two encoding threads. This mode costs CPU and can reduce image
+quality; its indicator is shown beside the filename.
+
+There is no library scan, background thumbnail generation or playback polling loop.
+Metadata is read only for selected files. Subtitle extraction is bounded and cached,
+and paused/hidden players release their FFmpeg stream. The browser still uses CPU/GPU
+to decode and display video, so resource usage depends on resolution, codec and hardware.
+
+Local file grants, stream counts, subtitle extraction concurrency and cache size are
+bounded. Same-origin and loopback checks protect every local-video endpoint, including
+streams and captions; these routes do not offer JSONP or permissive CORS.
+
+An isolated Windows measurement of 20 seconds of 1080p H.264/AAC copy playback
+used 1.73% of one logical CPU on average and 23.44 MiB peak FFmpeg working set.
+No tracked playback process remained 500 ms after stopping. These figures describe
+the remux worker, excluding the browser's video decoding/GPU usage, and are not a
+performance guarantee for other codecs or computers.
