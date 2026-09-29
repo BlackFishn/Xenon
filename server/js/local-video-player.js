@@ -25,6 +25,8 @@
     import_no_space: 'There is not enough temporary space. Clear the queue or free some disk space.',
     import_busy: 'Finish or cancel the current file preparation first.', unsupported_file: 'Choose an MKV, MP4, M4V, MOV, WebM or AVI video.',
     drop_hint: 'Drop videos here', added_files: 'Videos added to the queue',
+    subtitle_adjust: 'Adjust subtitles', subtitle_size: 'Subtitle size', subtitle_reset: 'Reset', subtitle_done: 'Done',
+    subtitle_drag_hint: 'Drag subtitles, or use arrow keys to move them.', subtitle_sample: 'Subtitle preview',
   };
   function t(key) {
     const id = 'local_video_' + key;
@@ -61,6 +63,8 @@
     let posterUrl = '', posterEpoch = 0;
     let activeImport = null, importEpoch = 0;
     let focusIdleTimer = null, suppressTouchClick = false;
+    const captionSettings = { x: .5, y: .92, size: 100 };
+    let captionEditing = false, captionDrag = null, captionTrack = null;
     const root = el('div', 'lv-root'); root.hidden = true;
     const body = el('div', 'lv-body');
     const stage = el('dialog', 'lv-stage'); stage.tabIndex = -1;
@@ -72,7 +76,10 @@
     const mark = el('span', 'lv-empty-icon'); mark.innerHTML = icons.file;
     empty.append(mark, el('strong', '', t('empty_title')), el('span', '', t('empty_hint')));
     const notice = el('div', 'lv-notice'); notice.hidden = true; notice.setAttribute('role', 'status');
-    screen.append(video, empty, notice);
+    const captionArea = el('div', 'lv-caption-area');
+    const caption = el('div', 'lv-caption'); caption.hidden = true; caption.tabIndex = -1;
+    caption.setAttribute('aria-label', t('subtitle_drag_hint')); captionArea.append(caption);
+    screen.append(video, empty, notice, captionArea);
 
     function button(cls, icon, key, action, text = false) {
       const node = el('button', 'yt-ib ' + cls); node.type = 'button'; node.innerHTML = icons[icon] || '';
@@ -127,6 +134,18 @@
     audio.addEventListener('change', () => { state.audio = audio.value; startAt(position(), !video.paused); });
     subtitles.addEventListener('change', () => { state.subtitle = subtitles.value; applySubtitle(); });
     const subLoad = button('lv-sub-load', 'file', 'load_subtitle', loadSubtitle, true); trackPanel.append(subLoad);
+    const subAdjust = button('lv-sub-adjust', '', 'subtitle_adjust', () => editCaptions(true), true); trackPanel.append(subAdjust);
+    const captionEditor = el('div', 'lv-caption-editor'); captionEditor.hidden = true;
+    const captionHint = el('span', 'lv-caption-hint', t('subtitle_drag_hint')); captionHint.dataset.lvText = 'subtitle_drag_hint';
+    const captionSizeLabel = el('label', 'lv-caption-size-label');
+    const captionSizeTitle = el('span', '', t('subtitle_size')); captionSizeTitle.dataset.lvText = 'subtitle_size';
+    const captionSize = el('input', 'lv-caption-size'); captionSize.type = 'range'; captionSize.min = '80'; captionSize.max = '200'; captionSize.step = '5'; captionSize.value = '100'; captionSize.setAttribute('aria-label', t('subtitle_size'));
+    const captionSizeValue = el('output', 'lv-caption-size-value', '100%');
+    captionSize.addEventListener('input', () => { captionSettings.size = Math.min(200, Math.max(80, Number(captionSize.value) || 100)); layoutCaptions(); });
+    captionSizeLabel.append(captionSizeTitle, captionSize, captionSizeValue);
+    captionEditor.append(captionHint, captionSizeLabel,
+      button('lv-caption-reset', '', 'subtitle_reset', () => { Object.assign(captionSettings, { x: .5, y: .92, size: 100 }); layoutCaptions(); }, true),
+      button('lv-caption-done', '', 'subtitle_done', event => editCaptions(false, event.detail === 0), true));
     const videoInput = el('input', 'lv-video-input'); videoInput.type = 'file'; videoInput.multiple = true; videoInput.accept = '.mkv,.mp4,.m4v,.mov,.webm,.avi'; videoInput.hidden = true;
     const subtitleInput = el('input', 'lv-subtitle-input'); subtitleInput.type = 'file'; subtitleInput.accept = '.srt,.ass,.ssa,.vtt'; subtitleInput.hidden = true;
     videoInput.addEventListener('change', () => { const files = Array.from(videoInput.files || []); videoInput.value = ''; void addFiles(files); });
@@ -138,7 +157,7 @@
     importCopy.append(importTitle, importName, importProgress);
     const cancelImport = button('lv-import-cancel', 'close', 'cancel_import', () => { abortImports(); selectionNote.textContent = t('import_cancelled'); selectionNote.hidden = false; }, true);
     importBar.append(importCopy, importPercent, cancelImport);
-    stage.append(screen, transport, trackPanel, videoInput, subtitleInput, importBar);
+    stage.append(screen, transport, trackPanel, videoInput, subtitleInput, importBar, captionEditor);
     const queue = el('aside', 'lv-queue'); queue.hidden = true;
     const queueHead = el('div', 'lv-queue-head'); const queueTitle = el('strong', '', t('queue')); queueTitle.dataset.lvText = 'queue';
     const count = el('span', 'lv-queue-count', '0'); queueHead.append(queueTitle, count, button('lv-clear-queue', 'close', 'clear_queue', clearQueue));
@@ -179,7 +198,7 @@
     }
     function setTracks(on) { trackPanel.hidden = !on; trackButton.setAttribute('aria-expanded', String(on)); if (on) audio.focus(); else trackButton.focus(); revealFocusControls(); }
     function keepFocusControls() {
-      return state.picking || scrubbing || !trackPanel.hidden ||
+      return captionEditing || state.picking || scrubbing || !trackPanel.hidden ||
         transport.contains(document.activeElement) || trackPanel.contains(document.activeElement) || importBar.contains(document.activeElement);
     }
     function clearFocusIdle() { if (focusIdleTimer !== null) { clearTimeout(focusIdleTimer); focusIdleTimer = null; } }
@@ -200,6 +219,7 @@
       const height = fromMetadata ? video.videoHeight : file?.height;
       if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) stage.style.setProperty('--lv-aspect', String(width / height));
       else if (!fromMetadata) stage.style.setProperty('--lv-aspect', String(16 / 9));
+      layoutCaptions();
     }
     function paint() {
       if (state.destroyed) return;
@@ -214,7 +234,7 @@
       play.disabled = !has || state.loading;
       const paused = video.paused;
       play.innerHTML = icons[paused ? 'play' : 'pause']; play.title = t(paused ? 'play' : 'pause'); play.setAttribute('aria-label', play.title);
-      trackButton.disabled = !has; subLoad.disabled = !has || state.picking;
+      trackButton.disabled = !has; subLoad.disabled = !has || state.picking; subAdjust.disabled = !has;
       openEmpty.disabled = state.picking;
       syncFocusControls();
       if (onChange) onChange();
@@ -278,18 +298,113 @@
       if (video.paused) { onPlay?.(); video.play().catch(() => message(t('failed'), true)); }
       else pause(true);
     }
+    function pictureBounds() {
+      const rect = screen.getBoundingClientRect(), file = current();
+      const ratio = (video.videoWidth || file?.width || 16) / (video.videoHeight || file?.height || 9);
+      const width = Math.min(rect.width, rect.height * ratio), height = width / ratio;
+      return { left: rect.left + (rect.width - width) / 2, top: rect.top + (rect.height - height) / 2, width, height, screen: rect };
+    }
+    function layoutCaptions() {
+      captionSize.value = String(captionSettings.size); captionSizeValue.textContent = captionSettings.size + '%';
+      for (const key of ['x', 'y', 'size']) caption.dataset[key] = String(captionSettings[key]);
+      const rect = pictureBounds();
+      if (!rect.width || !rect.height || !Number.isFinite(rect.width)) return;
+      Object.assign(captionArea.style, { left: rect.left - rect.screen.left + 'px', top: rect.top - rect.screen.top + 'px', width: rect.width + 'px', height: rect.height + 'px' });
+      caption.style.fontSize = Math.max(12, rect.height * .04) * captionSettings.size / 100 + 'px';
+      const box = caption.getBoundingClientRect();
+      const halfWidth = Math.min(.5, box.width / rect.width / 2), minY = Math.min(1, box.height / rect.height);
+      caption.style.left = Math.min(1 - halfWidth, Math.max(halfWidth, captionSettings.x)) * 100 + '%';
+      caption.style.top = Math.min(1, Math.max(minY, captionSettings.y)) * 100 + '%';
+    }
+    function copyCueText(source, target) {
+      for (const node of Array.from(source.childNodes || [])) {
+        if (node.nodeType === 3) target.append(document.createTextNode(node.textContent));
+        else if (node.nodeType === 1) {
+          const tag = node.nodeName.toLowerCase();
+          const child = el(['b', 'i', 'u', 'ruby', 'rt', 'br'].includes(tag) ? tag : 'span', '');
+          copyCueText(node, child); target.append(child);
+        }
+      }
+    }
+    function renderCaptions() {
+      caption.replaceChildren();
+      for (const cue of Array.from(captionTrack?.activeCues || [])) {
+        const line = el('div', 'lv-caption-cue');
+        if (typeof cue.getCueAsHTML === 'function') copyCueText(cue.getCueAsHTML(), line);
+        else line.textContent = String(cue.text || '');
+        caption.append(line);
+      }
+      if (!caption.children.length && captionEditing) caption.append(el('div', 'lv-caption-cue', t('subtitle_sample')));
+      caption.hidden = !caption.children.length;
+      layoutCaptions();
+    }
+    function editCaptions(on, restoreKeyboardFocus = true) {
+      if (on && !current()) return;
+      if (!on && !captionEditing) return;
+      captionEditing = !!on; captionDrag = null;
+      captionEditor.hidden = !on; caption.tabIndex = on ? 0 : -1;
+      stage.classList.toggle('is-caption-editing', !!on);
+      if (on) { trackPanel.hidden = true; trackButton.setAttribute('aria-expanded', 'false'); }
+      renderCaptions();
+      if (on) caption.focus({ preventScroll: true }); else (restoreKeyboardFocus ? trackButton : stage).focus({ preventScroll: true });
+      revealFocusControls();
+    }
+    caption.addEventListener('pointerdown', event => {
+      if (!captionEditing || event.button > 0) return;
+      event.preventDefault(); event.stopPropagation(); caption.focus({ preventScroll: true });
+      const rect = pictureBounds(), box = caption.getBoundingClientRect();
+      captionDrag = { id: event.pointerId, x: event.clientX, y: event.clientY,
+        anchorX: (box.left + box.width / 2 - rect.left) / rect.width, anchorY: (box.top + box.height - rect.top) / rect.height };
+      caption.setPointerCapture?.(event.pointerId);
+    });
+    caption.addEventListener('pointermove', event => {
+      if (!captionDrag || captionDrag.id !== event.pointerId) return;
+      event.preventDefault(); event.stopPropagation();
+      const rect = pictureBounds(), box = caption.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const halfWidth = Math.min(.5, box.width / rect.width / 2), minY = Math.min(1, box.height / rect.height);
+      captionSettings.x = Math.min(1 - halfWidth, Math.max(halfWidth, captionDrag.anchorX + (event.clientX - captionDrag.x) / rect.width));
+      captionSettings.y = Math.min(1, Math.max(minY, captionDrag.anchorY + (event.clientY - captionDrag.y) / rect.height));
+      layoutCaptions();
+    });
+    for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) caption.addEventListener(type, event => {
+      if (!captionDrag || captionDrag.id !== event.pointerId) return;
+      captionDrag = null; event.stopPropagation();
+      if (caption.hasPointerCapture?.(event.pointerId)) caption.releasePointerCapture(event.pointerId);
+    });
+    caption.addEventListener('click', event => { if (captionEditing) { event.preventDefault(); event.stopPropagation(); } });
+    caption.addEventListener('keydown', event => {
+      if (!captionEditing || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+      event.preventDefault(); event.stopPropagation();
+      const delta = event.shiftKey ? .05 : .01;
+      const rect = pictureBounds(), box = caption.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const halfWidth = Math.min(.5, box.width / rect.width / 2), minY = Math.min(1, box.height / rect.height);
+      const x = (box.left + box.width / 2 - rect.left) / rect.width, y = (box.top + box.height - rect.top) / rect.height;
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') captionSettings.x = Math.min(1 - halfWidth, Math.max(halfWidth, x + (event.key === 'ArrowLeft' ? -delta : delta)));
+      else captionSettings.y = Math.min(1, Math.max(minY, y + (event.key === 'ArrowUp' ? -delta : delta)));
+      layoutCaptions();
+    });
     function applySubtitle() {
       clearTracks();
       const file = current(), selected = file?.subtitleTracks?.find(track => String(track.id) === state.subtitle);
       if (!selected || selected.supported === false || !state.generation) return;
       const track = el('track', ''); track.kind = 'subtitles'; track.label = selected.label || selected.language || t('subtitles');
       track.src = '/media/local/subtitle?' + new URLSearchParams({ id: file.id, track: state.subtitle, start: String(state.offset) });
-      track.default = true; video.append(track); if (track.track) track.track.mode = 'showing';
+      track.default = true; video.append(track); captionTrack = track.track;
+      if (captionTrack) {
+        captionTrack.mode = 'hidden';
+        captionTrack.addEventListener('cuechange', renderCaptions);
+      }
+      track.addEventListener('load', renderCaptions); renderCaptions();
       track.addEventListener('error', () => { if (track.isConnected && state.subtitle === String(selected.id)) message(t('sub_failed'), true); });
     }
     function clearTracks() {
+      if (captionTrack) captionTrack.removeEventListener('cuechange', renderCaptions);
+      captionTrack = null;
       for (const track of Array.from(video.textTracks || [])) track.mode = 'disabled';
       video.querySelectorAll('track').forEach(track => { if (track.track) track.track.mode = 'disabled'; track.remove(); });
+      renderCaptions();
     }
     function openFiles() {
       if (state.picking || state.destroyed) return;
@@ -416,10 +531,11 @@
       stage.classList.toggle('has-hidden-controls', trackPanel.hidden && !state.picking);
       paint(); return true;
     }
-    stage.addEventListener('cancel', event => { event.preventDefault(); setFocus(false); });
+    stage.addEventListener('cancel', event => { event.preventDefault(); if (captionEditing) editCaptions(false); else setFocus(false); });
     stage.addEventListener('close', () => { if (state.focused && !stage.open) setFocus(false); });
     stage.addEventListener('pointermove', () => { if (state.focused && !stage.classList.contains('has-hidden-controls')) revealFocusControls(); });
     stage.addEventListener('pointerdown', event => {
+      if (captionEditing) return;
       suppressTouchClick = state.focused && event.pointerType === 'touch' && stage.classList.contains('has-hidden-controls');
       if (suppressTouchClick) { revealFocusControls(); event.preventDefault(); event.stopPropagation(); }
     }, true);
@@ -449,6 +565,7 @@
     stage.addEventListener('keydown', event => {
       if (state.focused) revealFocusControls();
       if (event.key !== 'Escape') return;
+      if (captionEditing) { event.preventDefault(); event.stopPropagation(); editCaptions(false); return; }
       if (!trackPanel.hidden) { event.preventDefault(); event.stopPropagation(); setTracks(false); }
     });
     video.addEventListener('timeupdate', paint);
@@ -470,6 +587,7 @@
     });
     function pause(snapshot = false) { if (snapshot) capturePausedFrame(); else clearPoster(); release(); state.loading = false; message(''); paint(); }
     function clearQueue() {
+      editCaptions(false);
       abortImports();
       state.revision += 1; state.picking = false;
       setFocus(false); release(); fill(false);
@@ -483,7 +601,7 @@
     function fill(on) { state.filled = !!on && !!current(); wrap.classList.toggle('is-video-filled', state.filled && state.active); paint(); }
     function setActive(on) {
       state.active = !!on; root.hidden = !on;
-      if (!on) { state.revision += 1; abortImports(); setFocus(false); pause(); fill(false); }
+      if (!on) { state.revision += 1; editCaptions(false); abortImports(); setFocus(false); pause(); fill(false); }
       paint();
     }
     function relabel() {
@@ -501,7 +619,9 @@
       const viewport = mount.querySelector('.yt-viewport'); if (viewport) viewport.hidden = true;
       mount.querySelector('.media-open-files').disabled = state.picking;
     }
-    function destroy() { state.destroyed = true; clearQueue(); root.remove(); }
+    const captionObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(layoutCaptions) : null;
+    captionObserver?.observe(screen);
+    function destroy() { state.destroyed = true; captionObserver?.disconnect(); clearQueue(); root.remove(); }
     fillRange(volume); paintQueue(); paint();
     return { root, openFiles, addFiles, cancelImports: abortImports, setActive, setFocus, fill, pause, clearQueue, restore() { setFocus(false); fill(false); }, toggleQueue() { queue.hidden = !queue.hidden; body.classList.toggle('has-queue', !queue.hidden); return !queue.hidden; }, syncHeader, relabel, destroy, isActive: () => state.active, isFocused: () => state.focused, isFilled: () => state.filled };
   }

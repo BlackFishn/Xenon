@@ -31937,6 +31937,12 @@ Object.assign(i18n.en, {
   local_video_unsupported_file: 'Choose an MKV, MP4, M4V, MOV, WebM or AVI video.',
   local_video_drop_hint: 'Drop videos here',
   local_video_added_files: 'Videos added to the queue',
+  local_video_subtitle_adjust: 'Adjust subtitles',
+  local_video_subtitle_size: 'Subtitle size',
+  local_video_subtitle_reset: 'Reset',
+  local_video_subtitle_done: 'Done',
+  local_video_subtitle_drag_hint: 'Drag subtitles, or use arrow keys to move them.',
+  local_video_subtitle_sample: 'Subtitle preview',
 });
 
 function t(key) {

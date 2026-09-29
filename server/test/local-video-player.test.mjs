@@ -19,7 +19,9 @@ function setup({ available = true, picked = [file], pendingPick, prepare, denyPl
       this.tagName = tag; this.className = cls; this.textContent = text; this.children = []; this.parentNode = null;
       this.dataset = {}; this.attributes = {}; this.events = {}; this.hidden = false; this.value = ''; this.paused = true;
       this.currentTime = 0; this.volume = 1; this.style = { setProperty(key, value) { this[key] = value; } }; this.open = false; this.isConnected = true;
-      this.track = tag === 'track' ? { mode: 'disabled' } : undefined;
+      this.track = tag === 'track' ? { mode: 'disabled', activeCues: [], events: {},
+        addEventListener(name, fn) { this.events[name] = fn; }, removeEventListener(name) { delete this.events[name]; },
+        emit(name) { this.events[name]?.(); } } : undefined;
       this.classList = {
         contains: name => this.className.split(' ').includes(name),
         add: name => { if (!this.classList.contains(name)) this.className += ' ' + name; },
@@ -45,7 +47,7 @@ function setup({ available = true, picked = [file], pendingPick, prepare, denyPl
     focus() { document.activeElement = this; }
     showModal() { this.open = true; }
     close() { this.open = false; this.emit('close'); }
-    getBoundingClientRect() { return { left: 10, top: 10, right: 810, bottom: 460 }; }
+    getBoundingClientRect() { return this.rect || { left: 10, top: 10, right: 810, bottom: 460, width: 800, height: 450 }; }
     get options() { return this.children; }
     querySelectorAll(selector) {
       const match = node => selector.startsWith('.') ? node.classList.contains(selector.slice(1)) : selector.startsWith('[data-') ? node.dataset[selector.slice(6, -1).replace(/-([a-z])/g, (_, char) => char.toUpperCase())] !== undefined : node.tagName === selector;
@@ -57,6 +59,7 @@ function setup({ available = true, picked = [file], pendingPick, prepare, denyPl
     load() { this.currentTime = 0; }
   }
   document.body = new Node('body');
+  document.createTextNode = text => new Node('#text', '', text);
   const makeEl = (tag, cls, text) => new Node(tag, cls, text);
   const window = {};
   class XMLHttpRequest {
@@ -166,7 +169,7 @@ test('imported files play through opaque IDs with correct audio and scoped cance
 test('subtitle switch and external subtitle use WebVTT without restarting playback', async () => {
   const r = setup(); await r.importFiles(); const src = r.video.src;
   r.find('lv-subtitles').value = '3'; r.find('lv-subtitles').emit('change');
-  assert.equal(r.video.src, src); assert.equal(r.video.querySelector('track').track.mode, 'showing');
+  assert.equal(r.video.src, src); assert.equal(r.video.querySelector('track').track.mode, 'hidden');
   assert.match(r.video.querySelector('track').src, /track=3&start=0$/);
   assert.equal(r.find('lv-subtitles').options.find(option => option.value === '4').disabled, true);
   r.find('lv-subtitles').value = 'off'; r.find('lv-subtitles').emit('change');
@@ -242,6 +245,85 @@ test('Focus preserves the player, source, position and Fill; pause does not clos
   r.player.pause(); assert.equal(r.stage.open, true);
   r.stage.emit('cancel'); assert.equal(r.stage.open, false); assert.equal(r.player.isFilled(), true);
   assert.equal(r.document.body.classList.contains('lv-focused'), false);
+});
+
+test('caption cues render safe text and supported markup without fetching or restarting video', async () => {
+  const r = setup(); await r.importFiles(); r.video.emit('canplay');
+  r.find('lv-subtitles').value = '3'; r.find('lv-subtitles').emit('change');
+  const track = r.video.querySelector('track').track, src = r.video.src, calls = r.calls.length;
+  const text = value => ({ nodeType: 3, textContent: value });
+  const tag = (name, ...childNodes) => ({ nodeType: 1, nodeName: name.toUpperCase(), childNodes, attributes: { onclick: 'bad()', src: 'bad' } });
+  track.activeCues = [{ getCueAsHTML: () => ({ childNodes: [tag('b', text('ภาษาไทย\nEnglish')), tag('i', text('italic')), tag('ruby', text('字'), tag('rt', text('reading'))), tag('script', text('safe text'))] }) }];
+  track.emit('cuechange');
+  const caption = r.find('lv-caption');
+  assert.equal(track.mode, 'hidden'); assert.equal(caption.hidden, false);
+  assert.equal(caption.querySelector('b').children[0].textContent, 'ภาษาไทย\nEnglish');
+  assert.equal(caption.querySelector('rt').children[0].textContent, 'reading');
+  assert.equal(caption.querySelector('script'), null); assert.deepEqual(caption.querySelector('b').attributes, {});
+  assert.equal(r.video.src, src); assert.equal(r.calls.length, calls);
+  track.activeCues = [{ text: 'Next cue' }]; track.emit('cuechange');
+  assert.equal(caption.children.length, 1); assert.equal(caption.children[0].textContent, 'Next cue');
+  r.find('lv-subtitles').value = 'off'; r.find('lv-subtitles').emit('change');
+  assert.equal(caption.hidden, true); assert.equal(track.events.cuechange, undefined);
+  track.emit('cuechange'); assert.equal(caption.children.length, 0);
+});
+
+test('subtitle editing bounds mouse and touch drag to the picture and preserves playback', async () => {
+  const r = setup(); await r.importFiles(); r.video.emit('canplay');
+  const screen = r.find('lv-screen'), caption = r.find('lv-caption');
+  screen.rect = { left: 10, top: 10, width: 800, height: 600 };
+  caption.getBoundingClientRect = () => ({ left: 10 + parseFloat(caption.style.left || '50') * 8 - 100, top: 85 + parseFloat(caption.style.top || '92') * 4.5 - 40, width: 200, height: 40 });
+  const src = r.video.src, calls = r.calls.length;
+  r.find('lv-sub-adjust').click();
+  assert.equal(r.stage.classList.contains('is-caption-editing'), true);
+  assert.equal(caption.children[0].textContent, 'Subtitle preview');
+  assert.equal(r.find('lv-caption-area').style.top, '75px'); assert.equal(r.find('lv-caption-area').style.height, '450px');
+  for (const pointerType of ['mouse', 'touch']) {
+    caption.emit('pointerdown', { pointerId: 1, pointerType, clientX: 410, clientY: 499, button: 0 });
+    caption.emit('pointermove', { pointerId: 1, clientX: -1000, clientY: -1000 });
+    assert.equal(Number(caption.dataset.x), .125); assert.ok(Math.abs(Number(caption.dataset.y) - 40 / 450) < .00001);
+    caption.emit('pointermove', { pointerId: 1, clientX: 3000, clientY: 3000 });
+    assert.equal(Number(caption.dataset.x), .875); assert.equal(Number(caption.dataset.y), 1);
+    caption.emit('pointerup', { pointerId: 1 }); r.find('lv-caption-reset').click();
+  }
+  caption.emit('keydown', { key: 'ArrowUp' }); caption.emit('keydown', { key: 'ArrowLeft', shiftKey: true });
+  assert.equal(caption.dataset.x, '0.45'); assert.ok(Math.abs(Number(caption.dataset.y) - .91) < .00001);
+  for (let i = 0; i < 60; i += 1) caption.emit('keydown', { key: 'ArrowLeft' });
+  assert.equal(Number(caption.dataset.x), .125);
+  caption.emit('keydown', { key: 'ArrowRight' }); assert.ok(Math.abs(Number(caption.dataset.x) - .135) < .00001, 'one reversed key moves immediately at the left edge');
+  for (let i = 0; i < 100; i += 1) caption.emit('keydown', { key: 'ArrowUp' });
+  assert.ok(Math.abs(Number(caption.dataset.y) - 40 / 450) < .00001);
+  caption.emit('keydown', { key: 'ArrowDown' }); assert.ok(Math.abs(Number(caption.dataset.y) - (40 / 450 + .01)) < .00001, 'one reversed key moves immediately at the top edge');
+  const size = r.find('lv-caption-size'); size.value = '80'; size.emit('input'); const small = parseFloat(caption.style.fontSize);
+  size.value = '200'; size.emit('input'); assert.equal(parseFloat(caption.style.fontSize) / small, 2.5);
+  assert.equal(r.video.src, src); assert.equal(r.calls.length, calls); assert.equal(r.video.paused, false);
+  const settings = { ...caption.dataset }; r.player.setFocus(true); r.player.setFocus(false); r.player.fill(true);
+  assert.deepEqual(caption.dataset, settings);
+  r.find('lv-caption-reset').click(); assert.deepEqual(caption.dataset, { x: '0.5', y: '0.92', size: '100' });
+  r.find('lv-caption-done').click(); assert.equal(r.stage.classList.contains('is-caption-editing'), false); assert.equal(caption.hidden, true);
+});
+
+test('pointer Done restores Focus idle hiding while keyboard Done preserves control focus', async () => {
+  const r = setup(); await r.importFiles(); r.video.emit('canplay'); r.player.setFocus(true);
+  r.find('lv-sub-adjust').click(); r.find('lv-caption-done').emit('click', { detail: 1 });
+  assert.equal(r.document.activeElement, r.stage); assert.equal(r.stage.classList.contains('has-hidden-controls'), false);
+  r.expireIdle(); assert.equal(r.stage.classList.contains('has-hidden-controls'), true);
+  r.find('lv-sub-adjust').click(); r.find('lv-caption-done').emit('click', { detail: 0 });
+  assert.equal(r.document.activeElement, r.find('lv-tracks-toggle'));
+  r.expireIdle(); assert.equal(r.stage.classList.contains('has-hidden-controls'), false);
+});
+
+test('paused subtitle preview remains editable and Escape finishes editing before leaving Focus', async () => {
+  const r = setup(); await r.importFiles(); r.video.emit('canplay'); r.player.pause(); r.player.setFocus(true);
+  r.find('lv-sub-adjust').click(); const calls = r.calls.length;
+  assert.equal(r.find('lv-caption').hidden, false); assert.equal(r.find('lv-caption-editor').hidden, false);
+  r.find('lv-caption-size').value = '150'; r.find('lv-caption-size').emit('input');
+  assert.equal(r.video.src, ''); assert.equal(r.calls.length, calls);
+  r.stage.emit('keydown', { key: 'Escape' });
+  assert.equal(r.stage.open, true); assert.equal(r.find('lv-caption-editor').hidden, true);
+  r.stage.emit('cancel'); assert.equal(r.stage.open, false);
+  r.find('lv-sub-adjust').click(); r.player.setActive(false);
+  assert.equal(r.stage.classList.contains('is-caption-editing'), false); assert.equal(r.find('lv-caption').hidden, true);
 });
 
 test('synthetic child clicks do not dismiss Focus or cancel its file input activation', async () => {
