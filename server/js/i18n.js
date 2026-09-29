@@ -31880,7 +31880,7 @@ Object.assign(i18n.en, {
   local_video_restore: 'Restore layout',
   local_video_queue: 'Queue',
   local_video_empty_title: 'Your files. Your cinema.',
-  local_video_empty_hint: 'Open a video from this PC. MKV, MP4 and more, with selectable audio and subtitles.',
+  local_video_empty_hint: 'Open files or drop videos here. MKV, MP4 and more, with selectable audio and subtitles.',
   local_video_audio: 'Audio',
   local_video_subtitles: 'Subtitles',
   local_video_tracks: 'Audio & subtitles',
@@ -31912,6 +31912,16 @@ Object.assign(i18n.en, {
   local_video_compatibility: 'Compatibility · up to 720p',
   local_video_compatibility_hint: 'This codec needs video conversion, limited to 720p to reduce CPU use.',
   local_video_skipped_files: 'Some files could not be opened',
+  local_video_preparing: 'Preparing local file',
+  local_video_cancel_import: 'Cancel',
+  local_video_import_cancelled: 'File preparation cancelled.',
+  local_video_import_failed: 'Could not prepare this file. Try again.',
+  local_video_import_too_large: 'Videos can be up to 16 GB; subtitle files can be up to 8 MB.',
+  local_video_import_no_space: 'There is not enough temporary space. Clear the queue or free some disk space.',
+  local_video_import_busy: 'Finish or cancel the current file preparation first.',
+  local_video_unsupported_file: 'Choose an MKV, MP4, M4V, MOV, WebM or AVI video.',
+  local_video_drop_hint: 'Drop videos here',
+  local_video_added_files: 'Videos added to the queue',
 });
 
 function t(key) {

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — local video file selection and Focus
+
+- Open videos and external subtitles with the WebView/browser file picker directly from the button click, avoiding the separate backend PowerShell dialog.
+- Drop video files onto Media to switch to Video and prepare them locally, with progress and cancellation.
+- Stream selected files into bounded temporary storage without buffering entire videos in RAM; clean up cancelled imports and released file grants.
+- Enable HTML file drops in the native dashboard shell. Desktop drag-and-drop requires the updated native executable.
+- Let local video fill its Focus frame at the video's aspect ratio. Click or tap the picture to reveal overlaid controls, which hide after inactivity.
+
 ## Unreleased — multimedia player
 
 - Expand the YouTube widget into Media with separate YouTube and local Video sources, a file queue, Fill widget and Focus/Restore controls.

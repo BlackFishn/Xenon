@@ -32,6 +32,15 @@
   const api = apiJson; // shared fetch-JSON helper from utils.js
   const mediaViews = new Map();
   let youtubeSuspended = false;
+  const isFileDrag = event => Array.from(event.dataTransfer?.types || []).includes('Files');
+  const clearFileDrag = () => document.body.classList.remove('media-file-drag');
+  // File drops must never navigate the dashboard away from its settings store.
+  // Internal widget/layout drags use other data types and keep their own handlers.
+  document.addEventListener('dragenter', event => { if (mediaViews.size && isFileDrag(event)) document.body.classList.add('media-file-drag'); });
+  document.addEventListener('dragover', event => { if (mediaViews.size && isFileDrag(event)) event.preventDefault(); });
+  document.addEventListener('drop', event => { if (mediaViews.size && isFileDrag(event)) event.preventDefault(); clearFileDrag(); }, true);
+  document.addEventListener('dragend', clearFileDrag);
+  document.addEventListener('dragleave', event => { if (!event.relatedTarget && (event.clientX <= 0 || event.clientY <= 0 || event.clientX >= window.innerWidth || event.clientY >= window.innerHeight)) clearFileDrag(); });
 
   function selectSource(mount, source) {
     const view = mediaViews.get(mount); if (!view) return;
@@ -56,12 +65,16 @@
     for (const [mount, view] of mediaViews) {
       const tile = mount.closest('[data-dashboard-widget]');
       if (view.video?.isActive() && !view.video.isFocused() && tile &&
-          ((typeof onVisiblePage === 'function' && !onVisiblePage(tile)) || !tile.getClientRects().length)) view.video.pause();
+          ((typeof onVisiblePage === 'function' && !onVisiblePage(tile)) || !tile.getClientRects().length)) { view.video.cancelImports?.(); view.video.pause(); }
     }
   }
-  document.addEventListener('visibilitychange', () => { if (document.hidden) pauseLocalVideos(); });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) return;
+    for (const view of mediaViews.values()) view.video?.cancelImports?.();
+    pauseLocalVideos();
+  });
   window.addEventListener('xenon:page-change', pauseHiddenLocalVideos);
-  window.addEventListener('pagehide', () => { for (const view of mediaViews.values()) view.video?.clearQueue(); });
+  window.addEventListener('pagehide', () => { clearFileDrag(); for (const view of mediaViews.values()) view.video?.clearQueue(); });
 
   let poll = null;
   let connected = null;     // null=unknown
@@ -623,6 +636,16 @@
       onChange() { view.video?.syncHeader(); },
     });
     else sources.querySelector('[data-media-source="video"]').disabled = true;
+    wrap.dataset.mediaDropHint = t('local_video_drop_hint', 'Drop videos here');
+    wrap.addEventListener('dragover', event => {
+      if (!isFileDrag(event)) return;
+      event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'copy';
+    });
+    wrap.addEventListener('drop', event => {
+      if (!isFileDrag(event) || !view.video) return;
+      event.preventDefault(); event.stopPropagation(); clearFileDrag();
+      selectSource(mount, 'video'); void view.video.addFiles(Array.from(event.dataTransfer.files || []));
+    });
   }
 
   function iconBtn(cls, icon, label, onClick) {
@@ -933,6 +956,7 @@
   // list signature carries the language so its rows re-render too.
   function relabel(mount) {
     mount.querySelector('.yt-logo').textContent = t('media_title', 'Media');
+    mount.querySelector('.yt-wrap').dataset.mediaDropHint = t('local_video_drop_hint', 'Drop videos here');
     mediaViews.get(mount)?.video?.relabel();
     mount.querySelectorAll('.yt-tab').forEach(b => {
       const f = TAB_LABEL[b.dataset.ytTab];

@@ -211,6 +211,7 @@ test('the refused surface matches an explicit, reviewed list', () => {
     // the folder arrivals land in.
     'POST /api/transfer/settings',
     'POST /embedded-browser/adblock/install',
+    'POST /media/local/import',
     'POST /media/local/pick',
     'POST /media/local/release',
     'POST /media/local/stop',

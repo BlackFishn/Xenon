@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtemp, writeFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, readdir, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -27,6 +27,7 @@ async function fixture(t, extra = {}) {
   const calls = [];
   const children = [];
   const engine = createLocalVideo({
+    tempRoot: dir,
     platform: 'win32', getFfmpegPath: () => 'ffmpeg', pickFiles: async () => [video],
     execFile: async (file, args, options) => {
       calls.push({ file, args, options });
@@ -42,7 +43,7 @@ async function fixture(t, extra = {}) {
       return child;
     }, ...extra
   });
-  t.after(async () => { engine.close(); await rm(dir, { recursive: true, force: true }); });
+  t.after(async () => { await engine.close(); await rm(dir, { recursive: true, force: true }); });
   return { dir, video, calls, children, engine };
 }
 
@@ -66,7 +67,8 @@ test('picker authorizes opaque IDs and exposes language metadata without paths',
   assert.equal(info.subtitleTracks[2].supported, false);
   assert.equal(info.playbackMode, 'copy');
   assert.equal(JSON.stringify(result).includes(video), false);
-  assert.deepEqual(await engine.status(), { ok: true, available: true, engine: 'ffmpeg', platform: 'win32', pickerSupported: true, activeStreams: 0 });
+  assert.deepEqual(await engine.status(), { ok: true, available: true, engine: 'ffmpeg', platform: 'win32', pickerSupported: true,
+    importSupported: true, maxImportBytes: 16 * 1024 ** 3, maxImportTotalBytes: 32 * 1024 ** 3, maxSubtitleBytes: 8 * 1024 ** 2, activeStreams: 0 });
 });
 
 test('file authorization refuses relative paths, URLs, UNC, ADS, non-media and changed files', async t => {
@@ -258,4 +260,111 @@ test('subtitle extraction work stays bounded while distinct requests are pending
   assert.equal(count, 2);
   finish();
   await Promise.all([one, two]);
+});
+
+function upload(body) {
+  const req = new PassThrough();
+  req.headers = {};
+  if (body !== undefined) queueMicrotask(() => req.end(body));
+  return req;
+}
+
+async function importedFiles(dir) {
+  const directories = (await readdir(dir, { withFileTypes: true })).filter(entry => entry.isDirectory() && entry.name.startsWith('xenon-local-video-'));
+  return (await Promise.all(directories.map(async entry => (await readdir(path.join(dir, entry.name))).map(name => path.join(dir, entry.name, name))))).flat();
+}
+
+test('browser imports stream to private temporary files and keep the original display name', async t => {
+  const { engine, dir } = await fixture(t);
+  const req = upload();
+  const pending = engine.importFile(req, { name: 'ภาพยนตร์.mkv', size: 1024 * 1024 });
+  for (let i = 0; i < 16; i++) req.write(Buffer.alloc(64 * 1024, i));
+  req.end();
+  const result = await pending;
+  assert.equal(result.ok, true);
+  assert.equal(result.files[0].name, 'ภาพยนตร์.mkv');
+  assert.equal(result.files[0].audioTracks.length, 2);
+  const imported = await importedFiles(dir);
+  assert.equal(imported.length, 1);
+  assert.match(path.basename(imported[0]), /^[a-f0-9]{32}\.mkv$/);
+  assert.equal((await readFile(imported[0])).length, 1024 * 1024);
+  assert.equal(JSON.stringify(result).includes(dir), false);
+  engine.releaseFiles([result.files[0].id]);
+  await engine.close();
+  assert.deepEqual(await importedFiles(dir), []);
+});
+
+test('invalid names, extensions, sizes and low disk space reject before consuming uploads', async t => {
+  const { engine } = await fixture(t, { statfs: async () => ({ bavail: 10, bsize: 1024 }) });
+  for (const name of ['../movie.mkv', 'C:\\movie.mkv', 'movie.mkv:secret', 'movie.exe']) {
+    await assert.rejects(engine.importFile(upload(), { name, size: 10 }));
+  }
+  for (const size of [0, -1, NaN, Infinity, 1.5, 16 * 1024 ** 3 + 1]) {
+    await assert.rejects(engine.importFile(upload(), { name: 'movie.mkv', size }));
+  }
+  await assert.rejects(engine.importFile(upload(), { name: 'movie.mkv', size: 10 }), { code: 'no_space' });
+});
+
+test('truncated and oversized upload bodies remove committed and partial temp files', async t => {
+  const { engine, dir } = await fixture(t);
+  await assert.rejects(engine.importFile(upload(Buffer.from('abc')), { name: 'movie.mkv', size: 10 }), { code: 'import_aborted' });
+  await assert.rejects(engine.importFile(upload(Buffer.from('too many bytes')), { name: 'movie.mkv', size: 3 }), { code: 'import_too_large' });
+  assert.deepEqual(await importedFiles(dir), []);
+});
+
+test('imports remain capped at two; closing aborts writers and removes partial files', async t => {
+  const { engine, dir } = await fixture(t);
+  const one = engine.importFile(upload(), { name: 'one.mkv', size: 100 }).catch(error => error.code);
+  const two = engine.importFile(upload(), { name: 'two.mkv', size: 100 }).catch(error => error.code);
+  await assert.rejects(engine.importFile(upload(), { name: 'three.mkv', size: 100 }), { code: 'import_busy' });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  await engine.close();
+  assert.deepEqual(await Promise.all([one, two]), ['import_aborted', 'import_aborted']);
+  assert.deepEqual(await importedFiles(dir), []);
+});
+
+test('idle upload timeout aborts the atomic stream and releases its import slot', async t => {
+  const { engine, dir } = await fixture(t, { importIdleMs: 20 });
+  const pending = engine.importFile(upload(), { name: 'movie.mkv', size: 100 });
+  const keepAlive = setTimeout(() => {}, 100);
+  try { await assert.rejects(pending, { code: 'import_aborted' }); }
+  finally { clearTimeout(keepAlive); }
+  assert.deepEqual(await importedFiles(dir), []);
+});
+
+test('client disconnect during probing cancels its child and removes the full import', async t => {
+  let enteredProbe;
+  const probing = new Promise(resolve => { enteredProbe = resolve; });
+  let killed = false;
+  const { engine, dir } = await fixture(t, { execFile: (file, args) => {
+    if (args.includes('-version')) return Promise.resolve({ stdout: 'version' });
+    let rejectProbe;
+    const result = new Promise((resolve, reject) => { rejectProbe = reject; });
+    result.child = { kill() { killed = true; rejectProbe(Object.assign(new Error('terminated'), { code: 'KILLED' })); } };
+    enteredProbe();
+    return result;
+  } });
+  const req = upload(Buffer.from('abc'));
+  req.socket = new EventEmitter();
+  const pending = engine.importFile(req, { name: 'movie.mkv', size: 3 });
+  await probing;
+  req.socket.emit('close');
+  await assert.rejects(pending, { code: 'import_aborted' });
+  assert.equal(killed, true);
+  assert.deepEqual(await importedFiles(dir), []);
+});
+
+test('discarding an imported subtitle after a lost response preserves its video grant', async t => {
+  const { engine, dir } = await fixture(t);
+  const file = (await engine.pickVideos()).files[0];
+  const initial = file.subtitleTracks.length;
+  const result = await engine.importFile(upload(Buffer.from('subtitle')), { id: file.id, name: 'ไทย.srt', size: 8 });
+  assert.equal(result.file.subtitleTracks.length, initial + 1);
+  assert.match(result.importedTrackId, /^external-[a-f0-9]{32}$/);
+  engine.discardImport(result);
+  assert.equal(result.file.subtitleTracks.length, initial);
+  const text = await engine.subtitles({ id: file.id, track: '3' });
+  assert.match(text, /WEBVTT/);
+  await engine.close();
+  assert.deepEqual(await importedFiles(dir), []);
 });

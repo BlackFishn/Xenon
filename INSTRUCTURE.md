@@ -238,7 +238,8 @@ See `docs/game-bar-crosshair.md` and `apps/game-bar-crosshair/README.md`.
 - Media/YouTube playback and Focus: `server/js/youtube-widget.js`,
   `server/js/local-video-player.js`, `server/local-video.js`, `docs/youtube-player.md`.
   Keep the saved `youtube` widget identity and preserve the player element during
-  presentation changes. Local video uses picker-issued file grants, bounded FFmpeg
+  presentation changes. Local video uses opaque file grants, streamed browser-file
+  imports with bounded temporary storage, bounded FFmpeg
   workers and cached text captions; paused/hidden players release decoder work.
   Never expose local-file routes to paired clients or opaque-origin SDK widgets.
 - Native game focus/monitor placement: `apps/native/src-tauri/src/` and

@@ -111,12 +111,23 @@ test('a late YouTube ended message cannot resume a hidden source after local pla
   r.playNext(); assert.equal(r.player.qi, 1, 'a deliberate YouTube action still resumes its queue');
 });
 
-test('pager notifications pause hidden local decoding without a full widget render', () => {
-  const r = setup(); let paused = 0, focused = false;
+test('pager notifications stop hidden decoding and imports without a full widget render', () => {
+  const r = setup(); let paused = 0, cancelled = 0, focused = false;
   const mount = { closest: () => ({ getClientRects: () => [] }) };
-  r.mediaViews.set(mount, { video: { isActive: () => true, isFocused: () => focused, pause() { paused += 1; } } });
-  r.events['xenon:page-change'](); assert.equal(paused, 1);
+  r.mediaViews.set(mount, { video: { isActive: () => true, isFocused: () => focused, pause() { paused += 1; }, cancelImports() { cancelled += 1; } } });
+  r.events['xenon:page-change'](); assert.equal(paused, 1); assert.equal(cancelled, 1);
   focused = true; r.events['xenon:page-change'](); assert.equal(paused, 1, 'a visible Focus dialog can stay playing above the pager');
+});
+
+test('file drag feedback prevents document navigation without intercepting widget layout drags', () => {
+  const r = setup(); r.mediaViews.set({}, {});
+  const event = types => ({ dataTransfer: { types }, prevented: false, preventDefault() { this.prevented = true; } });
+  const internal = event(['application/x-xenon-widget']); r.documentEvents.dragover(internal);
+  assert.equal(internal.prevented, false);
+  const files = event(['Files']); r.documentEvents.dragenter(files);
+  assert.equal(r.document.body.classList.contains('media-file-drag'), true);
+  r.documentEvents.dragover(files); assert.equal(files.prevented, true);
+  r.documentEvents.drop(files); assert.equal(r.document.body.classList.contains('media-file-drag'), false);
 });
 
 test('message handling rejects foreign frames and wrong origins, then updates matching video metadata', () => {
