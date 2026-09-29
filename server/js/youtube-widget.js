@@ -30,6 +30,38 @@
   // on the next layout pass; removing it parks it back → polling stops.
   function tiles() { return Array.from(document.querySelectorAll('[data-dashboard-widget="youtube"]')).filter(el => el.closest('.pager-page')); }
   const api = apiJson; // shared fetch-JSON helper from utils.js
+  const mediaViews = new Map();
+  let youtubeSuspended = false;
+
+  function selectSource(mount, source) {
+    const view = mediaViews.get(mount); if (!view) return;
+    const local = source === 'video';
+    if (mount.contains(player.frame)) {
+      youtubeSuspended = local;
+      if (local) { restorePlayer(); cmd('pauseVideo'); }
+    }
+    view.source = local ? 'video' : 'youtube';
+    view.video?.setActive(local);
+    mount.querySelector('.yt-wrap').classList.toggle('is-local-video', local);
+    mount.querySelectorAll('[data-media-source]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.mediaSource === view.source)));
+    mount.querySelector('.media-open-files').hidden = !local;
+    mount.querySelector('.media-queue-toggle').hidden = !local;
+    const viewport = mount.querySelector('.yt-viewport'); if (viewport) viewport.hidden = local;
+    paintPlayer();
+  }
+  function pauseLocalVideos(except) {
+    for (const [mount, view] of mediaViews) if (mount !== except) { view.video?.setFocus(false); view.video?.pause(); }
+  }
+  function pauseHiddenLocalVideos() {
+    for (const [mount, view] of mediaViews) {
+      const tile = mount.closest('[data-dashboard-widget]');
+      if (view.video?.isActive() && !view.video.isFocused() && tile &&
+          ((typeof onVisiblePage === 'function' && !onVisiblePage(tile)) || !tile.getClientRects().length)) view.video.pause();
+    }
+  }
+  document.addEventListener('visibilitychange', () => { if (document.hidden) pauseLocalVideos(); });
+  window.addEventListener('xenon:page-change', pauseHiddenLocalVideos);
+  window.addEventListener('pagehide', () => { for (const view of mediaViews.values()) view.video?.clearQueue(); });
 
   let poll = null;
   let connected = null;     // null=unknown
@@ -316,8 +348,8 @@
     const prev = player.state;
     if (next === prev) return;
     player.state = next;
-    if (next === 1) { player.blocked = false; player.errCode = 0; }
-    if (next === 0) {
+    if (next === 1) { youtubeSuspended = false; pauseLocalVideos(); player.blocked = false; player.errCode = 0; }
+    if (next === 0 && !youtubeSuspended) {
       // A video that has just been swapped in can still report the previous one's
       // ended state for a moment; without this the queue would skip a video.
       const now = Date.now();
@@ -368,6 +400,10 @@
   // Start playing `list` at `index`. The rest of the list is the queue, so a tap
   // on one video plays the whole thing from there, like YouTube's own lists.
   function playList(list, index, stage) {
+    youtubeSuspended = false;
+    pauseLocalVideos();
+    const mediaMount = stage?.closest('.youtube-widget-mount');
+    if (mediaMount) selectSource(mediaMount, 'youtube');
     const src = Array.isArray(list) ? list : [];
     const wanted = src[index] && src[index].id;
     // Track the tapped video by id, not by position: the filter below can drop a
@@ -392,6 +428,8 @@
   }
   function playAt(i) {
     if (i < 0 || i >= player.queue.length) return;
+    youtubeSuspended = false;
+    pauseLocalVideos();
     player.qi = i; player.time = 0; player.duration = player.queue[i].seconds || 0;
     player.blocked = false; player.errCode = 0; player.state = 3;
     if (player.frame && player.stage) cmd('loadVideoById', [player.queue[i].id, player.queue[i].start || 0]);
@@ -480,8 +518,10 @@
   }
   document.addEventListener('keydown', e => {
     if (e.key !== 'Escape' || document.fullscreenElement) return;
+    if (Array.from(mediaViews.values()).some(view => view.video?.isFocused())) return;
     if (focusState) { e.preventDefault(); e.stopPropagation(); setFocus(false); }
     else if (player.expanded) restorePlayer();
+    else for (const view of mediaViews.values()) if (view.video?.isFilled()) view.video.restore();
   }, true);
 
   // ── Library loading ───────────────────────────────────────────────────────
@@ -533,17 +573,26 @@
     return button;
   }
   function ensure(mount) {
-    if (mount.dataset.ytBuilt === '4' && mount.firstChild) return;
-    mount.dataset.ytBuilt = '4';
+    if (mount.dataset.ytBuilt === '5' && mount.firstChild && mediaViews.has(mount)) return;
+    mount.dataset.ytBuilt = '5';
     const wrap = el('div', 'yt-wrap');
     const head = el('div', 'yt-head');
     const brand = el('div', 'yt-brand');
-    const logo = el('span', 'yt-brand-icon'); logo.innerHTML = ICONS.logo;
-    brand.append(logo, el('span', 'yt-logo', 'YouTube'));
-    const focusButton = () => actionButton('yt-focus', ICONS.expand, 'youtube_focus', e => setFocus(true, e.currentTarget));
-    head.append(brand, focusButton(), actionButton('yt-fill', ICONS.expand, 'youtube_fill', () => setExpanded(true)));
+    const logo = el('span', 'yt-brand-icon media-brand-icon'); logo.innerHTML = ICONS.play;
+    brand.append(logo, el('span', 'yt-logo', t('media_title', 'Media')));
+    const sources = el('div', 'media-sources'); sources.setAttribute('role', 'group'); sources.setAttribute('aria-label', t('media_source', 'Media source'));
+    for (const source of ['youtube', 'video']) {
+      const button = iconBtn('media-source', source === 'youtube' ? ICONS.logo : ICONS.play, source === 'youtube' ? 'YouTube' : t('media_video', 'Video'), () => selectSource(mount, source));
+      button.dataset.mediaSource = source; button.setAttribute('aria-pressed', String(source === 'youtube'));
+      button.append(el('span', '', source === 'youtube' ? 'YouTube' : t('media_video', 'Video'))); sources.append(button);
+    }
+    const view = { source: 'youtube', video: null }; mediaViews.set(mount, view);
+    const focusButton = () => actionButton('yt-focus', ICONS.expand, 'youtube_focus', e => view.source === 'video' ? view.video?.setFocus(true, e.currentTarget) : setFocus(true, e.currentTarget));
+    const open = iconBtn('media-open-files', ICONS.list, t('local_video_open', 'Open files'), () => view.video?.openFiles()); open.append(el('span', '', t('local_video_open', 'Open files'))); open.hidden = true;
+    const queue = iconBtn('media-queue-toggle', ICONS.list, t('local_video_queue', 'Queue'), () => queue.setAttribute('aria-pressed', String(view.video?.toggleQueue()))); queue.hidden = true; queue.setAttribute('aria-pressed', 'false');
+    head.append(brand, sources, open, queue, focusButton(), actionButton('yt-fill', ICONS.expand, 'youtube_fill', () => view.source === 'video' ? view.video?.fill(true) : setExpanded(true)));
     if (window.__XENON_NATIVE__ === true || window.isTauri === true) head.append(actionButton('yt-viewport', ICONS.expand, 'youtube_expand', () => setViewport(true)));
-    const restore = actionButton('yt-restore', ICONS.shrink, 'youtube_restore', restorePlayer); restore.hidden = true;
+    const restore = actionButton('yt-restore', ICONS.shrink, 'youtube_restore', () => view.source === 'video' ? view.video?.restore() : restorePlayer()); restore.hidden = true;
     const filledActions = el('div', 'yt-filled-actions'); filledActions.hidden = true;
     filledActions.append(focusButton(), restore);
     wrap.append(head, filledActions);
@@ -568,6 +617,12 @@
     const cards = el('div', 'yt-cards'); cards.append(buildPlayerCard(), buildLibraryCard());
     wrap.append(form, note, cards);
     mount.replaceChildren(wrap);
+    if (window.LocalVideoPlayer) view.video = window.LocalVideoPlayer.create({
+      mount, wrap,
+      onPlay() { youtubeSuspended = true; cmd('pauseVideo'); pauseLocalVideos(mount); },
+      onChange() { view.video?.syncHeader(); },
+    });
+    else sources.querySelector('[data-media-source="video"]').disabled = true;
   }
 
   function iconBtn(cls, icon, label, onClick) {
@@ -795,6 +850,7 @@
       // Error UI replaces the failed embed, rather than intercepting a working
       // player's controls. The frame remains mounted for retry/recovery.
       if (owns) player.frame.style.visibility = player.blocked ? 'hidden' : '';
+      mediaViews.get(mount)?.video?.syncHeader();
     });
   }
 
@@ -876,6 +932,8 @@
   // re-applied on every paint instead (a handful of textContent writes), and the
   // list signature carries the language so its rows re-render too.
   function relabel(mount) {
+    mount.querySelector('.yt-logo').textContent = t('media_title', 'Media');
+    mediaViews.get(mount)?.video?.relabel();
     mount.querySelectorAll('.yt-tab').forEach(b => {
       const f = TAB_LABEL[b.dataset.ytTab];
       if (f) b.querySelector('.yt-tab-lbl').textContent = f();
@@ -929,11 +987,15 @@
     // playing — so removing the widget mid-video left the audio running with
     // nothing on screen left to stop it.
     if (player.frame) stopPlayer();
+    for (const [mount, view] of mediaViews) { view.video?.destroy(); mediaViews.delete(mount); }
   }
 
   function renderWidgets() {
     if (!tiles().length) { stop(); return; }
+    const active = new Set(tiles().map(tile => tile.querySelector('.youtube-widget-mount')));
+    for (const [mount, view] of mediaViews) if (!active.has(mount)) { view.video?.destroy(); mediaViews.delete(mount); }
     paint();
+    pauseHiddenLocalVideos();
     if (!poll) { refresh(); poll = setInterval(refresh, POLL_MS); }
   }
 

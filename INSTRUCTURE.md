@@ -235,8 +235,12 @@ See `docs/game-bar-crosshair.md` and `apps/game-bar-crosshair/README.md`.
 - Audio mixer/process freshness: `server/js/volume.js`, `helper/AudioHost.cs` and
   `helper/AudioControlHost.cs`; verify process lifetime and OS sessions before hiding
   or retaining app rows. See `docs/audio-realtime-measurements.md`.
-- YouTube playback/focus mode: `server/js/youtube-widget.js`, `docs/youtube-player.md`.
-  Preserve the playing iframe when changing presentation.
+- Media/YouTube playback and Focus: `server/js/youtube-widget.js`,
+  `server/js/local-video-player.js`, `server/local-video.js`, `docs/youtube-player.md`.
+  Keep the saved `youtube` widget identity and preserve the player element during
+  presentation changes. Local video uses picker-issued file grants, bounded FFmpeg
+  workers and cached text captions; paused/hidden players release decoder work.
+  Never expose local-file routes to paired clients or opaque-origin SDK widgets.
 - Native game focus/monitor placement: `apps/native/src-tauri/src/` and
   `docs/crash-debugging.md`. Mouse and touch behavior differ; avoid focus-stealing fixes.
 - Themes, custom widgets, Ambient, chat and smart home have their own guides/modules.

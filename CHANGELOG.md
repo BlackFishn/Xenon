@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — multimedia player
+
+- Expand the YouTube widget into Media with separate YouTube and local Video sources, a file queue, Fill widget and Focus/Restore controls.
+- Open local MKV, MP4, MOV, WebM and AVI files on Windows; select embedded audio and text subtitles or load an external SRT, ASS, SSA or VTT subtitle file.
+- Prefer video stream copy, cache text subtitle extraction and stop decoder work when paused or hidden. Compatibility conversion is bounded to 720p and two encoding threads. ASS subtitles retain text/timing; bitmap subtitles are explicitly unsupported.
+- Keep selected file paths private and deny local-video endpoints to paired remote clients and cross-origin pages.
+
 ## Unreleased — Spotify diagnostics
 
 - Record actual Spotify requests separately from cached reads and cooldown blocks in a bounded private debug log.
