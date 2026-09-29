@@ -87,6 +87,13 @@ releases its file grants; switching between YouTube and Video retains the queue.
 
 - **Audio & subtitles** lists the file's language tracks. Audio changes resume at
   the current position. Text subtitle changes do not restart the video.
+- **Adjust subtitles** lets you drag captions to a position inside the video
+  picture and change their text size. Use **Reset** to return to the default
+  placement, then **Done** to finish. Arrow keys move the focused caption as an
+  alternative to dragging. Position and size carry across Focus and widget resizing.
+  Adjustments last for the current widget session; reloading restores defaults.
+  This applies to selectable text subtitles, including external subtitle files;
+  text burned into the video picture cannot be moved separately.
 - Embedded text subtitles and external SRT, ASS, SSA and VTT are displayed as
   WebVTT captions. **ASS (text only)** preserves dialogue and timing, without advanced
   fonts, positioning or karaoke effects. Bitmap/PGS subtitles are shown as

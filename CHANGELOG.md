@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — subtitle placement
+
+- Add a subtitle adjustment mode for local video: drag captions within the picture, resize text, and reset the placement.
+- Keep subtitle position proportional when entering Focus or resizing the widget, with mouse, touch and keyboard controls.
+- Update captions on text-track cue changes without adding a playback polling loop or restarting the video stream.
+
 ## Unreleased — local video file selection and Focus
 
 - Open videos and external subtitles with the WebView/browser file picker directly from the button click, avoiding the separate backend PowerShell dialog.
