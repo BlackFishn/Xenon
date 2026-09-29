@@ -12383,7 +12383,7 @@ function isAllowedLocalMediaRequest(req, isRemote) {
 // sends no Origin, so the loopback/Origin checks below can't catch it. They are
 // guarded by the Sec-Fetch-Site check in the request handler.
 const CSRF_MUTATION_PATHS = new Set([
-  '/media/local/status', '/media/local/pick', '/media/local/prepare', '/media/local/subtitle', '/media/local/stream', '/media/local/stop', '/media/local/release',
+  '/media/local/status', '/media/local/pick', '/media/local/import', '/media/local/prepare', '/media/local/subtitle', '/media/local/stream', '/media/local/stop', '/media/local/release',
   '/api/crosshair', '/api/crosshair/open', '/api/crosshair/assets', '/api/crosshair/presets',
   // OAuth and account reads start a local Codex process; opaque-origin widgets
   // and cross-site navigations must never operate on this account session.
@@ -14363,6 +14363,33 @@ const handleRequest = async (req, res) => {
       await readBody(req, 2048);
       json(await localVideo.pickVideos());
     } catch (error) { json({ ok: false, error: ['library_full', 'picker_busy', 'unsupported_platform', 'ffmpeg_missing'].includes(error?.code) ? error.code : 'pick_failed' }); }
+
+  } else if (reqPath === '/media/local/import' && req.method === 'POST') {
+    // A browser-granted File is streamed locally to a bounded temporary file.
+    // Never feed large videos to readBody/readBodyBuffer or trust a client path.
+    if (String(req.headers['content-type'] || '').split(';')[0].trim() !== 'application/octet-stream') {
+      res.writeHead(415, { 'Content-Type': 'application/json', 'Connection': 'close' });
+      res.end(JSON.stringify({ ok: false, error: 'invalid_file' }));
+      return;
+    }
+    try {
+      const result = await localVideo.importFile(req, Object.fromEntries(urlObj.searchParams));
+      if (req.aborted || res.destroyed) {
+        await localVideo.discardImport(result);
+        return;
+      }
+      json(result);
+    } catch (error) {
+      if (req.aborted || res.destroyed) return;
+      const codes = {
+        import_busy: 429, invalid_file: 400, unsupported_file: 415,
+        import_too_large: 413, no_space: 507, import_quota: 507,
+        import_aborted: 400, library_full: 409, subtitle_limit: 409, unknown_file: 404,
+      };
+      const code = Object.hasOwn(codes, error?.code) ? error.code : 'import_failed';
+      res.writeHead(codes[code] || 500, { 'Content-Type': 'application/json', 'Connection': 'close' });
+      res.end(JSON.stringify({ ok: false, error: code }));
+    }
 
   } else if (reqPath === '/media/local/prepare' && req.method === 'GET') {
     try { json(await localVideo.prepare(Object.fromEntries(urlObj.searchParams))); }
@@ -19098,7 +19125,7 @@ const handleRequest = async (req, res) => {
     try { json(diskSpace.cancelClean()); } catch (e) { err500(e.message); }
 
   } else if (reqPath === '/api/transfer/upload' && req.method === 'POST') {
-    // The ONLY route in this server that streams a request body to disk.
+    // Like /media/local/import, stream this large request body straight to disk.
     // readBody/readBodyBuffer would make a 2 GB video 2 GB of RSS, and every
     // other upload here does exactly that — this is the one that cannot.
     //
@@ -22075,7 +22102,7 @@ function _gracefulShutdown() {
   try { embeddedBrowser.shutdown(); } catch {}
   // Stop the second-screen capture host (if one is running).
   try { screenCapture.shutdown(); } catch {}
-  try { localVideo.close(); } catch {}
+  try { shutdownFlush = Promise.all([shutdownFlush, Promise.resolve(localVideo.close()).catch(() => {})]); } catch {}
   // Stop the PresentMon FPS reader (holds an admin ETW tracing session) and the
   // foreground game probe. Both spawn long-lived children with no job object, so
   // without an explicit stop process.exit orphans them across every restart.

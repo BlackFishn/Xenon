@@ -20,6 +20,11 @@
     audio_track: 'Audio track', subtitle_track: 'Subtitle track', ass_plain: 'ASS (text only)',
     compatibility: 'Compatibility · up to 720p', compatibility_hint: 'This codec needs video conversion, which uses more CPU. Compatible H.264 files play without video conversion.',
     skipped_files: 'Some files could not be opened',
+    preparing: 'Preparing local file', cancel_import: 'Cancel', import_cancelled: 'File preparation cancelled.',
+    import_failed: 'Could not prepare this file. Try again.', import_too_large: 'Videos can be up to 16 GB; subtitle files can be up to 8 MB.',
+    import_no_space: 'There is not enough temporary space. Clear the queue or free some disk space.',
+    import_busy: 'Finish or cancel the current file preparation first.', unsupported_file: 'Choose an MKV, MP4, M4V, MOV, WebM or AVI video.',
+    drop_hint: 'Drop videos here', added_files: 'Videos added to the queue',
   };
   function t(key) {
     const id = 'local_video_' + key;
@@ -54,6 +59,8 @@
     const state = { files: [], index: -1, audio: '', subtitle: 'off', offset: 0, position: 0, initialSeek: 0, generation: '', active: false, focused: false, filled: false, loading: false, picking: false, destroyed: false, repeat: false, revision: 0 };
     let focusTrigger = null;
     let posterUrl = '', posterEpoch = 0;
+    let activeImport = null, importEpoch = 0;
+    let focusIdleTimer = null, suppressTouchClick = false;
     const root = el('div', 'lv-root'); root.hidden = true;
     const body = el('div', 'lv-body');
     const stage = el('dialog', 'lv-stage'); stage.tabIndex = -1;
@@ -120,7 +127,18 @@
     audio.addEventListener('change', () => { state.audio = audio.value; startAt(position(), !video.paused); });
     subtitles.addEventListener('change', () => { state.subtitle = subtitles.value; applySubtitle(); });
     const subLoad = button('lv-sub-load', 'file', 'load_subtitle', loadSubtitle, true); trackPanel.append(subLoad);
-    stage.append(screen, transport, trackPanel);
+    const videoInput = el('input', 'lv-video-input'); videoInput.type = 'file'; videoInput.multiple = true; videoInput.accept = '.mkv,.mp4,.m4v,.mov,.webm,.avi'; videoInput.hidden = true;
+    const subtitleInput = el('input', 'lv-subtitle-input'); subtitleInput.type = 'file'; subtitleInput.accept = '.srt,.ass,.ssa,.vtt'; subtitleInput.hidden = true;
+    videoInput.addEventListener('change', () => { const files = Array.from(videoInput.files || []); videoInput.value = ''; void addFiles(files); });
+    subtitleInput.addEventListener('change', () => { const files = Array.from(subtitleInput.files || []); subtitleInput.value = ''; void addFiles(files, true); });
+    const importBar = el('div', 'lv-import'); importBar.hidden = true; importBar.setAttribute('role', 'status');
+    const importCopy = el('div', 'lv-import-copy'), importTitle = el('strong', '', t('preparing')), importName = el('span', 'lv-import-name');
+    const importProgress = el('progress', 'lv-import-progress'); importProgress.max = 1; importProgress.value = 0; importProgress.setAttribute('aria-label', t('preparing'));
+    const importPercent = el('span', 'lv-import-percent', '0%');
+    importCopy.append(importTitle, importName, importProgress);
+    const cancelImport = button('lv-import-cancel', 'close', 'cancel_import', () => { abortImports(); selectionNote.textContent = t('import_cancelled'); selectionNote.hidden = false; }, true);
+    importBar.append(importCopy, importPercent, cancelImport);
+    stage.append(screen, transport, trackPanel, videoInput, subtitleInput, importBar);
     const queue = el('aside', 'lv-queue'); queue.hidden = true;
     const queueHead = el('div', 'lv-queue-head'); const queueTitle = el('strong', '', t('queue')); queueTitle.dataset.lvText = 'queue';
     const count = el('span', 'lv-queue-count', '0'); queueHead.append(queueTitle, count, button('lv-clear-queue', 'close', 'clear_queue', clearQueue));
@@ -159,7 +177,30 @@
         }, 'image/jpeg', .82);
       } catch { /* A missing decoded frame should never prevent pausing. */ }
     }
-    function setTracks(on) { trackPanel.hidden = !on; trackButton.setAttribute('aria-expanded', String(on)); if (on) audio.focus(); else trackButton.focus(); }
+    function setTracks(on) { trackPanel.hidden = !on; trackButton.setAttribute('aria-expanded', String(on)); if (on) audio.focus(); else trackButton.focus(); revealFocusControls(); }
+    function keepFocusControls() {
+      return state.picking || scrubbing || !trackPanel.hidden ||
+        transport.contains(document.activeElement) || trackPanel.contains(document.activeElement) || importBar.contains(document.activeElement);
+    }
+    function clearFocusIdle() { if (focusIdleTimer !== null) { clearTimeout(focusIdleTimer); focusIdleTimer = null; } }
+    function syncFocusControls() {
+      if (!state.focused || keepFocusControls()) {
+        clearFocusIdle(); stage.classList.remove('has-hidden-controls'); return;
+      }
+      if (focusIdleTimer !== null || stage.classList.contains('has-hidden-controls')) return;
+      focusIdleTimer = setTimeout(() => {
+        focusIdleTimer = null;
+        if (state.focused && !keepFocusControls()) stage.classList.add('has-hidden-controls');
+      }, 2200);
+    }
+    function revealFocusControls() { clearFocusIdle(); stage.classList.remove('has-hidden-controls'); syncFocusControls(); }
+    function updateFocusAspect(fromMetadata = false) {
+      const file = current();
+      const width = fromMetadata ? video.videoWidth : file?.width;
+      const height = fromMetadata ? video.videoHeight : file?.height;
+      if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) stage.style.setProperty('--lv-aspect', String(width / height));
+      else if (!fromMetadata) stage.style.setProperty('--lv-aspect', String(16 / 9));
+    }
     function paint() {
       if (state.destroyed) return;
       const file = current(), has = !!file;
@@ -175,6 +216,7 @@
       play.innerHTML = icons[paused ? 'play' : 'pause']; play.title = t(paused ? 'play' : 'pause'); play.setAttribute('aria-label', play.title);
       trackButton.disabled = !has; subLoad.disabled = !has || state.picking;
       openEmpty.disabled = state.picking;
+      syncFocusControls();
       if (onChange) onChange();
     }
     function trackLabel(track, kind) {
@@ -227,6 +269,7 @@
       if (index < 0 || index >= state.files.length) return;
       release(); state.index = index;
       const file = current(); state.audio = String(file.defaultAudio ?? file.audioTracks?.[0]?.id ?? ''); state.subtitle = 'off';
+      updateFocusAspect();
       paintTracks(); paintQueue(); return startAt(0);
     }
     function togglePlay() {
@@ -248,50 +291,116 @@
       for (const track of Array.from(video.textTracks || [])) track.mode = 'disabled';
       video.querySelectorAll('track').forEach(track => { if (track.track) track.track.mode = 'disabled'; track.remove(); });
     }
-    async function openFiles() {
+    function openFiles() {
       if (state.picking || state.destroyed) return;
-      state.picking = true; const revision = state.revision; paint();
-      let status;
-      try { status = await apiJson('/media/local/status'); } catch { status = null; }
-      if (state.destroyed || revision !== state.revision) return;
-      if (!status?.available || status.pickerSupported === false) {
-        const key = status?.pickerSupported === false || ['unsupported_platform'].includes(status?.error) ? 'unsupported' : ['forbidden', 'remote_denied'].includes(status?.error) ? 'denied' : 'unavailable';
-        state.picking = false; message(t(key), true); paint(); return;
-      }
-      const result = await post('pick', {});
-      state.picking = false;
-      if (state.destroyed || revision !== state.revision) {
-        const ids = (result?.files || []).map(file => file.id); if (ids.length) void post('release', { ids });
-        return;
-      }
-      if (!result?.ok) { message(t(result?.error === 'library_full' ? 'files_limit' : 'pick_failed'), true); paint(); return; }
-      const skipped = Array.isArray(result.errors) ? result.errors.length : 0;
-      selectionNote.textContent = skipped ? t('skipped_files') + ' (' + skipped + ')' : ''; selectionNote.hidden = !skipped;
-      if (result.cancelled || !result.files?.length) { paint(); return; }
-      const oldLength = state.files.length;
-      const valid = result.files.filter(file => /^[a-f0-9]{32}$/.test(file?.id || '') && typeof file.name === 'string' && Number.isFinite(file.duration) && file.duration >= 0);
-      state.files.push(...valid.slice(0, 32 - oldLength));
-      paintQueue();
-      if (state.index < 0 && state.files.length) await selectFile(0);
-      else { message(state.files.length < oldLength + valid.length ? t('files_limit') : ''); paint(); }
+      // The click stays inside the user's gesture and the WebView owns its dialog.
+      // A backend process may run on another desktop/session and cannot own it.
+      videoInput.value = '';
+      try { videoInput.click(); } catch { message(t('pick_failed'), true); }
     }
-    async function loadSubtitle() {
-      const file = current(); if (!file || state.picking) return;
-      const id = file.id; state.picking = true; paint();
-      const result = await post('subtitle', { id }); state.picking = false;
-      if (state.destroyed || current()?.id !== id) return;
-      if (result?.cancelled) { paint(); return; }
-      if (!result?.ok || result.file?.id !== id) { message(t('sub_failed'), true); paint(); return; }
-      const oldIds = new Set(file.subtitleTracks.map(track => track.id));
-      state.files[state.index] = result.file;
-      const added = result.file.subtitleTracks.find(track => !oldIds.has(track.id));
-      if (added?.supported !== false && added) state.subtitle = String(added.id);
-      paintTracks(); applySubtitle(); paint();
+    function loadSubtitle() {
+      if (!current() || state.picking || state.destroyed) return;
+      subtitleInput.value = '';
+      try { subtitleInput.click(); } catch { message(t('pick_failed'), true); }
+    }
+    function importError(code, subtitle) {
+      if (code === 'library_full') return t('files_limit');
+      if (['import_too_large', 'too_big'].includes(code)) return t('import_too_large');
+      if (['no_space', 'import_quota'].includes(code)) return t('import_no_space');
+      if (code === 'import_busy') return t('import_busy');
+      if (code === 'unsupported_file') return t(subtitle ? 'sub_failed' : 'unsupported_file');
+      return t(subtitle ? 'sub_failed' : 'import_failed');
+    }
+    function abortImports() {
+      importEpoch += 1;
+      const xhr = activeImport; activeImport = null;
+      if (xhr) xhr.abort();
+      state.picking = false; importBar.hidden = true; paint();
+    }
+    function sendFile(file, subtitleId) {
+      return new Promise(resolve => {
+        const xhr = new XMLHttpRequest(); activeImport = xhr;
+        const params = new URLSearchParams({ name: file.name, size: String(file.size) });
+        if (subtitleId) params.set('id', subtitleId);
+        xhr.open('POST', '/media/local/import?' + params, true);
+        xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+        xhr.upload.onprogress = event => {
+          if (activeImport !== xhr) return;
+          const progress = Math.min(1, event.loaded / Math.max(1, file.size));
+          importProgress.value = progress; importPercent.textContent = Math.floor(progress * 100) + '%';
+        };
+        const finish = result => { if (activeImport === xhr) activeImport = null; resolve(result); };
+        xhr.onload = () => {
+          let result;
+          try { result = JSON.parse(xhr.responseText || '{}'); } catch { result = null; }
+          finish(result?.ok && xhr.status >= 200 && xhr.status < 300 ? result : { ok: false, error: result?.error || 'import_failed' });
+        };
+        xhr.onerror = xhr.ontimeout = () => finish({ ok: false, error: 'import_failed' });
+        xhr.onabort = () => finish({ ok: false, error: 'import_aborted' });
+        // Sending a File streams bytes from disk; never read a whole MKV into RAM.
+        try { xhr.send(file); } catch { finish({ ok: false, error: 'import_failed' }); }
+      });
+    }
+    async function addFiles(selected, subtitle = false) {
+      if (state.destroyed || !state.active || !selected?.length) return;
+      if (state.picking) { message(t('import_busy'), true); return; }
+      const original = subtitle ? current() : null; if (subtitle && !original) return;
+      const epoch = ++importEpoch;
+      state.picking = true; selectionNote.hidden = true;
+      importTitle.textContent = t('preparing'); importName.textContent = typeof selected[0]?.name === 'string' ? selected[0].name : '';
+      importProgress.value = 0; importPercent.textContent = '0%'; importBar.hidden = false; paint();
+      let failed = 0, addedCount = 0;
+      try {
+        let status;
+        try { status = await apiJson('/media/local/status'); } catch { status = null; }
+        if (state.destroyed || epoch !== importEpoch || !state.active) return;
+        if (!status?.available || status.importSupported === false) {
+          message(t(status?.error === 'unsupported_platform' ? 'unsupported' : ['forbidden', 'remote_denied'].includes(status?.error) ? 'denied' : 'unavailable'), true); return;
+        }
+        const items = Array.from(selected).slice(0, subtitle ? 1 : 32);
+        failed += Math.max(0, selected.length - items.length);
+        for (const [index, item] of items.entries()) {
+          if (state.destroyed || epoch !== importEpoch || !state.active) return;
+          const validName = typeof item?.name === 'string' && (subtitle ? /\.(srt|ass|ssa|vtt)$/i : /\.(mkv|mp4|m4v|mov|webm|avi)$/i).test(item.name);
+          if (!validName || !Number.isFinite(item.size) || item.size < 1) { failed += 1; message(importError('unsupported_file', subtitle), true); continue; }
+          if (item.size > (subtitle ? 8 * 1024 ** 2 : 16 * 1024 ** 3)) { failed += 1; message(importError('import_too_large', subtitle), true); continue; }
+          if (!subtitle && state.files.length >= 32) { failed += items.length - index; message(t('files_limit'), true); break; }
+          importTitle.textContent = t('preparing') + ' · ' + (index + 1) + '/' + items.length;
+          importName.textContent = item.name; importProgress.value = 0; importPercent.textContent = '0%'; importBar.hidden = false;
+          const result = await sendFile(item, original?.id);
+          if (state.destroyed || epoch !== importEpoch || !state.active) {
+            const ids = (result?.files || []).map(file => file.id); if (ids.length) void post('release', { ids });
+            return;
+          }
+          if (!result?.ok) { if (result?.error === 'import_aborted') return; failed += 1; message(importError(result?.error, subtitle), true); continue; }
+          if (subtitle) {
+            const slot = state.files.findIndex(file => file.id === original.id);
+            if (slot < 0 || result.file?.id !== original.id) continue;
+            const oldIds = new Set((original.subtitleTracks || []).map(track => track.id));
+            state.files[slot] = result.file;
+            if (current()?.id === original.id) {
+              const track = (result.file.subtitleTracks || []).find(track => !oldIds.has(track.id));
+              if (track && track.supported !== false) state.subtitle = String(track.id);
+              paintTracks(); applySubtitle();
+            }
+          } else {
+            const valid = (result.files || []).filter(file => /^[a-f0-9]{32}$/.test(file?.id || '') && typeof file.name === 'string' && Number.isFinite(file.duration) && file.duration >= 0);
+            state.files.push(...valid.slice(0, 32 - state.files.length)); addedCount += valid.length;
+            paintQueue();
+            if (state.index < 0 && state.files.length) await selectFile(0);
+          }
+        }
+        if (failed) { selectionNote.textContent = t('skipped_files') + ' (' + failed + ')'; selectionNote.hidden = false; }
+        else if (addedCount > 0 && state.files.length > 1) { selectionNote.textContent = t('added_files') + ' (' + addedCount + ')'; selectionNote.hidden = false; }
+      } finally {
+        if (epoch === importEpoch) { state.picking = false; importBar.hidden = true; paint(); }
+      }
     }
     function setFocus(on, trigger) {
       if (!on) {
         if (!state.focused) return false;
         state.focused = false;
+        clearFocusIdle(); stage.classList.remove('has-hidden-controls'); suppressTouchClick = false;
         if (stage.open) stage.close();
         stage.classList.remove('is-focused'); stage.setAttribute('role', 'group'); stage.removeAttribute('aria-modal'); restore.hidden = true;
         document.body.classList.remove('lv-focused');
@@ -303,17 +412,42 @@
       stage.classList.add('is-focused'); stage.setAttribute('role', 'dialog'); stage.setAttribute('aria-modal', 'true'); restore.hidden = false;
       document.body.classList.add('lv-focused');
       try { stage.showModal(); } catch { setFocus(false); return false; }
-      stage.focus({ preventScroll: true }); paint(); return true;
+      stage.focus({ preventScroll: true }); updateFocusAspect(true); clearFocusIdle();
+      stage.classList.toggle('has-hidden-controls', trackPanel.hidden && !state.picking);
+      paint(); return true;
     }
     stage.addEventListener('cancel', event => { event.preventDefault(); setFocus(false); });
     stage.addEventListener('close', () => { if (state.focused && !stage.open) setFocus(false); });
+    stage.addEventListener('pointermove', () => { if (state.focused && !stage.classList.contains('has-hidden-controls')) revealFocusControls(); });
+    stage.addEventListener('pointerdown', event => {
+      suppressTouchClick = state.focused && event.pointerType === 'touch' && stage.classList.contains('has-hidden-controls');
+      if (suppressTouchClick) { revealFocusControls(); event.preventDefault(); event.stopPropagation(); }
+    }, true);
     stage.addEventListener('click', event => {
       if (!state.focused) return;
+      if (suppressTouchClick && event.detail > 0) {
+        suppressTouchClick = false; event.preventDefault(); event.stopImmediatePropagation(); return;
+      }
+    }, true);
+    stage.addEventListener('click', event => {
+      if (!state.focused) return;
+      // Pointer clicks may return focus to the stage so Play can fade again;
+      // keyboard controls and focused sliders/selects stay visible.
+      if (event.detail > 0 && trackPanel.hidden && event.target?.closest('button') && transport.contains(document.activeElement)) stage.focus({ preventScroll: true });
+      revealFocusControls();
+    });
+    stage.addEventListener('focusin', event => { if (state.focused && event.target !== stage) revealFocusControls(); });
+    stage.addEventListener('focusout', () => { Promise.resolve().then(() => { if (state.focused) syncFocusControls(); }); });
+    stage.addEventListener('click', event => {
+      // Keyboard/input.click() events use (0, 0); only the dialog itself can be
+      // a backdrop target, otherwise that synthetic click cancels the picker.
+      if (!state.focused || event.target !== stage) return;
       const rect = stage.getBoundingClientRect();
       if (event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom) return;
       event.preventDefault(); event.stopPropagation(); setFocus(false);
     });
     stage.addEventListener('keydown', event => {
+      if (state.focused) revealFocusControls();
       if (event.key !== 'Escape') return;
       if (!trackPanel.hidden) { event.preventDefault(); event.stopPropagation(); setTracks(false); }
     });
@@ -322,7 +456,7 @@
       if (!state.generation || !state.initialSeek) return;
       try { video.currentTime = state.initialSeek; state.initialSeek = 0; } catch { /* The next canplay retries once metadata exposes a seekable range. */ }
     }
-    video.addEventListener('loadedmetadata', applyInitialSeek);
+    video.addEventListener('loadedmetadata', () => { applyInitialSeek(); updateFocusAspect(true); });
     for (const type of ['playing', 'canplay']) video.addEventListener(type, () => { if (!state.generation) return; applyInitialSeek(); state.loading = false; message(''); paint(); });
     for (const type of ['play', 'volumechange']) video.addEventListener(type, paint);
     video.addEventListener('pause', () => { if (state.generation && !state.loading && !video.ended) pause(true); else paint(); });
@@ -336,6 +470,7 @@
     });
     function pause(snapshot = false) { if (snapshot) capturePausedFrame(); else clearPoster(); release(); state.loading = false; message(''); paint(); }
     function clearQueue() {
+      abortImports();
       state.revision += 1; state.picking = false;
       setFocus(false); release(); fill(false);
       clearPoster();
@@ -348,7 +483,7 @@
     function fill(on) { state.filled = !!on && !!current(); wrap.classList.toggle('is-video-filled', state.filled && state.active); paint(); }
     function setActive(on) {
       state.active = !!on; root.hidden = !on;
-      if (!on) { state.revision += 1; state.picking = false; setFocus(false); pause(); fill(false); }
+      if (!on) { state.revision += 1; abortImports(); setFocus(false); pause(); fill(false); }
       paint();
     }
     function relabel() {
@@ -368,7 +503,7 @@
     }
     function destroy() { state.destroyed = true; clearQueue(); root.remove(); }
     fillRange(volume); paintQueue(); paint();
-    return { root, openFiles, setActive, setFocus, fill, pause, clearQueue, restore() { setFocus(false); fill(false); }, toggleQueue() { queue.hidden = !queue.hidden; body.classList.toggle('has-queue', !queue.hidden); return !queue.hidden; }, syncHeader, relabel, destroy, isActive: () => state.active, isFocused: () => state.focused, isFilled: () => state.filled };
+    return { root, openFiles, addFiles, cancelImports: abortImports, setActive, setFocus, fill, pause, clearQueue, restore() { setFocus(false); fill(false); }, toggleQueue() { queue.hidden = !queue.hidden; body.classList.toggle('has-queue', !queue.hidden); return !queue.hidden; }, syncHeader, relabel, destroy, isActive: () => state.active, isFocused: () => state.focused, isFilled: () => state.filled };
   }
   window.LocalVideoPlayer = { create };
 })();

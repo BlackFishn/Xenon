@@ -1575,6 +1575,8 @@ pub fn run() {
                 monitor::initial_window(app.handle(), &display_prefs);
             let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Xenon")
+                // Let the dashboard receive HTML5 file drops on Windows.
+                .disable_drag_drop_handler()
                 // The window's own backing, under the web content. Left unset it
                 // is the platform default - WHITE - and every moment the page is
                 // not painting its own background shows through as a white

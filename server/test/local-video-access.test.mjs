@@ -7,7 +7,7 @@ import vm from 'node:vm';
 const require = createRequire(import.meta.url);
 const remote = require('../remote-access.js');
 const server = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
-const routes = ['status', 'pick', 'prepare', 'subtitle', 'stream', 'stop', 'release'];
+const routes = ['status', 'pick', 'import', 'prepare', 'subtitle', 'stream', 'stop', 'release'];
 
 test('paired devices cannot open, inspect, stream or stop local video sessions', () => {
   for (const route of [...routes, 'future-route']) {

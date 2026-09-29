@@ -59,15 +59,28 @@ still requires a platform smoke test; its existing fullscreen guard is retained.
 
 ## Local video
 
-Select **Video → Open files** to use the Windows file picker on the PC running Xenon.
+Select **Video → Open files** to use the WebView/browser file picker, or drag video
+files from Explorer onto Media. Dropping switches the widget to Video automatically.
+The picker opens directly from the click; it does not launch a backend dialog that
+can appear behind the dashboard. The subtitle picker works the same way in Focus.
 The dashboard must be opened locally; paired phones and remote dashboards cannot
 open or read the PC's video files. FFmpeg and its companion ffprobe must be installed
 on that PC. Xenon reuses its existing FFmpeg discovery, including `XEH_FFMPEG` and
-WinGet installations. No native-shell rebuild is required for this feature.
+WinGet installations. Desktop drag-and-drop requires the native-shell build that
+enables HTML file drops; the older shell intercepts them. File selection through the
+button works independently of that shell change.
 
 Supported file containers are MKV, MP4/M4V, MOV, WebM and AVI. Playback depends on
 the contained codecs and the installed FFmpeg build. The session queue is not saved
 across reloads, and files stay on the PC. File paths are never sent to the browser.
+Selected browser files are copied once to private temporary storage on the same PC,
+with progress and a Cancel button. They are not uploaded to an external service.
+The original files stay untouched. Large files need time and temporary disk space
+before playback starts; their bytes are streamed, not buffered into one RAM allocation.
+Videos are limited to 16 GiB each, all prepared files to 32 GiB, and external subtitles
+to 8 MiB. Imports leave at least 1 GiB of free disk space at admission and permit at
+most two concurrent preparations. Normal cleanup releases the temporary copies with
+their queue entries; abandoned copies are cleaned conservatively after a crash.
 The local library holds up to 32 file grants. Use **Queue → Clear queue** to release
 them and choose different files. Removing the widget or leaving the dashboard also
 releases its file grants; switching between YouTube and Video retains the queue.
@@ -79,8 +92,11 @@ releases its file grants; switching between YouTube and Video retains the queue.
   fonts, positioning or karaoke effects. Bitmap/PGS subtitles are shown as
   unsupported; use a text subtitle file for these videos.
 - **Focus**, **Fill widget** and **Restore layout** retain the same video element.
-  Escape or a tap outside the Focus dialog returns to the dashboard. Audio, subtitle,
-  seek and volume controls stay available in Focus.
+  Focus fits the video's aspect ratio to the window and gives the full frame to the
+  picture. Controls start hidden; click or tap the video to reveal them over the
+  picture, then they hide after inactivity. Keyboard navigation also reveals them.
+  Audio/subtitle menus and file preparation remain visible while in use.
+  Escape or a tap outside the Focus dialog returns to the dashboard.
 - Switching to YouTube, hiding the page, removing the widget or pausing stops the
   local stream. Press Play to resume from the saved position. Only one local player
   in the same dashboard plays at a time.

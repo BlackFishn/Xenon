@@ -1,12 +1,15 @@
 'use strict';
 
-// Only the native picker can grant file access. Browser requests carry opaque
-// IDs, never filesystem paths, and only the local dashboard can reach this API.
+// Native picker grants and bounded browser file imports both become opaque IDs.
+// Browser requests never supply filesystem paths; only the local dashboard can
+// reach this API.
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const crypto = require('crypto');
 const { spawn, execFile } = require('child_process');
 const { promisify } = require('util');
+const { receiveStream } = require('./file-transfer');
 
 const VIDEO_EXTS = new Set(['.mkv', '.mp4', '.m4v', '.mov', '.webm', '.avi']);
 const SUBTITLE_EXTS = new Set(['.srt', '.ass', '.ssa', '.vtt']);
@@ -14,6 +17,9 @@ const TEXT_SUBTITLES = new Set(['ass', 'ssa', 'subrip', 'webvtt', 'mov_text', 't
 const INPUT_FORMATS = 'matroska,webm,mov,avi';
 const SUBTITLE_MAX = 8 * 1024 * 1024;
 const MAX_FILES = 32;
+const IMPORT_MAX = 16 * 1024 * 1024 * 1024;
+const IMPORT_TOTAL_MAX = 32 * 1024 * 1024 * 1024;
+const DISK_HEADROOM = 1024 * 1024 * 1024;
 const OWNER_RE = /^[a-zA-Z0-9_-]{8,80}$/;
 
 function mediaError(code) {
@@ -123,9 +129,57 @@ function createLocalVideo(deps = {}) {
   const subtitlePending = new Map();
   const positions = new Map();
   const pendingPositions = new Map();
+  const imports = new Set();
+  const ownedTemps = new Map();
+  const cleanupJobs = new Set();
+  let tempDirectory;
   let pickerBusy = false;
   let enginePromise;
   let closed = false;
+
+  async function tempDir() {
+    if (!tempDirectory) tempDirectory = (async () => {
+      const base = await fs.promises.realpath(deps.tempRoot || os.tmpdir());
+      // Reap only old, abandoned directories from this importer. Never follow
+      // links or recursively delete arbitrary temp contents.
+      const entries = await fs.promises.readdir(base, { withFileTypes: true });
+      let reaped = 0;
+      for (const entry of entries) {
+        const match = entry.name.match(/^xenon-local-video-(\d+)-[A-Za-z0-9]+$/);
+        if (!match || !entry.isDirectory() || ++reaped > 8) continue;
+        const dir = path.resolve(base, entry.name);
+        if (path.dirname(dir) !== base) continue;
+        try {
+          const stat = await fs.promises.lstat(dir);
+          if (stat.isSymbolicLink() || Date.now() - stat.mtimeMs < 24 * 3600 * 1000) continue;
+          try { process.kill(Number(match[1]), 0); continue; } catch (error) { if (error.code !== 'ESRCH') continue; }
+          const children = await fs.promises.readdir(dir, { withFileTypes: true });
+          if (children.length > 96 || children.some(child => !child.isFile() || !/^[a-f0-9]{32}\.(mkv|mp4|m4v|mov|webm|avi|srt|ass|ssa|vtt)(?:\.part)?$/.test(child.name))) continue;
+          for (const child of children) await fs.promises.unlink(path.join(dir, child.name));
+          await fs.promises.rmdir(dir);
+        } catch { /* a locked or unfamiliar directory is left alone */ }
+      }
+      return fs.promises.mkdtemp(path.join(base, `xenon-local-video-${process.pid}-`));
+    })();
+    return tempDirectory;
+  }
+
+  function removeOwned(file) {
+    if (!ownedTemps.has(file)) return Promise.resolve();
+    const job = (async () => {
+      for (const delay of [0, 100, 500]) {
+        if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+        try { await fs.promises.unlink(file); ownedTemps.delete(file); return; }
+        catch (error) {
+          if (error.code === 'ENOENT') { ownedTemps.delete(file); return; }
+          if (!['EBUSY', 'EPERM', 'EACCES'].includes(error.code)) return;
+        }
+      }
+    })();
+    cleanupJobs.add(job);
+    job.finally(() => cleanupJobs.delete(job)).catch(() => {});
+    return job;
+  }
 
   async function runProcess(file, args, options, fileId) {
     if (closed) throw mediaError('closed');
@@ -153,7 +207,9 @@ function createLocalVideo(deps = {}) {
 
   async function status() {
     const { ffmpeg, ffprobe, ...safe } = await engines();
-    return { ...safe, pickerSupported: platform === 'win32', activeStreams: active.size };
+    return { ...safe, pickerSupported: platform === 'win32', importSupported: true,
+      maxImportBytes: IMPORT_MAX, maxImportTotalBytes: IMPORT_TOTAL_MAX, maxSubtitleBytes: SUBTITLE_MAX,
+      activeStreams: active.size };
   }
 
   async function pick(kind) {
@@ -186,23 +242,28 @@ function createLocalVideo(deps = {}) {
     for (const chosen of selected) {
       if (closed) throw mediaError('closed');
       try {
-        const validated = await validateFile(chosen);
-        if (files.size >= MAX_FILES) throw mediaError('library_full');
-        const { stdout } = await runProcess(engine.ffprobe, ['-v', 'error', '-protocol_whitelist', 'file,pipe',
-          '-format_whitelist', INPUT_FORMATS, '-show_streams', '-show_format', '-of', 'json', validated.path],
-        { windowsHide: true, timeout: 15000, maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' });
-        // Another picker may finish probing while this child runs. Never exceed
-        // the grant cap, and keep each selection independent for widget cleanup.
-        if (files.size >= MAX_FILES) throw mediaError('library_full');
-        if (closed) throw mediaError('closed');
-        const record = { ...validated, id: crypto.randomBytes(16).toString('hex'), external: new Map() };
-        result.push(metadata(JSON.parse(stdout), record));
-        files.set(record.id, record);
+        result.push(await registerVideo(chosen, path.basename(chosen), engine));
       } catch (error) {
         errors.push({ name: label(path.basename(chosen)), error: ['invalid_file', 'unsupported_file', 'library_full', 'no_video', 'invalid_duration'].includes(error.code) ? error.code : 'probe_failed' });
       }
     }
     return { ok: result.length > 0, files: result, ...(errors.length ? { errors, error: result.length ? undefined : errors[0].error } : {}) };
+  }
+
+  async function registerVideo(selected, name, engine, ticket) {
+    const validated = await validateFile(selected);
+    if (files.size >= MAX_FILES) throw mediaError('library_full');
+    const id = ticket?.id || crypto.randomBytes(16).toString('hex');
+    const { stdout } = await runProcess(engine.ffprobe, ['-v', 'error', '-protocol_whitelist', 'file,pipe',
+      '-format_whitelist', INPUT_FORMATS, '-show_streams', '-show_format', '-of', 'json', validated.path],
+    { windowsHide: true, timeout: 15000, maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' }, id);
+    if (files.size >= MAX_FILES) throw mediaError('library_full');
+    if (closed || ticket?.cancelled) throw mediaError('import_aborted');
+    const record = { ...validated, id, external: new Map(), imported: !!ticket };
+    const info = metadata(JSON.parse(stdout), record);
+    info.name = label(name);
+    files.set(record.id, record);
+    return info;
   }
 
   function getFile(id) {
@@ -222,12 +283,95 @@ function createLocalVideo(deps = {}) {
     const selected = await pick('Subtitle');
     if (!selected.length) return { ok: true, cancelled: true };
     const file = await validateFile(selected[0], true);
-    const track = { id: `external-${crypto.randomBytes(16).toString('hex')}`, label: label(path.basename(file.path)),
+    return addSubtitle(record, file, path.basename(file.path));
+  }
+
+  function addSubtitle(record, file, name) {
+    if (!files.has(record.id) || closed) throw mediaError('unknown_file');
+    if (record.external.size >= 8) throw mediaError('subtitle_limit');
+    const track = { id: `external-${crypto.randomBytes(16).toString('hex')}`, label: label(name),
       language: 'und', codec: file.ext.slice(1), supported: true, delivery: 'vtt', external: true,
       ...(['.ass', '.ssa'].includes(file.ext) ? { note: 'ass_text_only', styling: 'plain' } : {}) };
     record.external.set(track.id, file);
     record.info.subtitleTracks.push(track);
     return { ok: true, file: record.info };
+  }
+
+  async function importFile(req, params = {}) {
+    const name = params.name;
+    const size = Number(params.size);
+    const isSubtitle = params.id !== undefined && params.id !== '';
+    if (typeof name !== 'string' || !name || Buffer.byteLength(name, 'utf8') > 255 || /[\x00-\x1f\x7f\\/:]/.test(name)
+        || !Number.isSafeInteger(size) || size <= 0) throw mediaError('invalid_file');
+    const ext = path.extname(name).toLowerCase();
+    if (!(isSubtitle ? SUBTITLE_EXTS : VIDEO_EXTS).has(ext)) throw mediaError('unsupported_file');
+    if (size > (isSubtitle ? SUBTITLE_MAX : IMPORT_MAX)) throw mediaError('import_too_large');
+    if (req.headers?.['content-length'] !== undefined && Number(req.headers['content-length']) !== size) throw mediaError('invalid_file');
+    if (closed || req.aborted || req.destroyed) throw mediaError('import_aborted');
+    if (imports.size >= 2) throw mediaError('import_busy');
+    const record = isSubtitle ? getFile(params.id) : null;
+    if (record && record.external.size + [...imports].filter(job => job.parentId === record.id).length >= 8) throw mediaError('subtitle_limit');
+    if (!record && files.size + [...imports].filter(job => !job.parentId).length >= MAX_FILES) throw mediaError('library_full');
+    const reserved = [...imports].reduce((sum, job) => sum + job.reserved, 0);
+    const stored = [...ownedTemps.values()].reduce((sum, value) => sum + value, 0);
+    if (stored + reserved + size > IMPORT_TOTAL_MAX) throw mediaError('import_quota');
+    const ticket = { id: crypto.randomBytes(16).toString('hex'), parentId: record?.id, req, cancelled: false, reserved: size, received: 0 };
+    ticket.done = new Promise(resolve => { ticket.finish = resolve; });
+    imports.add(ticket);
+    let target;
+    let idle;
+    const abort = () => {
+      ticket.cancelled = true;
+      for (const operation of operations) {
+        if (operationFiles.get(operation) === ticket.id) {
+          try { operation.child?.kill(); } catch { /* already exited */ }
+        }
+      }
+    };
+    const cancel = () => { abort(); req.emit('aborted'); };
+    ticket.cancel = cancel;
+    req.on('aborted', abort);
+    req.on('error', abort);
+    req.socket?.on('close', abort);
+    try {
+      const engine = await engines();
+      if (!engine.ok) throw mediaError(engine.error);
+      const dir = await tempDir();
+      const disk = await (deps.statfs || fs.promises.statfs)(dir);
+      const remaining = [...imports].filter(job => job !== ticket).reduce((sum, job) => sum + Math.max(0, job.reserved - job.received), 0);
+      if (Number(disk.bavail) * Number(disk.bsize) < size + remaining + DISK_HEADROOM) throw mediaError('no_space');
+      if (closed || ticket.cancelled || req.aborted || req.destroyed) throw mediaError('import_aborted');
+      target = path.join(dir, ticket.id + ext);
+      const refresh = () => { clearTimeout(idle); idle = setTimeout(cancel, deps.importIdleMs || 60000); idle.unref?.(); };
+      refresh();
+      const result = await receiveStream(req, target, { limit: size, onProgress(bytes) { ticket.received = bytes; refresh(); } });
+      clearTimeout(idle);
+      ownedTemps.set(target, result.bytes);
+      ticket.reserved = 0;
+      if (result.bytes !== size || closed || ticket.cancelled) throw mediaError('import_aborted');
+      if (record) {
+        const file = await validateFile(target, true);
+        if (ticket.cancelled) throw mediaError('import_aborted');
+        const result = addSubtitle(record, { ...file, imported: true }, name);
+        return { ...result, importedTrackId: result.file.subtitleTracks.at(-1).id };
+      }
+      return { ok: true, files: [await registerVideo(target, name, engine, ticket)] };
+    } catch (error) {
+      if (target) await removeOwned(target);
+      const known = ['invalid_file', 'unsupported_file', 'import_too_large', 'no_space', 'import_quota', 'import_aborted', 'library_full', 'subtitle_limit', 'unknown_file', 'ffmpeg_missing', 'ffprobe_missing', 'unsupported_platform'];
+      if (known.includes(error.code)) throw error;
+      if (ticket.cancelled || error.code === 'XFER_ABORTED') throw mediaError('import_aborted');
+      if (error.code === 'XFER_TOO_BIG') throw mediaError('import_too_large');
+      if (error.code === 'ENOSPC') throw mediaError('no_space');
+      throw mediaError('import_failed');
+    } finally {
+      clearTimeout(idle);
+      imports.delete(ticket);
+      req.off('aborted', abort);
+      req.off('error', abort);
+      req.socket?.off('close', abort);
+      ticket.finish();
+    }
   }
 
   function position(value, record) {
@@ -400,6 +544,8 @@ function createLocalVideo(deps = {}) {
 
   function close() {
     closed = true;
+    const pendingImports = [...imports].map(ticket => ticket.done);
+    for (const ticket of imports) ticket.cancel();
     for (const session of active.values()) session.stop();
     for (const ticket of pendingStarts.values()) { ticket.cancelled = true; if (!ticket.res.destroyed) ticket.res.destroy(); }
     pendingStarts.clear();
@@ -408,12 +554,27 @@ function createLocalVideo(deps = {}) {
     }
     files.clear();
     subtitleCache.clear();
+    for (const file of ownedTemps.keys()) void removeOwned(file);
+    return (async () => {
+      await Promise.allSettled(pendingImports);
+      await Promise.allSettled([...cleanupJobs]);
+      if (tempDirectory) {
+        try { await fs.promises.rmdir(await tempDirectory); } catch { /* an in-flight atomic writer still owns its part */ }
+      }
+    })();
   }
 
   function releaseFiles(ids) {
     if (!Array.isArray(ids) || ids.length > MAX_FILES || ids.some(id => typeof id !== 'string' || !/^[a-f0-9]{32}$/.test(id))) throw mediaError('invalid_files');
     const released = new Set(ids);
-    for (const id of released) files.delete(id);
+    const releasedFiles = [];
+    for (const id of released) {
+      const record = files.get(id);
+      if (record?.imported) releasedFiles.push(record.path);
+      for (const external of record?.external.values() || []) if (external.imported) releasedFiles.push(external.path);
+      files.delete(id);
+    }
+    for (const ticket of imports) if (released.has(ticket.parentId)) ticket.cancel();
     for (const session of active.values()) if (released.has(session.fileId)) session.stop();
     for (const [owner, ticket] of pendingStarts) {
       if (released.has(ticket.fileId)) {
@@ -430,10 +591,25 @@ function createLocalVideo(deps = {}) {
     for (const cache of [subtitleCache, positions]) {
       for (const key of cache.keys()) if (released.has(key.split(':')[0])) cache.delete(key);
     }
+    for (const file of releasedFiles) void removeOwned(file);
     return { ok: true };
   }
 
-  return { status, pickVideos, pickSubtitle, stream, subtitles, prepare, releaseFiles, stop, close };
+  function discardImport(result) {
+    if (Array.isArray(result?.files)) return releaseFiles(result.files.map(file => file.id));
+    const record = files.get(result?.file?.id);
+    const id = result?.importedTrackId;
+    const external = record?.external.get(id);
+    if (external?.imported) {
+      record.external.delete(id);
+      record.info.subtitleTracks = record.info.subtitleTracks.filter(track => track.id !== id);
+      subtitleCache.delete(`${record.id}:${id}`);
+      void removeOwned(external.path);
+    }
+    return { ok: true };
+  }
+
+  return { status, pickVideos, pickSubtitle, importFile, discardImport, stream, subtitles, prepare, releaseFiles, stop, close };
 }
 
 module.exports = { createLocalVideo, validateFile, streamArgs, metadata, shiftVtt };
