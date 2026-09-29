@@ -18,7 +18,6 @@
     sub_failed: 'Could not load that subtitle file.', queue_empty: 'Open files to build your queue.',
     unsupported_track: 'Unsupported', files_limit: 'The queue is full. Clear the queue before opening more videos.', clear_queue: 'Clear queue',
     audio_track: 'Audio track', subtitle_track: 'Subtitle track', ass_plain: 'ASS (text only)',
-    compatibility: 'Compatibility · up to 720p', compatibility_hint: 'This codec needs video conversion, which uses more CPU. Compatible H.264 files play without video conversion.',
     skipped_files: 'Some files could not be opened',
     preparing: 'Preparing local file', cancel_import: 'Cancel', import_cancelled: 'File preparation cancelled.',
     import_failed: 'Could not prepare this file. Try again.', import_too_large: 'Videos can be up to 16 GB; subtitle files can be up to 8 MB.',
@@ -27,6 +26,9 @@
     drop_hint: 'Drop videos here', added_files: 'Videos added to the queue',
     subtitle_adjust: 'Adjust subtitles', subtitle_size: 'Subtitle size', subtitle_reset: 'Reset', subtitle_done: 'Done',
     subtitle_drag_hint: 'Drag subtitles, or use arrow keys to move them.', subtitle_sample: 'Subtitle preview',
+    subtitle_appearance: 'Appearance', subtitle_text_color: 'Text color', subtitle_background_color: 'Background color',
+    subtitle_background_opacity: 'Background opacity', subtitle_font: 'Font', subtitle_font_default: 'Default',
+    subtitle_font_serif: 'Serif', subtitle_font_monospace: 'Monospace',
   };
   function t(key) {
     const id = 'local_video_' + key;
@@ -63,7 +65,9 @@
     let posterUrl = '', posterEpoch = 0;
     let activeImport = null, importEpoch = 0;
     let focusIdleTimer = null, suppressTouchClick = false;
-    const captionSettings = { x: .5, y: .92, size: 100 };
+    const captionDefaults = { x: .5, y: .92, size: 100, textColor: '#ffffff', backgroundColor: '#000000', opacity: 67, font: 'system' };
+    const captionSettings = { ...captionDefaults };
+    const captionFonts = { system: 'system-ui, sans-serif', segoe: '"Segoe UI", sans-serif', arial: 'Arial, sans-serif', serif: 'Georgia, "Times New Roman", serif', monospace: 'Consolas, "Courier New", monospace' };
     let captionEditing = false, captionDrag = null, captionTrack = null;
     const root = el('div', 'lv-root'); root.hidden = true;
     const body = el('div', 'lv-body');
@@ -91,11 +95,10 @@
     const transport = el('div', 'lv-transport');
     const now = el('div', 'lv-now');
     const filename = el('strong', 'lv-filename', t('empty_title'));
-    const compatibility = el('span', 'lv-compatibility', t('compatibility')); compatibility.hidden = true; compatibility.title = t('compatibility_hint');
     const trackButton = button('lv-tracks-toggle', 'tracks', 'tracks', () => setTracks(trackPanel.hidden), true);
     trackButton.setAttribute('aria-expanded', 'false');
     const restore = button('lv-focus-restore', 'restore', 'restore', () => setFocus(false), true); restore.hidden = true;
-    now.append(filename, compatibility, trackButton, restore);
+    now.append(filename, trackButton, restore);
     const timeline = el('div', 'lv-timeline');
     const elapsed = el('span', 'lv-time', '0:00'), total = el('span', 'lv-time', '0:00');
     const seek = el('input', 'lv-seek'); seek.type = 'range'; seek.min = '0'; seek.max = '0'; seek.step = '.1'; seek.value = '0'; seek.setAttribute('aria-label', t('seek'));
@@ -143,9 +146,40 @@
     const captionSizeValue = el('output', 'lv-caption-size-value', '100%');
     captionSize.addEventListener('input', () => { captionSettings.size = Math.min(200, Math.max(80, Number(captionSize.value) || 100)); layoutCaptions(); });
     captionSizeLabel.append(captionSizeTitle, captionSize, captionSizeValue);
-    captionEditor.append(captionHint, captionSizeLabel,
-      button('lv-caption-reset', '', 'subtitle_reset', () => { Object.assign(captionSettings, { x: .5, y: .92, size: 100 }); layoutCaptions(); }, true),
+    const captionToolbar = el('div', 'lv-caption-toolbar');
+    captionToolbar.append(captionSizeLabel,
+      button('lv-caption-reset', '', 'subtitle_reset', () => { Object.assign(captionSettings, captionDefaults); layoutCaptions(); }, true),
       button('lv-caption-done', '', 'subtitle_done', event => editCaptions(false, event.detail === 0), true));
+    const captionAppearance = el('details', 'lv-caption-appearance');
+    const appearanceSummary = el('summary', '', t('subtitle_appearance')); appearanceSummary.dataset.lvText = 'subtitle_appearance';
+    const appearanceGrid = el('div', 'lv-caption-style-grid');
+    function appearanceField(key, input) {
+      const label = el('label', 'lv-caption-style-field'), text = el('span', '', t(key)); text.dataset.lvText = key;
+      input.setAttribute('aria-label', t(key)); label.append(text, input); appearanceGrid.append(label);
+      return input;
+    }
+    function colorField(key, setting, cls) {
+      const input = el('input', cls); input.type = 'color';
+      input.addEventListener('input', () => {
+        if (/^#[a-f0-9]{6}$/i.test(input.value)) captionSettings[setting] = input.value.toLowerCase();
+        layoutCaptions();
+      });
+      return appearanceField(key, input);
+    }
+    const captionTextColor = colorField('subtitle_text_color', 'textColor', 'lv-caption-text-color');
+    const captionBackgroundColor = colorField('subtitle_background_color', 'backgroundColor', 'lv-caption-background-color');
+    const captionFont = el('select', 'lv-caption-font');
+    for (const [key, label] of [['system', t('subtitle_font_default')], ['segoe', 'Segoe UI'], ['arial', 'Arial'], ['serif', t('subtitle_font_serif')], ['monospace', t('subtitle_font_monospace')]]) {
+      const option = el('option', '', label); option.value = key; captionFont.append(option);
+    }
+    captionFont.addEventListener('change', () => { if (Object.hasOwn(captionFonts, captionFont.value)) captionSettings.font = captionFont.value; layoutCaptions(); });
+    appearanceField('subtitle_font', captionFont);
+    const opacityControl = el('span', 'lv-caption-opacity-control');
+    const captionOpacity = el('input', 'lv-caption-background-opacity'); captionOpacity.type = 'range'; captionOpacity.min = '0'; captionOpacity.max = '100'; captionOpacity.step = '1'; captionOpacity.setAttribute('aria-label', t('subtitle_background_opacity'));
+    const captionOpacityValue = el('output', 'lv-caption-opacity-value');
+    captionOpacity.addEventListener('input', () => { const value = Number(captionOpacity.value); if (Number.isFinite(value)) captionSettings.opacity = Math.min(100, Math.max(0, value)); layoutCaptions(); });
+    opacityControl.append(captionOpacity, captionOpacityValue); appearanceField('subtitle_background_opacity', opacityControl);
+    captionAppearance.append(appearanceSummary, appearanceGrid); captionEditor.append(captionHint, captionToolbar, captionAppearance);
     const videoInput = el('input', 'lv-video-input'); videoInput.type = 'file'; videoInput.multiple = true; videoInput.accept = '.mkv,.mp4,.m4v,.mov,.webm,.avi'; videoInput.hidden = true;
     const subtitleInput = el('input', 'lv-subtitle-input'); subtitleInput.type = 'file'; subtitleInput.accept = '.srt,.ass,.ssa,.vtt'; subtitleInput.hidden = true;
     videoInput.addEventListener('change', () => { const files = Array.from(videoInput.files || []); videoInput.value = ''; void addFiles(files); });
@@ -226,7 +260,6 @@
       const file = current(), has = !!file;
       empty.hidden = has; transport.hidden = !has;
       filename.textContent = file?.name || t('empty_title'); filename.title = file?.name || '';
-      compatibility.hidden = file?.playbackMode !== 'transcode';
       seek.max = String(file?.duration || 0); seek.disabled = !has || state.loading;
       if (!scrubbing) { seek.value = String(position()); elapsed.textContent = formatTime(position()); fillRange(seek); }
       total.textContent = formatTime(file?.duration);
@@ -306,7 +339,14 @@
     }
     function layoutCaptions() {
       captionSize.value = String(captionSettings.size); captionSizeValue.textContent = captionSettings.size + '%';
-      for (const key of ['x', 'y', 'size']) caption.dataset[key] = String(captionSettings[key]);
+      captionTextColor.value = captionSettings.textColor; captionBackgroundColor.value = captionSettings.backgroundColor; captionFont.value = captionSettings.font;
+      captionOpacity.value = String(captionSettings.opacity); captionOpacityValue.textContent = captionSettings.opacity + '%';
+      for (const key of Object.keys(captionDefaults)) caption.dataset[key] = String(captionSettings[key]);
+      const background = captionSettings.backgroundColor;
+      const rgb = [1, 3, 5].map(index => parseInt(background.slice(index, index + 2), 16));
+      caption.style.color = captionSettings.textColor;
+      caption.style.backgroundColor = 'rgba(' + rgb.join(', ') + ', ' + captionSettings.opacity / 100 + ')';
+      caption.style.fontFamily = captionFonts[captionSettings.font];
       const rect = pictureBounds();
       if (!rect.width || !rect.height || !Number.isFinite(rect.width)) return;
       Object.assign(captionArea.style, { left: rect.left - rect.screen.left + 'px', top: rect.top - rect.screen.top + 'px', width: rect.width + 'px', height: rect.height + 'px' });
@@ -343,6 +383,7 @@
       if (!on && !captionEditing) return;
       captionEditing = !!on; captionDrag = null;
       captionEditor.hidden = !on; caption.tabIndex = on ? 0 : -1;
+      if (!on) captionAppearance.open = false;
       stage.classList.toggle('is-caption-editing', !!on);
       if (on) { trackPanel.hidden = true; trackButton.setAttribute('aria-expanded', 'false'); }
       renderCaptions();

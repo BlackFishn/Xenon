@@ -31909,8 +31909,6 @@ Object.assign(i18n.en, {
   local_video_audio_track: 'Audio track',
   local_video_subtitle_track: 'Subtitle track',
   local_video_ass_plain: 'ASS (text only)',
-  local_video_compatibility: 'Compatibility · up to 720p',
-  local_video_compatibility_hint: 'This codec needs video conversion, limited to 720p to reduce CPU use.',
   local_video_skipped_files: 'Some files could not be opened',
   local_video_preparing: 'Preparing local file',
   local_video_cancel_import: 'Cancel',
@@ -31928,6 +31926,14 @@ Object.assign(i18n.en, {
   local_video_subtitle_done: 'Done',
   local_video_subtitle_drag_hint: 'Drag subtitles, or use arrow keys to move them.',
   local_video_subtitle_sample: 'Subtitle preview',
+  local_video_subtitle_appearance: 'Appearance',
+  local_video_subtitle_text_color: 'Text color',
+  local_video_subtitle_background_color: 'Background color',
+  local_video_subtitle_background_opacity: 'Background opacity',
+  local_video_subtitle_font: 'Font',
+  local_video_subtitle_font_default: 'Default',
+  local_video_subtitle_font_serif: 'Serif',
+  local_video_subtitle_font_monospace: 'Monospace',
 });
 
 function t(key) {

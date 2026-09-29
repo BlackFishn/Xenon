@@ -299,7 +299,7 @@ test('subtitle editing bounds mouse and touch drag to the picture and preserves 
   assert.equal(r.video.src, src); assert.equal(r.calls.length, calls); assert.equal(r.video.paused, false);
   const settings = { ...caption.dataset }; r.player.setFocus(true); r.player.setFocus(false); r.player.fill(true);
   assert.deepEqual(caption.dataset, settings);
-  r.find('lv-caption-reset').click(); assert.deepEqual(caption.dataset, { x: '0.5', y: '0.92', size: '100' });
+  r.find('lv-caption-reset').click(); assert.deepEqual(caption.dataset, { x: '0.5', y: '0.92', size: '100', textColor: '#ffffff', backgroundColor: '#000000', opacity: '67', font: 'system' });
   r.find('lv-caption-done').click(); assert.equal(r.stage.classList.contains('is-caption-editing'), false); assert.equal(caption.hidden, true);
 });
 
@@ -311,6 +311,36 @@ test('pointer Done restores Focus idle hiding while keyboard Done preserves cont
   r.find('lv-sub-adjust').click(); r.find('lv-caption-done').emit('click', { detail: 0 });
   assert.equal(r.document.activeElement, r.find('lv-tracks-toggle'));
   r.expireIdle(); assert.equal(r.stage.classList.contains('has-hidden-controls'), false);
+});
+
+test('subtitle appearance accepts safe colors and fonts, clamps opacity, and Reset restores every setting without restarting playback', async () => {
+  const r = setup({ picked: [{ ...file, playbackMode: 'transcode' }] }); await r.importFiles(); r.video.emit('canplay');
+  assert.equal(r.find('lv-compatibility'), null);
+  const src = r.video.src, calls = r.calls.length, caption = r.find('lv-caption');
+  r.find('lv-sub-adjust').click();
+  const textColor = r.find('lv-caption-text-color'), background = r.find('lv-caption-background-color');
+  assert.equal(textColor.type, 'color'); assert.equal(background.type, 'color');
+  textColor.value = '#FFCC33'; textColor.emit('input'); background.value = '#123456'; background.emit('input');
+  const opacity = r.find('lv-caption-background-opacity'); opacity.value = '45'; opacity.emit('input');
+  assert.equal(caption.style.color, '#ffcc33'); assert.equal(caption.style.backgroundColor, 'rgba(18, 52, 86, 0.45)');
+  textColor.value = 'url(bad)'; textColor.emit('input'); background.value = '#123'; background.emit('input');
+  assert.equal(caption.dataset.textColor, '#ffcc33'); assert.equal(caption.dataset.backgroundColor, '#123456');
+  const font = r.find('lv-caption-font');
+  for (const [key, family] of [['system', 'system-ui'], ['segoe', 'Segoe UI'], ['arial', 'Arial'], ['serif', 'Georgia'], ['monospace', 'Consolas']]) {
+    font.value = key; font.emit('change'); assert.ok(caption.style.fontFamily.includes(family));
+  }
+  font.value = '__proto__'; font.emit('change'); assert.equal(caption.dataset.font, 'monospace');
+  opacity.value = '-20'; opacity.emit('input'); assert.equal(caption.dataset.opacity, '0');
+  opacity.value = '250'; opacity.emit('input'); assert.equal(caption.dataset.opacity, '100');
+  opacity.value = 'invalid'; opacity.emit('input'); assert.equal(caption.dataset.opacity, '100');
+  r.find('lv-caption-size').value = '160'; r.find('lv-caption-size').emit('input');
+  r.find('lv-caption-reset').click();
+  assert.deepEqual(caption.dataset, { x: '0.5', y: '0.92', size: '100', textColor: '#ffffff', backgroundColor: '#000000', opacity: '67', font: 'system' });
+  assert.equal(textColor.value, '#ffffff'); assert.equal(background.value, '#000000'); assert.equal(opacity.value, '67'); assert.equal(font.value, 'system');
+  assert.equal(caption.style.backgroundColor, 'rgba(0, 0, 0, 0.67)'); assert.equal(caption.style.color, '#ffffff');
+  r.find('lv-caption-appearance').open = true; r.find('lv-caption-done').emit('click', { detail: 1 });
+  assert.equal(r.find('lv-caption-appearance').open, false);
+  assert.equal(r.video.src, src); assert.equal(r.calls.length, calls); assert.equal(r.video.paused, false);
 });
 
 test('paused subtitle preview remains editable and Escape finishes editing before leaving Focus', async () => {
