@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — subtitle appearance
+
+- Add text color, background color, background opacity and system font choices to subtitle adjustment, with a live preview and Reset.
+- Keep the appearance controls compact and usable in Focus and small widgets.
+- Remove the Compatibility / up to 720p label from the video player toolbar.
+
 ## Unreleased — subtitle placement
 
 - Add a subtitle adjustment mode for local video: drag captions within the picture, resize text, and reset the placement.

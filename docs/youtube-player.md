@@ -91,6 +91,9 @@ releases its file grants; switching between YouTube and Video retains the queue.
   picture and change their text size. Use **Reset** to return to the default
   placement, then **Done** to finish. Arrow keys move the focused caption as an
   alternative to dragging. Position and size carry across Focus and widget resizing.
+  Expand **Appearance** to choose text and background colors, background opacity
+  (0% makes it transparent), and a font. These changes preview immediately without
+  restarting playback. **Reset** restores appearance, position and size together.
   Adjustments last for the current widget session; reloading restores defaults.
   This applies to selectable text subtitles, including external subtitle files;
   text burned into the video picture cannot be moved separately.
@@ -114,7 +117,7 @@ Compatible H.264 video is copied into a browser-compatible MP4 stream without
 decoding/re-encoding the picture. AAC audio is copied when possible; other selected
 audio is converted to stereo AAC. Other video formats use compatibility conversion,
 limited to 720p and two encoding threads. This mode costs CPU and can reduce image
-quality; its indicator is shown beside the filename.
+quality.
 
 There is no library scan, background thumbnail generation or playback polling loop.
 Metadata is read only for selected files. Subtitle extraction is bounded and cached,
