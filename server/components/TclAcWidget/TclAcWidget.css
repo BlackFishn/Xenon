@@ -1,41 +1,69 @@
-/* Dedicated TCL AC widget. Scroll the widget itself on short Edge layouts. */
+/* The standalone AC reuses Smart Home's glass tiles, header and switch styling.
+   Keep only AC layout here so every dashboard theme uses the same materials. */
 .tcl-ac-panel { display: flex; min-width: 0; min-height: 0; }
-.tcl-ac-widget-mount { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: auto; border-radius: inherit; }
-/* Control appearance follows Xenon's existing theme tokens. */
-.sh-tcl-ac {
-  box-sizing: border-box; min-width: 0; padding: 16px; border-radius: 16px;
-  display: flex; flex-direction: column; gap: 10px; min-height: 100%;
-  color: var(--text, #e7e9ee); background: var(--card-bg, rgba(255,255,255,.035));
-  border: 1px solid rgba(var(--accent-rgb), .2); font-size: .8rem;
-}
-.sh-ac-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.sh-ac-header > div { min-width: 0; }
-.sh-ac-title { display: block; overflow-wrap: anywhere; font-size: .95rem; }
-.sh-ac-caption { opacity: .65; font-size: .72rem; }
-.sh-ac-center, .sh-ac-room, .sh-ac-state { text-align: center; }
-.sh-ac-state { color: rgb(var(--accent-rgb)); }
-.sh-ac-thermo { display: flex; align-items: center; justify-content: center; gap: 22px; }
-.sh-ac-temperature { display: flex; align-items: baseline; gap: 5px; font-variant-numeric: tabular-nums; }
-.sh-ac-temperature strong { font-size: 3rem; font-weight: 500; line-height: 1.1; }
-.sh-ac-temperature small { font-size: 1rem; opacity: .65; }
-.sh-ac-button, .sh-ac-field select {
-  box-sizing: border-box; min-width: 0; min-height: 44px; padding: 8px 12px;
-  color: inherit; font: inherit; border: 1px solid rgba(var(--accent-rgb), .2);
-  border-radius: 10px; background: var(--surface-raised, rgba(128,128,128,.08));
+.tcl-ac-widget-mount { width: 100%; height: 100%; min-width: 0; min-height: 0; display: flex; border-radius: inherit; }
+.sh-tcl-ac { color: var(--text, #e7e9ee); }
+.sh-tcl-ac .sh-custom-section-title { color: var(--muted-text, rgba(255,255,255,.52)); }
+.sh-ac-board { gap: 12px; }
+.sh-ac-board > * { flex-shrink: 0; }
+.sh-ac-board > .sh-item--toggle { min-height: 64px; }
+.sh-ac-button { min-height: 44px; cursor: pointer; touch-action: manipulation; }
+.sh-ac-button:focus-visible, .sh-ac-field select:focus-visible { outline: 2px solid rgb(var(--accent-rgb)); outline-offset: -3px; }
+.sh-ac-button:disabled, .sh-ac-field:has(select:disabled) { opacity: .42; cursor: not-allowed; }
+.sh-ac-readings { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 8px; }
+.sh-ac-setpoint { gap: 10px; }
+.sh-ac-thermo { position: relative; z-index: 1; width: 100%; display: flex; align-items: center; gap: 8px; }
+.sh-ac-temperature { display: flex; align-items: baseline; flex: 1 1 auto; min-width: 0; gap: 3px; font-variant-numeric: tabular-nums; }
+.sh-ac-temperature strong { font-size: 2.4rem; font-weight: 800; letter-spacing: -.04em; line-height: 1; }
+.sh-ac-temperature small { font-size: .85rem; font-weight: 700; color: var(--muted-text, rgba(255,255,255,.5)); }
+.sh-ac-thermo .sh-icobtn { width: 44px; height: 44px; flex: 0 0 44px; border-radius: 10px; font-size: 1.25rem; }
+.sh-ac-room-tile { gap: 4px; }
+.sh-ac-room { font-size: 1.65rem; }
+.sh-ac-modes { gap: 4px; }
+.sh-ac-modes .sh-seg-btn { min-width: 0; padding: 10px 4px; font-size: .75rem; }
+.sh-ac-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.sh-ac-airflow { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.sh-ac-fields > .sh-item--toggle { min-height: 68px; }
+.sh-ac-field { gap: 8px; padding: 9px 12px; }
+.sh-ac-field .sh-item-body { gap: 0; }
+.sh-ac-field .sh-item-sub { font-size: .63rem; }
+.sh-tcl-ac .sh-ac-field select {
+  box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; padding: 0;
+  font: inherit; font-size: .8rem; font-weight: 700; text-overflow: ellipsis;
+  background: transparent; border: 0; color: var(--text, #e7e9ee); appearance: none;
   cursor: pointer; touch-action: manipulation;
 }
-.sh-ac-button[aria-pressed=true] { background: rgba(var(--accent-rgb), .17); color: rgb(var(--accent-rgb)); border-color: rgba(var(--accent-rgb), .5); }
-.sh-ac-button:focus-visible, .sh-ac-field select:focus-visible { outline: 2px solid rgb(var(--accent-rgb)); outline-offset: 2px; }
-.sh-ac-button:disabled, .sh-ac-field select:disabled { opacity: .42; cursor: not-allowed; }
-.sh-ac-modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(55px, 1fr)); gap: 5px; }
-.sh-ac-modes .sh-ac-button { padding: 8px 3px; }
-.sh-ac-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
-.sh-ac-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; font-size: .74rem; }
-.sh-ac-field select { width: 100%; }
-.sh-ac-field option { background: var(--bg, #111820); color: var(--text, #e7e9ee); }
-.sh-ac-more { border: 0; opacity: .8; }
-.sh-ac-extra { padding-top: 10px; border-top: 1px solid rgba(var(--accent-rgb), .2); }
+.sh-ac-field select:disabled { cursor: not-allowed; }
+.sh-ac-field option { background: var(--surface, #182128); color: var(--text, #e7e9ee); }
+.sh-ac-chevron { display: inline-flex; flex: 0 0 auto; color: var(--muted-text, rgba(255,255,255,.5)); }
+.sh-ac-chevron svg { width: 16px; height: 16px; }
+.sh-ac-more {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 2px;
+  border: 0; border-top: 1px solid var(--line, rgba(255,255,255,.075)); background: transparent;
+  color: var(--muted-text, rgba(255,255,255,.5)); font: inherit; font-size: .72rem; font-weight: 700;
+}
+.sh-ac-more:hover { color: var(--text, #e7e9ee); }
+.sh-ac-more[aria-expanded=true] .sh-ac-chevron { transform: rotate(180deg); }
+.sh-ac-extra .sh-ac-wide { grid-column: 1 / -1; }
 .sh-tcl-ac [hidden] { display: none !important; }
 .sh-ac-feedback { color: rgb(var(--accent-rgb)); }
 .sh-ac-error { color: var(--color-danger, #ff8b8b); }
-.sh-ac-feedback, .sh-ac-error { overflow-wrap: anywhere; }
+.sh-ac-feedback, .sh-ac-error { overflow-wrap: anywhere; font-size: .74rem; }
+
+@container (max-width: 560px) {
+  .sh-ac-airflow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sh-ac-airflow .sh-ac-wide { grid-column: 1 / -1; }
+  .sh-ac-field { gap: 6px; padding: 8px 10px; }
+}
+@container (max-width: 420px) {
+  .sh-ac-readings { grid-template-columns: minmax(0, 1fr); }
+  .sh-ac-room-tile { flex-direction: row; align-items: center; justify-content: flex-start; gap: 8px; min-height: 54px; }
+  .sh-ac-room { font-size: 1.3rem; }
+  .sh-ac-room-tile .sh-item-name { margin-left: auto; }
+  .sh-ac-fields > .sh-item--toggle { gap: 6px; padding: 10px; }
+  .sh-ac-fields > .sh-item--toggle .sh-item-ico { display: none; }
+  .sh-ac-fields .sh-item-name { font-size: .72rem; }
+}
+@container (max-width: 320px) {
+  .sh-ac-airflow, .sh-ac-extra { grid-template-columns: minmax(0, 1fr); }
+}
