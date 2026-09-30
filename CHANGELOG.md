@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — grouped TCL air conditioner
+
+- Add one TCL AC card in Smart Home's room and custom layouts: power, target/current temperature, cooling modes, fan, both swing directions, ECO and soft wind; sleep, display and beep stay inside More settings.
+- Include the mapped TCL companion entities when selecting its climate entity, preserving other devices and layout settings.
+- Validate live capabilities before sending through the existing HA service bridge. Wait for HA readback, disable stale/busy controls, and require a state refresh after failed or unconfirmed commands.
+- Keep HA credentials server-side and retain the existing loopback/Origin guards. See `docs/tcl-ac.md` for mock validation and physical-device checks.
+
 ## Unreleased — subtitle appearance
 
 - Add text color, background color, background opacity and system font choices to subtitle adjustment, with a live preview and Reset.

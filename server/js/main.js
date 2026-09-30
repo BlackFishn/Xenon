@@ -689,6 +689,7 @@ if (need.audio) startVisibleAudioRefresh();
     };
 
     es.onerror = () => {
+      if (window.SmartHome && typeof window.SmartHome.disconnected === 'function') window.SmartHome.disconnected();
       // On error EventSource auto-reconnects, but if we get repeated failures
       // fall back to polling so the UI never stays stale.
       if (es.readyState === EventSource.CLOSED) {
