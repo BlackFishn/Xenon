@@ -193,7 +193,7 @@
       const range = TCL.temperature(climate), on = online && climate.state !== 'off';
       power.title = climate ? climate.name : TCL.profile.climate;
       connection.classList.toggle('on', online);
-      connection.title = online ? t('smarthome_connected', 'Connected') : acText('unavailable', 'Air conditioner unavailable');
+      connection.title = online ? t('online', 'Online') : acText('unavailable', 'Air conditioner unavailable');
       connection.setAttribute('aria-label', connection.title);
       card.classList.toggle('is-offline', !online);
       power.classList.toggle('is-on', on);
