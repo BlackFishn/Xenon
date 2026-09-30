@@ -39,4 +39,3 @@
 .sh-ac-feedback { color: rgb(var(--accent-rgb)); }
 .sh-ac-error { color: var(--color-danger, #ff8b8b); }
 .sh-ac-feedback, .sh-ac-error { overflow-wrap: anywhere; }
-
