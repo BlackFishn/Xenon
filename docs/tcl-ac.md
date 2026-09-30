@@ -28,6 +28,13 @@ vertical swing, horizontal swing, ECO and soft wind. More settings contains slee
 display light and beep. The disclosure remains within the same card. State and
 pending commands are shared across duplicated TCL AC widgets.
 
+Its appearance reuses Smart Home's header, connection dot, glass value cards,
+toggle rows and segmented mode buttons. The target and room temperatures sit
+beside one another, followed by airflow and comfort groups. Local Inter typography
+and the shared semantic theme contract keep both widgets consistent when the
+dashboard palette changes. The AC remains a separate movable/resizable widget;
+this visual alignment does not change Smart Home's renderer or saved settings.
+
 ## Exact entity contract
 
 The explicit mapping is in `packages/core/src/tcl-ac.js`. This is deliberately
@@ -125,7 +132,7 @@ The optional browser runner uses an existing Playwright installation. Set
 3031 and explicitly refuses 3030. `TCL_TEST_OUTPUT` selects a screenshot directory.
 It starts mock HA on an ephemeral loopback port, executes the production service
 and state route bodies with mock I/O, serves the real TCL AC and Smart Home
-modules/CSS, and creates a fresh browser context. It reads no runtime settings and writes no
+modules/CSS, local fonts and theme contract, and creates a fresh browser context. It reads no runtime settings and writes no
 `server/data`. Stop the runner before starting another backend on the test port.
 
 Coverage includes all control payloads, no optimistic state, rapid duplicate
@@ -137,6 +144,11 @@ mode restoration, reconnect readiness, HTTP and application errors, request and
 confirmation timeout/refresh, keyboard/focus, unrelated device updates, token
 redaction and the production loopback Origin guard. Layout checks cover 2560×720,
 desktop, portrait and 320px, including access to advanced controls by scrolling.
+Computed-style checks compare the two widgets' header typography and card material
+in both dark and light mock palettes. `smart-home-and-tcl-ac.png` is the clean
+side-by-side dark preview, `smart-home-and-tcl-ac-light.png` checks the light palette,
+and `tcl-ac-widget.png` isolates the AC. These are mock fixtures, not captures of the
+owner's dashboard or physical device state.
 
 ## Real-device verification still required
 

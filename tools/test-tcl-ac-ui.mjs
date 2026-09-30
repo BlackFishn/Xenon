@@ -46,6 +46,8 @@ const route = new Function('deckHa', 'buildHaState', `return async function(req,
   ${routeBody('/api/homeassistant/service')}
 }`)(mock.client, async () => snapshot());
 const assets = new Map([
+  ['/styles/fonts.css', 'server/styles/fonts.css'], ['/styles/theme-contract.css', 'server/styles/theme-contract.css'],
+  ...['cyrillic-ext', 'cyrillic', 'greek-ext', 'greek', 'vietnamese', 'latin-ext', 'latin'].map((subset) => ['/assets/fonts/inter-' + subset + '.woff2', 'server/assets/fonts/inter-' + subset + '.woff2']),
   ['/core.js', 'packages/core/src/tcl-ac.js'], ['/utils.js', 'server/js/utils.js'],
   ['/smart-home.js', 'server/js/smart-home.js'], ['/smart-home.css', 'server/components/SmartHomePanel/SmartHomePanel.css'],
   ['/tcl-ac-widget.js', 'server/js/tcl-ac-widget.js'], ['/tcl-ac-widget.css', 'server/components/TclAcWidget/TclAcWidget.css'],
@@ -67,14 +69,22 @@ const server = createServer(async (req, res) => {
     }
     if (url.pathname.startsWith('/api/homeassistant/')) { await route(req, res); return; }
     if (assets.has(url.pathname)) {
-      res.setHeader('Content-Type', url.pathname.endsWith('.css') ? 'text/css' : 'text/javascript');
+      res.setHeader('Content-Type', url.pathname.endsWith('.woff2') ? 'font/woff2' : url.pathname.endsWith('.css') ? 'text/css' : 'text/javascript');
       res.end(await readFile(resolve(root, assets.get(url.pathname)))); return;
     }
     if (url.pathname !== '/') { res.writeHead(404); res.end(); return; }
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="/smart-home.css"><link rel="stylesheet" href="/tcl-ac-widget.css">
-      <style>*{box-sizing:border-box}body{margin:0;background:#10171e;color:#e7e9ee;font:16px system-ui;--text:#e7e9ee;--accent-rgb:89,211,225;--bg:#10171e}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:20px;padding:16px}section[data-dashboard-widget]{height:calc(100vh - 32px);min-height:400px;border:1px solid #34434a;border-radius:18px;overflow:hidden}.pager-page{min-width:0}</style>
-      <main>${[1, 2].map((n) => '<div class="pager-page"><section data-widget="tcl-ac" data-dashboard-widget="tcl-ac" class="tcl-ac-panel" id="tile' + n + '"><div class="tcl-ac-widget-mount"></div></section></div>').join('')}<div class="pager-page"><section data-widget="smarthome" data-dashboard-widget="smarthome" class="smarthome-panel" id="smart-home"><div class="smarthome-widget-mount"></div></section></div></main><div id="settings-smarthome-hub"></div>
+    res.end(`<!doctype html><html lang="en" data-appearance="dark"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="/styles/fonts.css"><link rel="stylesheet" href="/smart-home.css"><link rel="stylesheet" href="/tcl-ac-widget.css"><link rel="stylesheet" href="/styles/theme-contract.css">
+      <style>
+      *{box-sizing:border-box}
+      :root{color-scheme:dark;--text:#dce6ed;--muted-text:#8ba9bc;--dim-text:#758895;--accent:#39acd2;--accent-rgb:57,172,210;--on-accent:#071820;--bg:#10232e;--surface:#131d25;--surface-alt:#1a252e;--panel-soft:rgba(27,37,45,.82);--line:rgba(170,188,203,.32);--divider:rgba(170,188,203,.28);--control-bg:#223440;--hover-bg:#2a404e;--input-bg:#172a36;--color-danger:#ff8e91}
+      :root[data-appearance="light"]{color-scheme:light;--text:#22323d;--muted-text:#506b7a;--dim-text:#607783;--accent:#087fa3;--accent-rgb:8,127,163;--on-accent:#fff;--bg:#e4edf1;--surface:#f8fbfc;--surface-alt:#edf3f6;--panel-soft:rgba(235,243,247,.94);--line:#9cafba;--divider:#b7c7d0;--control-bg:#e0ecf2;--hover-bg:#d4e5ef;--input-bg:#f8fbfc;--color-danger:#a72735}
+      body{margin:0;background:var(--bg);color:var(--text);font:16px Inter,system-ui,sans-serif}
+      main{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:20px;padding:16px}
+      section[data-dashboard-widget]{height:calc(100vh - 32px);min-height:400px;border:1px solid var(--divider);border-radius:18px;background:var(--surface);overflow:hidden}
+      .pager-page{min-width:0}.preview-pair main{grid-template-columns:1fr 1fr}.preview-pair .pager-page:has(#tile2){display:none}
+      </style>
+      <main>${[1, 2].map((n) => '<div class="pager-page"><section data-widget="tcl-ac" data-dashboard-widget="tcl-ac" class="panel tcl-ac-panel" id="tile' + n + '"><div class="tcl-ac-widget-mount"></div></section></div>').join('')}<div class="pager-page"><section data-widget="smarthome" data-dashboard-widget="smarthome" class="panel smarthome-panel" id="smart-home"><div class="smarthome-widget-mount"></div></section></div></main><div id="settings-smarthome-hub"></div>
       <script src="/core.js"></script><script src="/utils.js"></script><script>
       let config=${JSON.stringify(config)};
       window.t=(key)=>({smarthome_on:'On',smarthome_off:'Off',smarthome_title:'Smart Home',smarthome_no_area:'Other',smarthome_unsectioned:'Unsectioned',smarthome_hvac_cool:'Cool',smarthome_hvac_dry:'Dry',smarthome_hvac_auto:'Auto',smarthome_hvac_fan_only:'Fan only',smarthome_hvac_off:'Off'}[key]||key);
@@ -97,6 +107,8 @@ try {
   const card = page.locator('#tile1 .sh-tcl-ac');
   const ctl = (name) => card.locator('[data-ac-control="' + name + '"]');
   await card.waitFor();
+  await page.evaluate(() => document.fonts.ready);
+  assert.equal(await page.evaluate(() => document.fonts.check('800 14px Inter')), true, 'local dashboard font loaded');
   assert.equal(await page.locator('.sh-tcl-ac').count(), 2, 'one AC card per dedicated duplicate widget');
   assert.equal(await page.locator('#smart-home .sh-tcl-ac').count(), 0, 'Smart Home keeps its existing renderer');
   assert.equal(await page.locator('#smart-home [data-entity-id="' + p.climate + '"]').count(), 1, 'the selected TCL climate remains an ordinary Smart Home tile');
@@ -113,6 +125,30 @@ try {
   assert.equal(await page.locator('[data-ac-control="heat"]').count(), 0);
   assert.equal(await ctl('fan').inputValue(), 'Auto');
   assert.match(await card.locator('.sh-ac-room').innerText(), /28.5/);
+  const checkSharedTheme = async () => {
+    // Buttons animate palette changes; capture the settled theme, not a blend.
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('#tile1 [data-ac-control="power"]')).backgroundColor === getComputedStyle(document.querySelector('#tile1 .sh-ac-room-tile')).backgroundColor);
+    const styles = await page.evaluate(() => {
+      const read = (selector, keys) => {
+        const style = getComputedStyle(document.querySelector(selector));
+        return Object.fromEntries(keys.map((key) => [key, style[key]]));
+      };
+      return {
+        acTitle: read('#tile1 .sh-title', ['fontFamily', 'fontSize', 'fontWeight', 'color']),
+        homeTitle: read('#smart-home .sh-title', ['fontFamily', 'fontSize', 'fontWeight', 'color']),
+        acSurface: read('#tile1 .sh-ac-room-tile', ['backgroundColor', 'borderTopColor', 'borderRadius']),
+        homeSurface: read('#smart-home .sh-item--value', ['backgroundColor', 'borderTopColor', 'borderRadius']),
+        sectionColor: read('#tile1 .sh-custom-section-title', ['color']).color,
+        mutedColor: read('#tile1 .sh-ac-field .sh-item-sub', ['color']).color,
+        selectBackground: read('#tile1 .sh-ac-field select', ['backgroundColor']).backgroundColor,
+      };
+    });
+    assert.deepEqual(styles.acTitle, styles.homeTitle, 'AC uses the same header typography and theme as Smart Home');
+    assert.deepEqual(styles.acSurface, styles.homeSurface, 'AC uses the same card material as Smart Home');
+    assert.equal(styles.sectionColor, styles.mutedColor, 'AC section labels stay readable across themes');
+    assert.equal(styles.selectBackground, 'rgba(0, 0, 0, 0)', 'selects share the glass card surface');
+  };
+  await checkSharedTheme();
   console.log('PASS dedicated AC duplicates, original Smart Home renderer/settings/layout, other devices and cooling modes');
 
   config = { ...config, entities: [] };
@@ -279,8 +315,38 @@ try {
     assert.equal(await ctl('beep').isVisible(), true, name + ' advanced controls reachable');
     await ctl('power').click({ trial: true });
   }
+  // A separate comparison image uses only existing mock devices and hides the
+  // duplicate for clarity. Neither the real dashboard nor its settings is read.
+  await page.setViewportSize({ width: 1320, height: 780 });
+  config = await page.evaluate(() => {
+    document.body.classList.add('preview-pair');
+    config = {
+      ...config, entities: ['sensor.pm25', 'climate.other', 'light.desk'],
+      tileSections: [{ id: 'shs_air', title: 'Air quality', parent: '' }, { id: 'shs_climate', title: 'Climate', parent: '' }, { id: 'shs_light', title: 'Light', parent: '' }],
+      tileCards: {
+        'sensor.pm25': { width: 6, height: 1, section: 'shs_air' },
+        'climate.other': { width: 6, height: 1, section: 'shs_climate' },
+        'light.desk': { width: 12, height: 2, section: 'shs_light' },
+      },
+    };
+    SmartHome.renderWidgets();
+    return config;
+  });
+  broadcast();
+  await page.waitForFunction(() => document.querySelectorAll('#smart-home [data-entity-id]').length === 3);
+  if (await ctl('more').getAttribute('aria-expanded') === 'true') await ctl('more').click();
+  await page.evaluate(() => { document.activeElement.blur(); document.querySelector('#tile1 .sh-board').scrollTop = 0; });
+  await page.mouse.move(0, 0);
+  await checkSharedTheme();
+  await page.screenshot({ path: resolve(output, 'smart-home-and-tcl-ac.png'), fullPage: true });
+  await page.locator('#tile1').screenshot({ path: resolve(output, 'tcl-ac-widget.png') });
+  await page.evaluate(() => document.documentElement.dataset.appearance = 'light');
+  await checkSharedTheme();
+  await ctl('fan').click({ trial: true });
+  await page.screenshot({ path: resolve(output, 'smart-home-and-tcl-ac-light.png'), fullPage: true });
+  await page.evaluate(() => document.documentElement.dataset.appearance = 'dark');
   assert.deepEqual(errors, []);
-  console.log('PASS keyboard/focus, other device updates, independent selection, preserved layout, loopback Origin, token redaction, room/custom modes, 2560x720, desktop, portrait and 320px');
+  console.log('PASS keyboard/focus, other device updates, independent selection, preserved layout, loopback Origin, token redaction, room/custom modes, 2560x720, desktop, portrait and 320px, shared dark/light theme and local font');
   console.log('Screenshots: ' + output);
 } finally {
   if (browser) await browser.close();
