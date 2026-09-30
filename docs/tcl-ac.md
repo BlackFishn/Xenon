@@ -1,29 +1,32 @@
 # TCL air conditioner in Xenon
 
 This fork implements the owner's `xenon-ac-handoff` package as native Xenon UI.
-The reference Lovelace card is not loaded or installed. Controls live in the existing
-Smart Home renderer and use the existing Node Home Assistant connection, service
-route, compact snapshots and `homeassistant` SSE events.
+The reference Lovelace card is not loaded or installed. Controls live in a new,
+separate **TCL Air Conditioner** dashboard widget (`tcl-ac`) and use the existing Node Home
+Assistant connection, service route, compact snapshots and `homeassistant` SSE events.
+The existing Smart Home widget and its settings keep their original behavior.
 
 ## User interface and selection
 
-Select `climate.split_ac_c8emtcvgaae_climate` under Settings → Smart Home. Its four
-selects, four switches and current-temperature sensor are included together.
-The title is **แอร์ห้องนอน**, as in `ac-card.config.json`. Removing the climate
-selection removes this group; selecting other devices is unchanged.
+Add **TCL Air Conditioner** from **+ → System** in the dashboard widget picker. Its title is **แอร์ห้องนอน**,
+as in `ac-card.config.json`. It is not automatically added to existing dashboards.
+Use the normal dashboard editing controls to move, resize, remove or duplicate it.
 
-The same grouped card appears in both Rooms and Custom. It uses the climate
-entity's saved order and section; companion entities do not get duplicate cards.
-Other devices keep their order, sections, sizes and controls, including other
-thermostats. Missing registry/device/area metadata does not prevent TCL grouping.
-Custom AC cards use at least half a wide grid; one saved height step equals four
-ordinary rows, with scrolling when controls exceed the chosen height. At narrow
-widths the card spans the grid. The existing dashboard edit controls resize/move it.
+The widget reads the ten exact mapped entities independently of the Smart Home
+entity picker, including when `homeAssistant.entities` is empty. No climate or
+companion selection is required. Missing registry/device/area metadata does not
+prevent the fixed profile from working.
+
+Smart Home retains its selected entities, order, sections, sizes, Rooms/Custom
+layouts and device controls. Selecting the TCL climate there creates its ordinary
+climate tile; companion entities remain independently selectable. Adding, removing
+or using TCL AC does not rewrite those settings. Removing TCL AC does not alter
+Smart Home's selected devices.
 
 The card includes power, target temperature, room temperature, mode, fan speed,
 vertical swing, horizontal swing, ECO and soft wind. More settings contains sleep,
 display light and beep. The disclosure remains within the same card. State and
-pending commands are shared across duplicated Smart Home widgets.
+pending commands are shared across duplicated TCL AC widgets.
 
 ## Exact entity contract
 
@@ -48,14 +51,21 @@ If HA entity IDs are renamed, update that mapping and its tests.
 are not used by this card. Fan speed goes through its sibling select, not
 `climate.set_fan_mode`.
 
-Both settings normalizers append companions without changing other settings.
-The existing 100 general-entity limit remains, with up to nine extra fixed TCL
-companions so grouping cannot evict another selected device. Normalization is
-idempotent. No source code writes directly to `server/data`.
+The existing Smart Home entity limit and both settings normalizers remain unchanged;
+they do not append this profile's companions. The backend sends the selected
+Smart Home snapshot in `entities` and the separate fixed AC snapshot in `tclAc`.
+The AC module is `server/js/tcl-ac-widget.js`, with styles scoped in
+`server/components/TclAcWidget/TclAcWidget.css`. No source code writes directly to
+`server/data`.
 
 ## Service, capability and state handling
 
-All commands POST `/api/homeassistant/service` with `{domain, service, entityId, data}`:
+The dedicated widget POSTs `/api/homeassistant/service` with
+`{domain, service, entityId, data, profile: "tcl-ac"}`. The profile flag selects fixed
+AC validation on the backend and is never forwarded to HA. Existing Smart Home
+commands, including generic `homeassistant.toggle`, retain their original behavior.
+
+The HA commands are:
 
 | Action | Service | Data |
 | --- | --- | --- |
@@ -86,9 +96,11 @@ command retries and no additional polling loop.
 
 Main climate missing/unknown/unavailable, backend HA disconnect, or browser SSE
 disconnect disables commands. A missing sibling disables only that control.
-Reconnect is reported ready only after HA state has been reseeded. Native dropdowns
-and pointer gestures are not replaced mid-interaction; button focus is restored
-after other devices update. Disabled/busy state also applies to duplicate cards.
+Reconnect is reported ready only after HA state has been reseeded. Cards update in
+place, preserving focused controls and pointer gestures through SSE updates.
+Disabled/busy state also applies to duplicate cards. Late HTTP replies cannot
+replace newer SSE state or re-enable controls after a disconnect; backend refreshes
+preserve live state changes received while the snapshot request was in flight.
 
 Credentials remain in Xenon's existing server-side settings flow. The browser
 never receives an HA token; no new login path, HA URL, direct browser HA request,
@@ -101,7 +113,7 @@ Never use port 3030 or the daily-use data/profile for tests.
 
 ```powershell
 rtk npm install
-rtk proxy node --test server/test/tcl-ac.test.mjs server/test/home-assistant.test.mjs server/test/smart-home-layout.test.mjs
+rtk proxy node --test server/test/tcl-ac.test.mjs server/test/tcl-ac-lifecycle.test.mjs server/test/tcl-ac-wiring.test.mjs server/test/home-assistant.test.mjs server/test/smart-home-layout.test.mjs
 rtk npm test
 rtk proxy node tools/test-tcl-ac-ui.mjs
 rtk git diff --check
@@ -112,17 +124,19 @@ The optional browser runner uses an existing Playwright installation. Set
 `PLAYWRIGHT_EXECUTABLE_PATH` to the installed browser. `TCL_TEST_PORT` defaults to
 3031 and explicitly refuses 3030. `TCL_TEST_OUTPUT` selects a screenshot directory.
 It starts mock HA on an ephemeral loopback port, executes the production service
-and state route bodies with mock I/O, serves the real Smart Home module/CSS, and
-creates a fresh browser context. It reads no runtime settings and writes no
+and state route bodies with mock I/O, serves the real TCL AC and Smart Home
+modules/CSS, and creates a fresh browser context. It reads no runtime settings and writes no
 `server/data`. Stop the runner before starting another backend on the test port.
 
 Coverage includes all control payloads, no optimistic state, rapid duplicate
-clicks, two widget instances, missing/unavailable entities, fallback temperature,
-range/step boundaries, power mode restoration, reconnect readiness, HTTP and
-application errors, confirmation timeout/refresh, keyboard/focus, selection,
-unrelated device updates, token redaction and the production loopback Origin guard.
-Layout checks cover 2560×720, desktop, portrait and 320px, including access to the
-advanced controls by scrolling.
+clicks, two dedicated AC widget instances beside Smart Home, independent AC data
+when Smart Home has no selected entities, and preservation of Smart Home's
+selections, order, sections, sizes and ordinary climate tile. It also covers
+missing/unavailable entities, fallback temperature, range/step boundaries, power
+mode restoration, reconnect readiness, HTTP and application errors, request and
+confirmation timeout/refresh, keyboard/focus, unrelated device updates, token
+redaction and the production loopback Origin guard. Layout checks cover 2560×720,
+desktop, portrait and 320px, including access to advanced controls by scrolling.
 
 ## Real-device verification still required
 
@@ -130,7 +144,7 @@ After mock validation, read-only discovery on 2026-09-30 found all ten mapped
 entities. At that observation HA reported Cool, target 25°C, room 26°C, fan Medium,
 vertical Up and down swing, horizontal Not set, sleep off, and all four switches
 off. The reported range was 16–36°C with a 1°C step. These are observations, not
-hardcoded defaults. No physical AC command was used for that discovery.
+hardcoded defaults. No real AC command has been sent as part of this implementation or its validation.
 
 Physical follow-up must verify compressor/power response, temperature changes,
 actual fan speed, both swing motors, ECO/soft wind interactions, sleep mode,

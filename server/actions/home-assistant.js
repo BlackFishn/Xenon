@@ -406,11 +406,9 @@ function normalizeHaTileCards(value, sectionIds) {
 function normalizeHomeAssistant(input) {
   const src = (input && typeof input === 'object') ? input : {};
   const url = String(src.url == null ? '' : src.url).trim().slice(0, 200);
-  const selected = Array.isArray(src.entities)
-    ? src.entities.filter(isEntityId).filter((v, i, a) => a.indexOf(v) === i)
+  const entities = Array.isArray(src.entities)
+    ? src.entities.filter(isEntityId).filter((v, i, a) => a.indexOf(v) === i).slice(0, HA_MAX_ENTITIES)
     : [];
-  // Preserve the existing order/selection, appending the bounded TCL companion set.
-  const entities = tclAc.expandSelection(selected, HA_MAX_ENTITIES);
   // Cameras the user chose to show on the Cameras tile — OPT-IN (empty = show
   // none), so connecting HA for smart-home control never dumps every camera onto
   // the dashboard. The array is BOTH the selection and the display order.
@@ -492,6 +490,7 @@ function redactHaToken(settings) {
 function createHomeAssistant(getConfig) {
   let ws = null;
   let statesReady = false;
+  let seeding = null;
   let ready = null;              // Promise<void> resolved once auth_ok
   let idleTimer = null;
   let pingTimer = null;
@@ -518,7 +517,7 @@ function createHomeAssistant(getConfig) {
     if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
     clearPing();
     if (ws) { try { ws.close(); } catch (e) { /* ignore */ } }
-    ws = null; ready = null; statesReady = false;
+    ws = null; ready = null; statesReady = false; seeding = null;
     if (onChange) { try { onChange(); } catch (e) { /* ignore */ } }
     pending.forEach((p) => { clearTimeout(p.timer); p.reject(new Error('ha_closed')); });
     pending.clear();
@@ -609,6 +608,7 @@ function createHomeAssistant(getConfig) {
   function applyEvent(event) {
     const data = event && event.data;
     if (!data || !data.entity_id) return;
+    if (seeding && seeding.socket === ws) seeding.updates.set(data.entity_id, data.new_state || null);
     if (data.new_state) states.set(data.entity_id, data.new_state);
     else states.delete(data.entity_id);
     if (onChange) { try { onChange(); } catch (e) { /* ignore */ } }
@@ -652,15 +652,27 @@ function createHomeAssistant(getConfig) {
   // deliberately does NOT subscribe or start the keepalive ping (that would bump
   // the idle timer forever and defeat the idle-close).
   async function seedStates() {
-    const socket = ws;
-    const all = await request('get_states');
-    if (!socket || socket !== ws) throw new Error('ha_closed');
-    states.clear();
-    for (const st of (Array.isArray(all) ? all : [])) { if (st && st.entity_id) states.set(st.entity_id, st); }
-    await loadAreas();
-    if (socket !== ws) throw new Error('ha_closed');
-    statesReady = true;
-    if (onChange) { try { onChange(); } catch (e) { /* ignore */ } }
+    if (seeding && seeding.socket === ws) return seeding.promise;
+    const seed = { socket: ws, updates: new Map(), promise: null };
+    seeding = seed;
+    seed.promise = (async () => {
+      try {
+        const all = await request('get_states');
+        if (!seed.socket || seed.socket !== ws) throw new Error('ha_closed');
+        const next = new Map();
+        for (const st of (Array.isArray(all) ? all : [])) { if (st && st.entity_id) next.set(st.entity_id, st); }
+        // A manual refresh can overlap live state_changed events. Keep those
+        // newer updates/removals instead of replacing them with an older reply.
+        for (const [id, st] of seed.updates) { if (st) next.set(id, st); else next.delete(id); }
+        states.clear();
+        for (const [id, st] of next) states.set(id, st);
+        await loadAreas();
+        if (seed.socket !== ws) throw new Error('ha_closed');
+        statesReady = true;
+        if (onChange) { try { onChange(); } catch (e) { /* ignore */ } }
+      } finally { if (seeding === seed) seeding = null; }
+    })();
+    return seed.promise;
   }
 
   // Watch path: seed, then subscribe to live changes and hold the socket open with
@@ -772,10 +784,14 @@ function createHomeAssistant(getConfig) {
     return callService(call.domain, call.service, call.target, call.data);
   }
 
-  async function callService(domain, service, target, data) {
+  async function callService(domain, service, target, data, profile) {
     if (!/^[a-z_]+$/.test(String(domain)) || !/^[a-z0-9_]+$/.test(String(service))) return { ok: false, error: 'bad_service' };
+    if (profile !== undefined && profile !== 'tcl-ac') return { ok: false, error: 'bad_ha_profile' };
     try {
-      if (target && tclAc.ids.includes(target.entity_id)) {
+      // Dedicated-card capability checks must not intercept existing Smart Home
+      // or Deck services (for example homeassistant.toggle on a TCL switch).
+      if (profile === 'tcl-ac') {
+        if (!target || !tclAc.ids.includes(target.entity_id)) return { ok: false, error: 'bad_tcl_entity' };
         await connect();
         if (!statesReady) await seedStates();
         const error = tclAc.validate(domain, service, target.entity_id, data, snapshot(tclAc.ids));

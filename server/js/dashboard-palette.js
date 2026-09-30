@@ -8,7 +8,7 @@
   const WIDGET_CATEGORIES = [
     { labelKey: 'palette_cat_productivity', ids: ['agenda', 'calendar', 'tasks', 'timer', 'notes', 'weather', 'search', 'transfer', 'stocks', 'football', 'news', 'notifications', 'vitals', 'phone', 'aiusage'] },
     { labelKey: 'palette_cat_media', ids: ['media', 'chat', 'browser', 'slideshow'] },
-    { labelKey: 'palette_cat_system', ids: ['system', 'fans', 'power', 'battery', 'disk', 'audio', 'mic', 'secondscreen', 'remote', 'smarthome', 'unifi', 'lighting', 'claude'] },
+    { labelKey: 'palette_cat_system', ids: ['system', 'fans', 'power', 'battery', 'disk', 'audio', 'mic', 'secondscreen', 'remote', 'smarthome', 'tcl-ac', 'unifi', 'lighting', 'claude'] },
     { labelKey: 'palette_cat_streaming', ids: ['twitch', 'twitchwatch', 'youtube', 'youtubelive', 'obs', 'discord', 'spotify', 'streamerbot', 'wavelink', 'deck'] },
   ];
   // Inline icons (currentColor) — one per widget id.
@@ -39,6 +39,7 @@
     secondscreen: I('<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4M15 7l3 3-3 3"/>'),
     weather: I('<path d="M6.5 18a4.5 4.5 0 0 1 .4-9 5.5 5.5 0 0 1 10.5 1.4A3.8 3.8 0 0 1 17 18Z"/><path d="M12 2v1.5M4 6l1 1M20 6l-1 1"/>'),
     smarthome: I('<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M10 20v-5h4v5"/>'),
+    'tcl-ac': I('<rect x="3" y="4" width="18" height="8" rx="2"/><path d="M6 9h12M7 15v5M12 15v6M17 15v5"/>'),
     streamerbot: I('<path d="M12 3l7 4v10l-7 4-7-4V7z"/><path d="M9 11h.01M15 11h.01M9 15h6"/>'),
     wavelink: I('<path d="M6 3v18M12 3v18M18 3v18"/><path d="M4 8h4M10 14h4M16 6h4"/>'),
     lighting: I('<path d="M9 18h6M10 21h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2h6c0-.8.4-1.5 1-2A7 7 0 0 0 12 2Z"/>'),

@@ -30,7 +30,7 @@ function defaultWidgetKeys(src) {
   const wStart = src.indexOf('widgets: Object.freeze({', start);
   const wEnd = src.indexOf('groups: Object.freeze({', wStart);
   const block = src.slice(wStart, wEnd);
-  return new Set([...block.matchAll(/\n\s+([a-z][a-z0-9]*):\s+Object\.freeze\(\{ x:/gi)].map(m => m[1]));
+  return new Set([...block.matchAll(/\n\s+(?:'([a-z][a-z0-9-]*)'|([a-z][a-z0-9]*)):\s+Object\.freeze\(\{ x:/gi)].map(m => m[1] || m[2]));
 }
 
 for (const rel of ['server.js', join('js', 'settings.js')]) {

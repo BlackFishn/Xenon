@@ -77,52 +77,6 @@ body.layout-editing .grid-stack-item-content:has(.smarthome-panel) > .smarthome-
 }
 .sh-card-slot > .sh-item { width: 100%; height: 100%; }
 
-/* TCL controls share the existing board/scroll surface and theme tokens. */
-.sh-tcl-ac {
-  box-sizing: border-box; min-width: 0; padding: 16px; border-radius: 16px;
-  display: flex; flex-direction: column; gap: 10px; grid-column: 1 / -1;
-  color: var(--text, #e7e9ee); background: var(--card-bg, rgba(255,255,255,.035));
-  border: 1px solid rgba(var(--accent-rgb), .2); font-size: .8rem;
-}
-.sh-card-slot--ac { grid-column: 1 / -1; overflow: auto; }
-.sh-card-slot--ac > .sh-tcl-ac { min-height: 100%; }
-.sh-card-slot--ac.is-editing > .sh-tcl-ac { padding-top: 34px; pointer-events: none; }
-.sh-ac-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.sh-ac-header > div { min-width: 0; }
-.sh-ac-title { display: block; overflow-wrap: anywhere; font-size: .95rem; }
-.sh-ac-caption { opacity: .65; font-size: .72rem; }
-.sh-ac-center, .sh-ac-room, .sh-ac-state { text-align: center; }
-.sh-ac-state { color: rgb(var(--accent-rgb)); }
-.sh-ac-thermo { display: flex; align-items: center; justify-content: center; gap: 22px; }
-.sh-ac-temperature { display: flex; align-items: baseline; gap: 5px; font-variant-numeric: tabular-nums; }
-.sh-ac-temperature strong { font-size: 3rem; font-weight: 500; line-height: 1.1; }
-.sh-ac-temperature small { font-size: 1rem; opacity: .65; }
-.sh-ac-button, .sh-ac-field select {
-  box-sizing: border-box; min-width: 0; min-height: 44px; padding: 8px 12px;
-  color: inherit; font: inherit; border: 1px solid rgba(var(--accent-rgb), .2);
-  border-radius: 10px; background: var(--surface-raised, rgba(128,128,128,.08));
-  cursor: pointer; touch-action: manipulation;
-}
-.sh-ac-button[aria-pressed=true] { background: rgba(var(--accent-rgb), .17); color: rgb(var(--accent-rgb)); border-color: rgba(var(--accent-rgb), .5); }
-.sh-ac-button:focus-visible, .sh-ac-field select:focus-visible { outline: 2px solid rgb(var(--accent-rgb)); outline-offset: 2px; }
-.sh-ac-button:disabled, .sh-ac-field select:disabled { opacity: .42; cursor: not-allowed; }
-.sh-ac-modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(55px, 1fr)); gap: 5px; }
-.sh-ac-modes .sh-ac-button { padding: 8px 3px; }
-.sh-ac-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
-.sh-ac-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; font-size: .74rem; }
-.sh-ac-field select { width: 100%; }
-.sh-ac-field option { background: var(--bg, #111820); color: var(--text, #e7e9ee); }
-.sh-ac-more { border: 0; opacity: .8; }
-.sh-ac-extra { padding-top: 10px; border-top: 1px solid rgba(var(--accent-rgb), .2); }
-.sh-tcl-ac [hidden] { display: none !important; }
-.sh-ac-feedback { color: rgb(var(--accent-rgb)); }
-.sh-ac-error { color: var(--color-danger, #ff8b8b); }
-.sh-ac-feedback, .sh-ac-error { overflow-wrap: anywhere; }
-@container (min-width: 700px) {
-  .sh-card-slot--ac { grid-column: span var(--sh-card-w, 6); }
-  .sh-grid > .sh-tcl-ac { grid-column: span 2; }
-}
-
 /* In-widget editor: visible only while the dashboard's established edit mode is
    active. It deliberately looks like instrument chrome, not normal HA controls. */
 .sh-layout-tools { display: flex; align-items: center; gap: 5px; }

@@ -348,9 +348,9 @@ if (need.audio) startVisibleAudioRefresh();
       } catch {}
     });
     es.addEventListener('homeassistant', e => {
-      // Live Home Assistant state (event-driven, not polled) → the Smart Home
-      // tile and the Energy widget (its `energy` selection rides the same event).
-      try { const d = JSON.parse(e.data); if (window.SmartHome) window.SmartHome.onSSE(d); if (window.PowerWidget) window.PowerWidget.onHaSSE(d); if (window.CustomWidget) window.CustomWidget.onData('homeassistant', d); } catch {}
+      // Live Home Assistant state → separate Smart Home, TCL AC, and Energy
+      // projections riding one event-driven connection.
+      try { const d = JSON.parse(e.data); if (window.SmartHome) window.SmartHome.onSSE(d); if (window.TclAcWidget) window.TclAcWidget.onSSE(d); if (window.PowerWidget) window.PowerWidget.onHaSSE(d); if (window.CustomWidget) window.CustomWidget.onData('homeassistant', d); } catch {}
     });
     es.addEventListener('script_states', e => {
       // States any local script set over POST /state/set — a Deck key bound to
@@ -689,7 +689,7 @@ if (need.audio) startVisibleAudioRefresh();
     };
 
     es.onerror = () => {
-      if (window.SmartHome && typeof window.SmartHome.disconnected === 'function') window.SmartHome.disconnected();
+      if (window.TclAcWidget && typeof window.TclAcWidget.disconnected === 'function') window.TclAcWidget.disconnected();
       // On error EventSource auto-reconnects, but if we get repeated failures
       // fall back to polling so the UI never stays stale.
       if (es.readyState === EventSource.CLOSED) {

@@ -17,7 +17,6 @@
   const t = (k, fb) => (typeof window.t === 'function' ? window.t(k) : (fb != null ? fb : k));
   const el = makeEl;   // shared DOM factory from utils.js
   const api = apiJson; // shared fetch-JSON helper from utils.js
-  const TCL = window.Xenon && window.Xenon.tclAc;
 
   const SVG = (p) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' + p + '</svg>';
   const ARROW_UP = SVG('<path d="M6 14l6-6 6 6"/>');
@@ -74,207 +73,6 @@
   // Latest Home Assistant state (global — one home, shared by every tile instance).
   let state = { configured: false, connected: false, entities: [] };
   let seeded = false;
-
-  // Command state belongs to the device, shared across duplicated dashboard tiles.
-  const ac = { pending: null, uncertain: false, refreshing: false, error: '', lastMode: null, expanded: false };
-  let acPointerDown = false;
-  let acNeedsPaint = false;
-  function acText(key, fallback) {
-    const value = t('smarthome_ac_' + key);
-    return value === 'smarthome_ac_' + key ? fallback : value;
-  }
-  function acEntities() { return state.entities.filter((e) => TCL.ids.includes(e.id)); }
-  function acClimate() { return entityById(TCL.profile.climate); }
-  function acOnline() { return state.connected && TCL.available(acClimate()); }
-  function acBusy() { return !acOnline() || !!ac.pending || ac.uncertain || ac.refreshing; }
-  function updateAcCards() {
-    document.querySelectorAll('.sh-tcl-ac').forEach((card) => card._updateAc());
-  }
-  function reconcileAc() {
-    if (!TCL) return;
-    const climate = acClimate();
-    if (acOnline() && climate.state !== 'off' && TCL.modes(climate).includes(climate.state)) ac.lastMode = climate.state;
-    const p = ac.pending;
-    const e = p && entityById(p.id);
-    if (p && p.ack && acOnline() && TCL.available(e) && e[p.property] === p.value) {
-      clearTimeout(p.timer); ac.pending = null; ac.error = '';
-    }
-  }
-  async function acRequest(path, options) {
-    const response = await fetchWithDeadline(path, 12000, options);
-    const result = await response.json();
-    if (!response.ok || !result || result.ok === false) throw new Error((result && result.error) || 'HTTP ' + response.status);
-    return result;
-  }
-  async function refreshAc() {
-    if (ac.refreshing || ac.pending) return;
-    ac.refreshing = true; updateAcCards();
-    try {
-      const result = await acRequest('/api/homeassistant/state?refresh=1');
-      onSSE(result);
-      if (!acOnline()) throw new Error(acText('unavailable', 'Air conditioner unavailable'));
-      ac.uncertain = false; ac.error = '';
-    } catch (error) { ac.error = error.message; }
-    finally { ac.refreshing = false; updateAcCards(); }
-  }
-  async function sendAc(id, service, data) {
-    if (acBusy()) return;
-    const domain = id.split('.')[0];
-    const error = TCL.validate(domain, service, id, data, acEntities());
-    if (error) { ac.error = error; updateAcCards(); return; }
-    const property = service === 'set_temperature' ? 'target' : 'state';
-    const value = data.temperature ?? data.hvac_mode ?? data.option ?? (service === 'turn_on' ? 'on' : 'off');
-    if (entityById(id)[property] === value) return;
-    const pending = { id, property, value, ack: false, timer: null };
-    ac.pending = pending; ac.error = ''; updateAcCards();
-    try {
-      await acRequest('/api/homeassistant/service', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ domain, service, entityId: id, data }),
-      });
-      pending.ack = true;
-      reconcileAc();
-      if (ac.pending === pending) pending.timer = setTimeout(() => {
-        if (ac.pending !== pending) return;
-        ac.pending = null; ac.uncertain = true;
-        ac.error = acText('unconfirmed', 'No matching state from Home Assistant. Refresh before retrying.');
-        updateAcCards();
-      }, 18000);
-    } catch (error) {
-      ac.pending = null; ac.uncertain = true;
-      ac.error = acText('failed', 'Command failed or unconfirmed. Refresh before retrying.') + ' ' + error.message;
-    }
-    updateAcCards();
-  }
-
-  // Only the explicit TCL companions collapse, even if HA puts them in different
-  // areas or has no device registry. The climate card keeps its saved position.
-  function boardEntities() {
-    if (!TCL) return state.entities;
-    const selected = tileSettings().entities;
-    if (!state.entities.some((e) => e.id === TCL.profile.climate) && !selected.includes(TCL.profile.climate)) return state.entities;
-    const list = state.entities.filter((e) => !TCL.ids.includes(e.id) || e.id === TCL.profile.climate)
-      .map((e) => e.id === TCL.profile.climate ? { ...e, device: null } : e);
-    if (!list.some((e) => e.id === TCL.profile.climate)) list.push({ id: TCL.profile.climate, domain: 'climate', name: 'TCL', state: 'unavailable' });
-    return list;
-  }
-
-  function buildAcCard() {
-    const card = el('div', 'sh-tcl-ac');
-    card.setAttribute('aria-label', 'TCL ' + acText('controls', 'air conditioner'));
-    const header = el('div', 'sh-ac-header');
-    const heading = el('div');
-    const title = el('strong', 'sh-ac-title');
-    heading.append(title, el('div', 'sh-ac-caption', 'TCL Home'));
-    const button = (label, action, name) => {
-      const b = el('button', 'sh-ac-button', label); b.type = 'button';
-      b.dataset.acControl = name; b.addEventListener('click', action); return b;
-    };
-    const power = button('', () => {
-      const climate = acClimate(), modes = TCL.modes(climate);
-      const mode = climate.state !== 'off' ? 'off' : modes.includes(ac.lastMode) ? ac.lastMode : modes.includes('cool') ? 'cool' : modes.find((m) => m !== 'off');
-      sendAc(TCL.profile.climate, 'set_hvac_mode', { hvac_mode: mode });
-    }, 'power');
-    header.append(heading, power);
-    const thermo = el('div', 'sh-ac-thermo');
-    const temperature = el('div', 'sh-ac-temperature');
-    const target = el('strong'), unit = el('small'); temperature.append(target, unit);
-    const step = (direction) => {
-      const range = TCL.temperature(acClimate());
-      if (range.usable) sendAc(TCL.profile.climate, 'set_temperature', {
-        temperature: Number(Math.min(range.max, Math.max(range.min, range.target + direction * range.step)).toFixed(4)),
-      });
-    };
-    const minus = button('−', () => step(-1), 'minus'), plus = button('+', () => step(1), 'plus');
-    minus.setAttribute('aria-label', acText('decrease', 'Decrease target temperature'));
-    plus.setAttribute('aria-label', acText('increase', 'Increase target temperature'));
-    thermo.append(minus, temperature, plus);
-    const room = el('div', 'sh-ac-room'), status = el('div', 'sh-ac-state');
-    const modes = el('div', 'sh-ac-modes'); modes.setAttribute('role', 'group');
-    modes.setAttribute('aria-label', acText('mode', 'AC mode'));
-    const main = el('div', 'sh-ac-fields'), extra = el('div', 'sh-ac-fields sh-ac-extra');
-    const fields = new Map();
-    const labels = { fan: 'Fan speed', vertical: 'Vertical swing', horizontal: 'Horizontal swing', sleep: 'Sleep mode', eco: 'ECO', soft: 'Soft wind', display: 'Display light', beep: 'Beep' };
-    for (const field of ['fan', 'vertical', 'horizontal', 'eco', 'soft', 'sleep', 'display', 'beep']) {
-      const id = TCL.profile[field], label = acText(field, labels[field]);
-      const parent = ['sleep', 'display', 'beep'].includes(field) ? extra : main;
-      if (id.startsWith('select.')) {
-        const row = el('label', 'sh-ac-field'), select = el('select'); select.dataset.acControl = field;
-        select.setAttribute('aria-label', label);
-        select.addEventListener('change', () => sendAc(id, 'select_option', { option: select.value }));
-        row.append(el('span', '', label), select); parent.append(row); fields.set(field, select);
-      } else {
-        const toggle = button(label, () => {
-          const e = entityById(id);
-          if (e) sendAc(id, e.state === 'on' ? 'turn_off' : 'turn_on', {});
-        }, field);
-        parent.append(toggle); fields.set(field, toggle);
-      }
-    }
-    const more = button(acText('more', 'More settings'), () => { ac.expanded = !ac.expanded; updateAcCards(); }, 'more');
-    more.classList.add('sh-ac-more');
-    const busy = el('div', 'sh-ac-feedback'); busy.setAttribute('role', 'status');
-    const error = el('div', 'sh-ac-error'); error.setAttribute('role', 'alert');
-    const refresh = button(acText('refresh', 'Refresh state'), refreshAc, 'refresh');
-    card.append(header, el('div', 'sh-ac-caption sh-ac-center', acText('target', 'Target temperature')), thermo, room, status, modes, main, more, extra, busy, error, refresh);
-    card._updateAc = () => {
-      const climate = acClimate(), online = acOnline(), blocked = acBusy(), supported = TCL.modes(climate);
-      const range = TCL.temperature(climate), on = online && climate.state !== 'off';
-      title.textContent = TCL.title;
-      title.title = climate ? climate.name : TCL.profile.climate;
-      card.classList.toggle('is-offline', !online);
-      power.textContent = on ? t('smarthome_on', 'On') : t('smarthome_off', 'Off');
-      power.setAttribute('aria-pressed', String(on));
-      power.setAttribute('aria-label', on ? acText('power_off', 'Turn AC off') : acText('power_on', 'Turn AC on'));
-      power.disabled = blocked || (on ? !supported.includes('off') : !supported.some((m) => m !== 'off'));
-      target.textContent = online && Number.isFinite(climate.target) ? fmtNum(climate.target) : '—';
-      const sensor = entityById(TCL.profile.current);
-      const unitText = (climate && climate.unit) || (sensor && sensor.unit) || '';
-      unit.textContent = unitText;
-      const current = online && Number.isFinite(climate.current) ? climate.current
-        : online && TCL.available(sensor) && sensor.state.trim() !== '' ? Number(sensor.state) : NaN;
-      room.textContent = acText('room', 'Room temperature') + ' · ' + (Number.isFinite(current) ? fmtNum(current) : '—') + ' ' + unitText;
-      status.textContent = online ? fmtHvac(climate.state) : acText('unavailable', 'Air conditioner unavailable');
-      minus.disabled = blocked || !range.usable || range.target - range.step < range.min;
-      plus.disabled = blocked || !range.usable || range.target + range.step > range.max;
-      const signature = supported.filter((m) => m !== 'off').join('|');
-      if (modes.dataset.options !== signature) {
-        modes.dataset.options = signature; modes.replaceChildren();
-        supported.filter((m) => m !== 'off').forEach((mode) => {
-          const b = button(fmtHvac(mode), () => sendAc(TCL.profile.climate, 'set_hvac_mode', { hvac_mode: mode }), mode);
-          modes.append(b);
-        });
-      }
-      for (const b of modes.children) { b.disabled = blocked; b.setAttribute('aria-pressed', String(online && b.dataset.acControl === climate.state)); }
-      for (const [field, control] of fields) {
-        const e = entityById(TCL.profile[field]), available = TCL.available(e);
-        control.disabled = blocked || !available;
-        control.title = available ? e.state : acText('unavailable_control', 'Control unavailable');
-        if (control.tagName === 'SELECT') {
-          const options = available && Array.isArray(e.options) ? e.options : [];
-          const signature = JSON.stringify(options);
-          if (control.dataset.options !== signature) {
-            control.dataset.options = signature;
-            const unknown = el('option', '', '—'); unknown.value = ''; unknown.disabled = true;
-            control.replaceChildren(unknown, ...options.map((raw) => { const o = el('option', '', prettify(raw)); o.value = raw; return o; }));
-          }
-          control.value = available && options.includes(e.state) ? e.state : '';
-          control.disabled = control.disabled || !options.length;
-        } else {
-          control.setAttribute('aria-pressed', String(available && e.state === 'on'));
-          control.disabled = control.disabled || !['on', 'off'].includes(e && e.state);
-        }
-      }
-      more.setAttribute('aria-expanded', String(ac.expanded)); extra.hidden = !ac.expanded;
-      busy.textContent = ac.refreshing ? acText('refreshing', 'Refreshing state…') : ac.pending
-        ? ac.pending.ack ? acText('waiting', 'Waiting for Home Assistant confirmation…') : acText('sending', 'Sending command…') : '';
-      busy.hidden = !busy.textContent; error.textContent = ac.error; error.hidden = !ac.error;
-      refresh.hidden = !ac.uncertain; refresh.disabled = ac.refreshing || !!ac.pending;
-    };
-    card.addEventListener('pointerdown', () => { acPointerDown = true; });
-    card.addEventListener('focusout', () => requestAnimationFrame(() => { if (card.isConnected && !card.contains(document.activeElement)) paint(); }));
-    card._updateAc(); return card;
-  }
 
   // ── Shared helpers ──────────────────────────────────────────────────────────
   function iconFor(e) { return ICONS[ICON_FOR[e.domain] || 'sensor'] || ICONS.sensor; }
@@ -523,7 +321,6 @@
   }
 
   function buildItem(e) {
-    if (TCL && e.id === TCL.profile.climate) return buildAcCard();
     if (e.domain === 'media_player') return mediaItem(e);
     if (RUN_DOMAINS.has(e.domain)) return runItem(e);
     if (TOGGLE_DOMAINS.has(e.domain)) return toggleItem(e);
@@ -673,11 +470,9 @@
 
   function resizeTileCard(id, axis, delta) {
     const cfg = tileSettings();
-    const isAc = TCL && id === TCL.profile.climate;
-    const cur = cfg.cards[id] || { width: isAc ? 2 : 1, height: isAc ? 2 : 1, section: '' };
+    const cur = cfg.cards[id] || { width: 1, height: 1, section: '' };
     const limit = axis === 'width' ? 4 : 3;
-    const min = isAc && axis === 'width' ? 2 : 1;
-    cfg.cards[id] = { ...cur, [axis]: Math.min(limit, Math.max(min, (Number(cur[axis]) || min) + delta)) };
+    cfg.cards[id] = { ...cur, [axis]: Math.min(limit, Math.max(1, (Number(cur[axis]) || 1) + delta)) };
     saveTileLayout({ tileCards: cfg.cards });
   }
 
@@ -739,7 +534,6 @@
   }
 
   function expandedUnit(u) {
-    if (TCL && u.type === 'single' && u.entity.id === TCL.profile.climate) return buildAcCard();
     if (u.type === 'device') return inlinePanel(primaryEntity(u.entities), u.name, buildDeviceBody(u.entities, u.name));
     const e = u.entity;
     if (SHEET_DOMAINS.has(e.domain)) return inlinePanel(e, e.name, buildSheetBody(e));
@@ -812,13 +606,11 @@
 
   function customCard(e, editing) {
     const cfg = tileSettings();
-    const isAc = TCL && e.id === TCL.profile.climate;
-    const meta = cfg.cards[e.id] || { width: isAc ? 2 : 1, height: isAc ? 2 : 1, section: '' };
+    const meta = cfg.cards[e.id] || { width: 1, height: 1, section: '' };
     const slot = el('div', 'sh-card-slot' + (editing ? ' is-editing' : ''));
-    if (TCL && e.id === TCL.profile.climate) slot.classList.add('sh-card-slot--ac');
     slot.dataset.entityId = e.id;
-    slot.style.setProperty('--sh-card-w', String(Math.max(isAc ? 2 : 1, Number(meta.width) || 1) * 3));
-    slot.style.setProperty('--sh-card-h', String((Number(meta.height) || 1) * (isAc ? 4 : 1)));
+    slot.style.setProperty('--sh-card-w', String((Number(meta.width) || 1) * 3));
+    slot.style.setProperty('--sh-card-h', String(Number(meta.height) || 1));
     slot.appendChild(buildItem(e));
 
     if (!editing) return slot;
@@ -893,8 +685,7 @@
     const editing = isLayoutEditing();
     const board = el('div', 'sh-board sh-board--custom' + (editing ? ' is-layout-editing' : ''));
     const known = new Set(cfg.sections.map((s) => s.id));
-    const entities = boardEntities();
-    const unsorted = entities.filter((e) => !known.has((cfg.cards[e.id] || {}).section));
+    const unsorted = state.entities.filter((e) => !known.has((cfg.cards[e.id] || {}).section));
     if (unsorted.length || !cfg.sections.length) {
       const loose = el('section', 'sh-custom-section sh-custom-section--loose');
       if (cfg.sections.length) loose.appendChild(el('div', 'sh-custom-section-title', t('smarthome_unsectioned', 'Unsectioned')));
@@ -904,7 +695,7 @@
     const roots = cfg.sections.filter((s) => !s.parent);
     roots.forEach((section, index) => {
       const children = cfg.sections.filter((s) => s.parent === section.id);
-      board.appendChild(customSection(section, entities, children, cfg.cards, editing, index, roots.length));
+      board.appendChild(customSection(section, state.entities, children, cfg.cards, editing, index, roots.length));
     });
     return board;
   }
@@ -912,7 +703,7 @@
   function buildBoard(expanded, custom) {
     if (custom) return buildCustomBoard();
     const board = el('div', 'sh-board' + (expanded ? ' sh-board--expanded' : '') + (custom ? ' sh-board--custom' : ''));
-    layoutGroups(boardEntities(), custom).forEach((items, area) => {
+    layoutGroups(state.entities, custom).forEach((items, area) => {
       const group = el('section', 'sh-area');
       if (!custom) {
         const ahead = el('div', 'sh-area-head');
@@ -964,17 +755,7 @@
   }
 
   function paint() {
-    reconcileAc();
-    updateAcCards();
-    // A pointer gesture must complete before replacing its target. Native selects
-    // keep the existing editing guard; button focus is restored after painting so
-    // unrelated devices can still receive their live updates.
-    if (acPointerDown) { acNeedsPaint = true; return; }
-    acNeedsPaint = false;
     if (sheetDragging || isEditingSmartHome()) return;   // don't rebuild under a drag / typed field
-    const focused = document.activeElement;
-    const acFocus = focused && focused.closest('.sh-tcl-ac') ? focused.dataset.acControl : null;
-    const focusScope = acFocus && (focused.closest('.smarthome-widget-mount') || sheetBodyEl);
     syncSheet();                 // keep an open control panel in step with live state
     const list = tiles();
     if (!list.length) return;
@@ -1009,17 +790,13 @@
         }
         if (compact) {
           section._shMode = 'compact';
-          if (!sheetDragging && !isEditingSmartHome() && !acPointerDown && !document.activeElement.closest('.sh-tcl-ac')) mount.replaceChildren(buildWrap(false));
+          if (!sheetDragging && !isEditingSmartHome()) mount.replaceChildren(buildWrap(false));
         } else {
           section._shMode = 'expanded';
         }
         section._shGen = renderGen;
       });
     });
-    if (focusScope && acFocus) {
-      const next = Array.from(focusScope.querySelectorAll('[data-ac-control]')).find((node) => node.dataset.acControl === acFocus);
-      if (next && !next.disabled) next.focus({ preventScroll: true });
-    }
   }
 
   // One-shot seed so a freshly-added tile paints current state without waiting for
@@ -1036,11 +813,6 @@
     state = { configured: !!data.configured, connected: !!data.connected, entities: Array.isArray(data.entities) ? data.entities : [] };
     seeded = true;
     paint();
-  }
-
-  function disconnected() {
-    state.connected = false;
-    updateAcCards();
   }
 
   // ── Device detail sheet (per-device control panel) ───────────────────────────
@@ -1470,7 +1242,6 @@
   }
 
   function buildSheetBody(e) {
-    if (TCL && e.id === TCL.profile.climate) return buildAcCard();
     const body = el('div', 'sh-sheet-body');
     fillControls(e, body);
     return body;
@@ -1530,11 +1301,6 @@
   // group, and drop a bare `remote` when a media_player already provides power (its
   // only control would just duplicate the media_player's On/Off).
   function buildDeviceBody(entities, deviceName) {
-    if (TCL && entities.some((e) => e.id === TCL.profile.climate)) {
-      const body = el('div', 'sh-sheet-body'); body.append(buildAcCard());
-      entities.filter((e) => !TCL.ids.includes(e.id)).forEach((e) => body.append(deviceSection(e, deviceName)));
-      return body;
-    }
     const body = el('div', 'sh-sheet-body');
     const hasMedia = entities.some((e) => e.domain === 'media_player');
     const actions = [];
@@ -1828,7 +1594,7 @@
     if (!items.length) { host.appendChild(el('div', 'sh-set-hint', cfg.empty || t('settings_ha_select_first', ''))); return; }
 
     const ha = window.getHomeAssistantSettings ? window.getHomeAssistantSettings() : { entities: [] };
-    let selectedIds = key === 'entities' && TCL ? TCL.expandSelection(Array.isArray(ha[key]) ? ha[key] : []) : selectedEntityOrder(items, ha[key]);
+    let selectedIds = selectedEntityOrder(items, ha[key]);
     const chosen = new Set(selectedIds);
 
     if (key === 'entities') {
@@ -1887,10 +1653,6 @@
     const makeRow = (e, shortName) => {
       const row = el('label', 'sh-set-check');
       const cb = el('input'); cb.type = 'checkbox'; cb.checked = chosen.has(e.id);
-      if (key === 'entities' && TCL && chosen.has(TCL.profile.climate) && e.id !== TCL.profile.climate && TCL.ids.includes(e.id)) {
-        cb.disabled = true;
-        cb.title = acText('grouped', 'Included with the TCL air conditioner');
-      }
       cb.addEventListener('change', () => {
         if (cb.checked) {
           chosen.add(e.id);
@@ -1901,8 +1663,7 @@
         }
         // The Smart Home selection is also its user-controlled card order. Other
         // pickers retain their natural entity order.
-        if (key === 'entities' && TCL && e.id === TCL.profile.climate && !cb.checked) selectedIds = selectedIds.filter((id) => !TCL.ids.includes(id));
-        const ordered = key === 'entities' ? (TCL ? TCL.expandSelection(selectedIds) : selectedIds.slice()) : items.filter((x) => chosen.has(x.id)).map((x) => x.id);
+        const ordered = key === 'entities' ? selectedIds.slice() : items.filter((x) => chosen.has(x.id)).map((x) => x.id);
         if (window.setHomeAssistantSettings) window.setHomeAssistantSettings({ [key]: ordered });
         if (key === 'entities') {
           previewTileLayout(ordered);
@@ -1959,12 +1720,6 @@
   }
 
   function init() {
-    const releaseAcPointer = () => {
-      if (!acPointerDown) return;
-      requestAnimationFrame(() => { acPointerDown = false; if (acNeedsPaint) paint(); });
-    };
-    document.addEventListener('pointerup', releaseAcPointer);
-    document.addEventListener('pointercancel', releaseAcPointer);
     let queued = false;
     const obs = new MutationObserver(() => {
       if (queued) return; queued = true;
@@ -1988,7 +1743,7 @@
   // so it isn't covered by the [data-i18n] sweep). Mirrors DiscordWidget.
   function renderWidgets() { sheetSig = ''; if (tiles().length) paint(); else syncSheet(); }
 
-  window.SmartHome = { onSSE, disconnected, initSettings, renderWidgets };
+  window.SmartHome = { onSSE, initSettings, renderWidgets };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();

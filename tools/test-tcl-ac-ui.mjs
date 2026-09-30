@@ -22,8 +22,9 @@ const streams = new Set();
 const serviceCalls = [];
 let serviceReply = null;
 let serviceDelay = 0;
-let config = ha.normalizeHomeAssistant({ entities: [p.climate, 'light.desk', 'sensor.pm25', 'climate.other'], tileLayout: 'custom', tileSections: [{ id: 'shs_bed', title: 'Bedroom', parent: '' }], tileCards: { [p.climate]: { width: 2, height: 2, section: 'shs_bed' }, 'light.desk': { width: 1, height: 1, section: '' } } });
-const snapshot = () => ({ configured: true, connected: mock.client.isConnected(), entities: mock.client.snapshot(config.entities) });
+let config = ha.normalizeHomeAssistant({ entities: [p.climate, p.eco, 'light.desk', 'sensor.pm25', 'climate.other'], tileLayout: 'custom', tileSections: [{ id: 'shs_bed', title: 'Bedroom', parent: '' }], tileCards: { [p.climate]: { width: 2, height: 2, section: 'shs_bed' }, 'light.desk': { width: 1, height: 1, section: '' } } });
+const initialConfig = structuredClone(config);
+const snapshot = () => ({ configured: true, connected: mock.client.isConnected(), entities: mock.client.snapshot(config.entities), tclAc: mock.client.snapshot(tcl.ids) });
 const broadcast = () => { for (const stream of streams) stream.write('event: homeassistant\ndata: ' + JSON.stringify(snapshot()) + '\n\n'); };
 
 // Execute the production route bodies and loopback Origin guard with mock I/O.
@@ -47,6 +48,7 @@ const route = new Function('deckHa', 'buildHaState', `return async function(req,
 const assets = new Map([
   ['/core.js', 'packages/core/src/tcl-ac.js'], ['/utils.js', 'server/js/utils.js'],
   ['/smart-home.js', 'server/js/smart-home.js'], ['/smart-home.css', 'server/components/SmartHomePanel/SmartHomePanel.css'],
+  ['/tcl-ac-widget.js', 'server/js/tcl-ac-widget.js'], ['/tcl-ac-widget.css', 'server/components/TclAcWidget/TclAcWidget.css'],
 ]);
 const server = createServer(async (req, res) => {
   try {
@@ -59,8 +61,9 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/api/homeassistant/entities') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ ok: true, entities: await mock.client.listEntities() })); return; }
     if (url.pathname === '/api/homeassistant/service') {
       serviceCalls.push(Date.now());
+      const reply = serviceReply;
       if (serviceDelay) await new Promise((r) => setTimeout(r, serviceDelay));
-      if (serviceReply) { res.writeHead(serviceReply.status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(serviceReply.body)); return; }
+      if (reply) { res.writeHead(reply.status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(reply.body)); return; }
     }
     if (url.pathname.startsWith('/api/homeassistant/')) { await route(req, res); return; }
     if (assets.has(url.pathname)) {
@@ -69,16 +72,16 @@ const server = createServer(async (req, res) => {
     }
     if (url.pathname !== '/') { res.writeHead(404); res.end(); return; }
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="/smart-home.css">
-      <style>*{box-sizing:border-box}body{margin:0;background:#10171e;color:#e7e9ee;font:16px system-ui;--text:#e7e9ee;--accent-rgb:89,211,225;--bg:#10171e}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:20px;padding:16px}section[data-widget]{height:calc(100vh - 32px);min-height:400px;border:1px solid #34434a;border-radius:18px;overflow:hidden}.pager-page{min-width:0}</style>
-      <main>${[1, 2].map((n) => '<div class="pager-page"><section data-widget="smarthome" data-dashboard-widget="smarthome" class="smarthome-panel" id="tile' + n + '"><div class="smarthome-widget-mount"></div></section></div>').join('')}</main><div id="settings-smarthome-hub"></div>
+    res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="/smart-home.css"><link rel="stylesheet" href="/tcl-ac-widget.css">
+      <style>*{box-sizing:border-box}body{margin:0;background:#10171e;color:#e7e9ee;font:16px system-ui;--text:#e7e9ee;--accent-rgb:89,211,225;--bg:#10171e}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:20px;padding:16px}section[data-dashboard-widget]{height:calc(100vh - 32px);min-height:400px;border:1px solid #34434a;border-radius:18px;overflow:hidden}.pager-page{min-width:0}</style>
+      <main>${[1, 2].map((n) => '<div class="pager-page"><section data-widget="tcl-ac" data-dashboard-widget="tcl-ac" class="tcl-ac-panel" id="tile' + n + '"><div class="tcl-ac-widget-mount"></div></section></div>').join('')}<div class="pager-page"><section data-widget="smarthome" data-dashboard-widget="smarthome" class="smarthome-panel" id="smart-home"><div class="smarthome-widget-mount"></div></section></div></main><div id="settings-smarthome-hub"></div>
       <script src="/core.js"></script><script src="/utils.js"></script><script>
       let config=${JSON.stringify(config)};
       window.t=(key)=>({smarthome_on:'On',smarthome_off:'Off',smarthome_title:'Smart Home',smarthome_no_area:'Other',smarthome_unsectioned:'Unsectioned',smarthome_hvac_cool:'Cool',smarthome_hvac_dry:'Dry',smarthome_hvac_auto:'Auto',smarthome_hvac_fan_only:'Fan only',smarthome_hvac_off:'Off'}[key]||key);
       window.getHomeAssistantSettings=()=>config;
-      window.setHomeAssistantSettings=(patch)=>{config={...config,...patch};window.lastSettingsPatch=patch;};
-      </script><script src="/smart-home.js"></script><script>
-      const stream=new EventSource('/events'); stream.addEventListener('homeassistant',e=>SmartHome.onSSE(JSON.parse(e.data))); stream.onerror=()=>SmartHome.disconnected();
+      window.settingsPatches=[]; window.setHomeAssistantSettings=(patch)=>{config={...config,...patch};window.lastSettingsPatch=patch;window.settingsPatches.push(patch);};
+      </script><script src="/smart-home.js"></script><script src="/tcl-ac-widget.js"></script><script>
+      const stream=new EventSource('/events'); stream.addEventListener('homeassistant',e=>{const data=JSON.parse(e.data);SmartHome.onSSE(data);TclAcWidget.onSSE(data);}); stream.onerror=()=>TclAcWidget.disconnected();
       </script></html>`);
   } catch (error) { res.statusCode = 500; res.end(String(error)); }
 });
@@ -94,13 +97,52 @@ try {
   const card = page.locator('#tile1 .sh-tcl-ac');
   const ctl = (name) => card.locator('[data-ac-control="' + name + '"]');
   await card.waitFor();
-  assert.equal(await page.locator('.sh-tcl-ac').count(), 2, 'one grouped card per duplicate widget');
+  assert.equal(await page.locator('.sh-tcl-ac').count(), 2, 'one AC card per dedicated duplicate widget');
+  assert.equal(await page.locator('#smart-home .sh-tcl-ac').count(), 0, 'Smart Home keeps its existing renderer');
+  assert.equal(await page.locator('#smart-home [data-entity-id="' + p.climate + '"]').count(), 1, 'the selected TCL climate remains an ordinary Smart Home tile');
+  assert.equal(await page.locator('#smart-home .sh-card-slot--ac').count(), 0);
+  assert.deepEqual(await page.evaluate(() => getHomeAssistantSettings()), initialConfig);
+  assert.deepEqual(await page.evaluate(() => settingsPatches), [], 'mounting AC never rewrites Smart Home settings');
+  const climateSlot = page.locator('#smart-home [data-entity-id="' + p.climate + '"]');
+  assert.equal(await climateSlot.evaluate((node) => node.style.getPropertyValue('--sh-card-w')), '6');
+  assert.equal(await climateSlot.evaluate((node) => node.style.getPropertyValue('--sh-card-h')), '2');
+  assert.equal(await climateSlot.evaluate((node) => node.closest('[data-section-id]').dataset.sectionId), 'shs_bed');
   assert.equal(await page.locator('[data-entity-id="' + p.fan + '"]').count(), 0, 'no duplicate sibling tiles');
-  assert.equal(await page.locator('[data-entity-id="light.desk"]').count(), 2);
+  assert.equal(await page.locator('[data-entity-id="light.desk"]').count(), 1);
+  assert.equal(await page.locator('[data-entity-id="climate.other"]').count(), 1);
   assert.equal(await page.locator('[data-ac-control="heat"]').count(), 0);
   assert.equal(await ctl('fan').inputValue(), 'Auto');
   assert.match(await card.locator('.sh-ac-room').innerText(), /28.5/);
-  console.log('PASS grouping, other devices, duplicate widgets, cooling modes');
+  console.log('PASS dedicated AC duplicates, original Smart Home renderer/settings/layout, other devices and cooling modes');
+
+  config = { ...config, entities: [] };
+  await page.evaluate((next) => { config = next; }, config);
+  broadcast();
+  await page.waitForFunction(() => !document.querySelector('#smart-home [data-entity-id]'));
+  assert.equal(await page.locator('.sh-tcl-ac').count(), 2);
+  assert.equal(await ctl('power').isDisabled(), false, 'AC works without any Smart Home entity selection');
+  const independentState = await (await fetch('http://127.0.0.1:' + port + '/api/homeassistant/state')).json();
+  assert.deepEqual(independentState.entities, []);
+  assert.deepEqual(independentState.tclAc.map((entity) => entity.id), tcl.ids);
+  config = structuredClone(initialConfig);
+  await page.evaluate((next) => { config = next; }, config);
+  broadcast();
+  await page.locator('#smart-home [data-entity-id="light.desk"]').waitFor();
+  console.log('PASS independent AC snapshots with empty Smart Home selection');
+
+  await page.evaluate(() => {
+    const duplicate = document.querySelector('#tile1').closest('.pager-page').cloneNode(true);
+    duplicate.querySelector('section').id = 'tile3';
+    document.querySelector('main').appendChild(duplicate);
+    TclAcWidget.renderWidgets();
+  });
+  const copiedMore = page.locator('#tile3 [data-ac-control="more"]');
+  await copiedMore.click();
+  assert.equal(await copiedMore.getAttribute('aria-expanded'), 'true', 'cloned AC widget has live listeners');
+  await copiedMore.click();
+  await page.evaluate(() => document.querySelector('#tile3').closest('.pager-page').remove());
+  assert.equal(await page.locator('.sh-tcl-ac').count(), 2);
+  console.log('PASS cloned initialized widget mounts interactive controls');
 
   serviceDelay = 120;
   await ctl('plus').dblclick();
@@ -133,6 +175,17 @@ try {
   await action('power', null, { domain: 'climate', service: 'set_hvac_mode', target: { entity_id: p.climate }, data: { hvac_mode: 'dry' } });
   console.log('PASS exact payloads for temperature, modes, all 4 selects and all 4 switches; power restores mode');
 
+  const genericCalls = mock.calls.length;
+  await page.locator('#smart-home [data-entity-id="' + p.eco + '"] .sh-item--toggle').click();
+  const genericDeadline = Date.now() + 5000;
+  while (mock.calls.length === genericCalls && Date.now() < genericDeadline) await new Promise((r) => setTimeout(r, 20));
+  assert.equal(mock.calls.length, genericCalls + 1, 'original Smart Home TCL switch still sends its generic service');
+  const genericCall = mock.calls.at(-1);
+  assert.deepEqual({ domain: genericCall.domain, service: genericCall.service, target: genericCall.target, data: genericCall.service_data }, { domain: 'homeassistant', service: 'toggle', target: { entity_id: p.eco }, data: {} });
+  mock.update(p.eco, { state: 'off' });
+  await page.waitForFunction(() => document.querySelector('[data-ac-control="eco"]').getAttribute('aria-pressed') === 'false');
+  console.log('PASS unchanged Smart Home TCL switch toggle through the existing service route');
+
   await ctl('fan').focus();
   mock.update(p.climate, { attributes: { current_temperature: 29 } });
   await page.waitForFunction(() => document.querySelector('.sh-ac-room').textContent.includes('29'));
@@ -147,7 +200,7 @@ try {
   assert.equal(await ctl('plus').isDisabled(), true);
   mock.update(p.climate, { attributes: { temperature: 16 } });
   await page.waitForFunction(() => document.querySelector('[data-ac-control="minus"]').disabled);
-  await page.evaluate(() => SmartHome.disconnected());
+  await page.evaluate(() => TclAcWidget.disconnected());
   assert.equal(await ctl('power').isDisabled(), true);
   broadcast();
   await page.waitForFunction(() => !document.querySelector('[data-ac-control="power"]').disabled);
@@ -162,12 +215,20 @@ try {
     await ctl('refresh').click();
     await page.waitForFunction(() => !document.querySelector('[data-ac-control="plus"]').disabled);
   }
+  serviceDelay = 12500;
+  serviceReply = { status: 503, body: { ok: false, error: 'mock_delayed_failure' } };
   await ctl('plus').click();
-  await page.waitForFunction(() => document.querySelector('.sh-ac-error').textContent.includes('No matching'), { timeout: 25000 });
+  await card.locator('.sh-ac-error').waitFor({ state: 'visible', timeout: 18000 });
+  assert.equal(await ctl('plus').isDisabled(), true, 'request timeout requires refresh');
+  serviceDelay = 0; serviceReply = null;
+  await ctl('refresh').click();
+  await page.waitForFunction(() => !document.querySelector('[data-ac-control="plus"]').disabled);
+  await ctl('plus').click();
+  await page.waitForFunction(() => document.querySelector('.sh-ac-error').textContent.includes('No matching'), null, { timeout: 25000 });
   assert.equal(await ctl('plus').isDisabled(), true);
   await ctl('refresh').click();
   await page.waitForFunction(() => !document.querySelector('[data-ac-control="plus"]').disabled);
-  console.log('PASS HTTP errors, ok:false, readback timeout and required refresh before retry');
+  console.log('PASS HTTP errors, ok:false, request/readback timeouts and required refresh before retry');
 
   await ctl('more').focus();
   mock.update('sensor.pm25', { state: '12' });
@@ -192,10 +253,16 @@ try {
   await climatePicker.check();
   const selected = await page.evaluate(() => lastSettingsPatch.entities);
   assert.deepEqual(selected.slice(0, 3), ['light.desk', 'sensor.pm25', 'climate.other']);
-  for (const id of tcl.ids) assert.ok(selected.includes(id));
+  assert.deepEqual(selected, ['light.desk', 'sensor.pm25', 'climate.other', p.climate], 'selecting TCL climate does not add companions');
+  const companionPicker = page.locator('.sh-set-check').filter({ has: page.locator('.sh-set-check-id', { hasText: p.eco }) }).locator('input');
+  assert.equal(await companionPicker.isEnabled(), true, 'companion remains independently selectable');
+  await companionPicker.check();
+  assert.deepEqual(await page.evaluate(() => lastSettingsPatch.entities), [...selected, p.eco]);
   await climatePicker.uncheck();
-  assert.deepEqual(await page.evaluate(() => lastSettingsPatch.entities), ['light.desk', 'sensor.pm25', 'climate.other']);
+  assert.deepEqual(await page.evaluate(() => lastSettingsPatch.entities), ['light.desk', 'sensor.pm25', 'climate.other', p.eco], 'deselecting climate preserves an independently selected companion');
   await page.evaluate(() => { config = savedMockConfig; document.querySelector('#settings-smarthome-hub').replaceChildren(); SmartHome.renderWidgets(); });
+  assert.deepEqual(await page.evaluate(() => getHomeAssistantSettings()), initialConfig, 'original entity order, sections and sizes remain intact');
+  assert.equal(await page.locator('#smart-home .sh-tcl-ac').count(), 0);
   mock.update(p.fan, { entity_id: p.fan, state: 'Medium', attributes: { options: ['Auto', 'Medium', 'High'] } });
   mock.update(p.climate, { attributes: { temperature: 26, current_temperature: 28.5 } });
   await page.waitForFunction(() => document.querySelector('.sh-ac-temperature strong').textContent === '26');
@@ -203,6 +270,7 @@ try {
   for (const [name, width, height] of [['edge', 2560, 720], ['desktop', 1440, 1000], ['portrait', 720, 1280], ['narrow', 320, 900]]) {
     await page.setViewportSize({ width, height });
     await page.screenshot({ path: resolve(output, name + '.png'), fullPage: true });
+    if (name === 'edge') await page.locator('#tile1').screenshot({ path: resolve(output, 'tcl-ac-widget.png') });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), name + ' page overflow');
     const overflow = await page.locator('.sh-tcl-ac').evaluateAll((cards) => cards.some((c) => c.scrollWidth > c.clientWidth + 1));
     assert.equal(overflow, false, name + ' card overflow');
@@ -212,7 +280,7 @@ try {
     await ctl('power').click({ trial: true });
   }
   assert.deepEqual(errors, []);
-  console.log('PASS keyboard/focus, other device updates, selection, loopback Origin, token redaction, room/custom modes, 2560×720, desktop, portrait and 320px');
+  console.log('PASS keyboard/focus, other device updates, independent selection, preserved layout, loopback Origin, token redaction, room/custom modes, 2560x720, desktop, portrait and 320px');
   console.log('Screenshots: ' + output);
 } finally {
   if (browser) await browser.close();
