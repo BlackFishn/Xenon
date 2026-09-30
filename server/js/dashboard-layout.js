@@ -2576,6 +2576,7 @@ function applyDashboardLayout() {
   step('diskRender', () => { if (window.DiskWidget && typeof window.DiskWidget.renderWidgets === 'function') window.DiskWidget.renderWidgets(); });
   step('transferRender', () => { if (window.TransferWidget && typeof window.TransferWidget.renderWidgets === 'function') window.TransferWidget.renderWidgets(); });
   step('phoneRender', () => { if (window.PhoneWidget && typeof window.PhoneWidget.renderWidgets === 'function') window.PhoneWidget.renderWidgets(); });
+  step('tclAcRender', () => { if (window.TclAcWidget && typeof window.TclAcWidget.renderWidgets === 'function') window.TclAcWidget.renderWidgets(); });
   step('powerRender', () => { if (window.PowerWidget && typeof window.PowerWidget.renderWidgets === 'function') window.PowerWidget.renderWidgets(); });
   step('batteryRender', () => { if (window.BatteryWidget && typeof window.BatteryWidget.renderWidgets === 'function') window.BatteryWidget.renderWidgets(); });
   step('vitalsRender', () => { if (window.VitalsWidget && typeof window.VitalsWidget.renderWidgets === 'function') window.VitalsWidget.renderWidgets(); });

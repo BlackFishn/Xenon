@@ -116,6 +116,7 @@
 <link rel="stylesheet" href="components/BrowserPanel/BrowserPanel.css">
 <link rel="stylesheet" href="components/SecondScreenPanel/SecondScreenPanel.css">
 <link rel="stylesheet" href="components/SmartHomePanel/SmartHomePanel.css">
+<link rel="stylesheet" href="components/TclAcWidget/TclAcWidget.css">
 <link rel="stylesheet" href="components/UnifiPanel/UnifiPanel.css">
 <link rel="stylesheet" href="components/DiscordInvite/DiscordInvite.css">
 <link rel="stylesheet" href="components/SupportAsk/SupportAsk.css">
@@ -561,6 +562,11 @@
 
       <section class="panel smarthome-panel dashboard-widget" data-dashboard-widget="smarthome" data-dashboard-size="normal" data-dashboard-order="17" data-dashboard-hidden="true">
         <div class="smarthome-widget-mount"></div>
+      </section>
+
+      <!-- Standalone TCL AC controls use the existing Home Assistant connection. -->
+      <section class="panel tcl-ac-panel dashboard-widget" data-dashboard-widget="tcl-ac" data-dashboard-size="normal" data-dashboard-order="40" data-dashboard-hidden="true">
+        <div class="tcl-ac-widget-mount"></div>
       </section>
 
       <!-- UniFi Protect cameras tile — near-live JPEG snapshots of the user's
@@ -4297,6 +4303,7 @@
 <script src="js/browser-tile.js"></script>
 <script src="js/second-screen-tile.js"></script>
 <script src="js/smart-home.js"></script>
+<script src="js/tcl-ac-widget.js"></script>
 <script src="js/unifi-widget.js"></script>
 <script src="js/surface-picker.js"></script>
 <script src="js/onboarding.js"></script>

@@ -98,6 +98,7 @@ const { createPerfRegistry } = require('./actions/perf-registry');
 const { createObs, scenePreviewRequest } = require('./actions/obs');
 const { createStreamerbot } = require('./actions/streamerbot');
 const { createHomeAssistant, normalizeHomeAssistant, preserveHaToken, redactHaToken } = require('./actions/home-assistant');
+const tclAcProfile = require('../packages/core/src/tcl-ac');
 const { createChroma } = require('./actions/chroma');
 const { createWaveLink } = require('./actions/wavelink');
 const { createClient: createVoicemeeter } = require('./actions/voicemeeter');
@@ -5428,8 +5429,8 @@ function buildHaDeckStates() {
 }
 
 // Build the payload for the selected entities (from settings) plus connection flag.
-// `energy` carries the Energy widget's own selection (power/energy sensors) so
-// the two surfaces share one SSE event without sharing one entity list.
+// Each widget has its own projection: Smart Home selections, Energy sensors,
+// and the fixed TCL AC profile. They share the connection, not an entity list.
 async function buildHaState() {
   const s = (await readHubSettings().catch(() => null)) || {};
   const ha = (s && s.homeAssistant) || {};
@@ -5439,6 +5440,7 @@ async function buildHaState() {
     connected: configured && deckHa.isConnected(),
     entities: configured ? deckHa.snapshot(ha.entities || []) : [],
     energy: configured ? deckHa.snapshot(ha.energyEntities || []) : [],
+    tclAc: configured ? deckHa.snapshot(tclAcProfile.ids) : [],
   };
 }
 
@@ -7927,7 +7929,7 @@ async function transcodeMp4BackgroundToWebm(sourcePath, targetPath) {
 
 const DashboardInstances = require('./js/dashboard-instances.js');
 
-const DASHBOARD_WIDGET_IDS = Object.freeze(['media', 'agenda', 'mic', 'audio', 'system', 'notes', 'tasks', 'calendar', 'timer', 'chat', 'deck', 'remote', 'twitch', 'twitchwatch', 'obs', 'youtube', 'youtubelive', 'discord', 'spotify', 'browser', 'secondscreen', 'weather', 'smarthome', 'streamerbot', 'wavelink', 'lighting', 'notifications', 'stocks', 'football', 'news', 'claude', 'aiusage', 'vitals', 'unifi', 'slideshow', 'fans', 'power', 'battery', 'search', 'disk', 'transfer', 'phone', 'custom']);
+const DASHBOARD_WIDGET_IDS = Object.freeze(['media', 'agenda', 'mic', 'audio', 'system', 'notes', 'tasks', 'calendar', 'timer', 'chat', 'deck', 'remote', 'twitch', 'twitchwatch', 'obs', 'youtube', 'youtubelive', 'discord', 'spotify', 'browser', 'secondscreen', 'weather', 'smarthome', 'tcl-ac', 'streamerbot', 'wavelink', 'lighting', 'notifications', 'stocks', 'football', 'news', 'claude', 'aiusage', 'vitals', 'unifi', 'slideshow', 'fans', 'power', 'battery', 'search', 'disk', 'transfer', 'phone', 'custom']);
 const DASHBOARD_PAGE_IDS = Object.freeze(['dashboard']);
 const DASHBOARD_TAB_IDS = Object.freeze(['main', 'net']);
 const CALENDAR_TAB_IDS = Object.freeze(['calendar', 'tasks', 'timer']);
@@ -7984,6 +7986,7 @@ const DEFAULT_DASHBOARD_LAYOUT = Object.freeze({
     secondscreen: Object.freeze({ x: 12, y: 18, w: 12, h: 10, visible: false, page: 'dashboard' }),
     weather:  Object.freeze({ x: 16, y: 8, w: 8, h: 8, visible: false, page: 'dashboard' }),
     smarthome: Object.freeze({ x: 0, y: 18, w: 8, h: 8, visible: false, page: 'dashboard' }),
+    'tcl-ac': Object.freeze({ x: 0, y: 18, w: 8, h: 12, visible: false, page: 'dashboard' }),
     streamerbot: Object.freeze({ x: 8, y: 18, w: 8, h: 10, visible: false, page: 'dashboard' }),
     wavelink: Object.freeze({ x: 0, y: 18, w: 8, h: 10, visible: false, page: 'dashboard' }),
     lighting: Object.freeze({ x: 8, y: 46, w: 8, h: 12, visible: false, page: 'dashboard' }),
@@ -16494,7 +16497,7 @@ const handleRequest = async (req, res) => {
       const body = JSON.parse(await readBody(req) || '{}');
       const target = body.entityId ? { entity_id: String(body.entityId) } : null;
       const data = (body.data && typeof body.data === 'object' && !Array.isArray(body.data)) ? body.data : {};
-      json(await deckHa.callService(String(body.domain || ''), String(body.service || ''), target, data));
+      json(await deckHa.callService(String(body.domain || ''), String(body.service || ''), target, data, body.profile));
     } catch (e) { json({ ok: false, error: (e && e.message) || 'ha_failed' }); }
 
   } else if (reqPath === '/api/unifiprotect/state' && req.method === 'GET') {

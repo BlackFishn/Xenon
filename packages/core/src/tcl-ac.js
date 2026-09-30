@@ -26,18 +26,6 @@
   const allowedModes = ['off', 'cool', 'dry', 'fan_only', 'auto'];
   const available = (e) => !!e && typeof e.state === 'string' && !['unknown', 'unavailable', ''].includes(e.state);
   const modes = (e) => allowedModes.filter((m) => e && Array.isArray(e.hvacModes) && e.hvacModes.includes(m));
-  function expandSelection(selected, limit) {
-    let result = [...new Set(selected)];
-    if (limit) {
-      // Companion controls have their own fixed bound; they must not displace
-      // existing devices when the general-purpose 100-entity limit is full.
-      const grouped = result.includes(profile.climate);
-      const main = result.filter((id) => !grouped || id === profile.climate || !ids.includes(id)).slice(0, limit);
-      result = result.filter((id) => main.includes(id) || (main.includes(profile.climate) && ids.includes(id)));
-    }
-    if (result.includes(profile.climate)) ids.forEach((id) => { if (!result.includes(id)) result.push(id); });
-    return result;
-  }
   function temperature(e) {
     const usable = e && [e.target, e.min, e.max, e.step].every(Number.isFinite)
       && e.min <= e.max && e.step > 0 && (e.features === undefined || (e.features & 1) !== 0);
@@ -60,5 +48,5 @@
     if (domain === 'switch' && ['turn_on', 'turn_off'].includes(service) && keys.length === 0 && ['on', 'off'].includes(e.state)) return null;
     return 'tcl_unsupported_value';
   }
-  return { title: 'แอร์ห้องนอน', profile, ids, available, modes, temperature, expandSelection, validate };
+  return { title: 'แอร์ห้องนอน', profile, ids, available, modes, temperature, validate };
 });

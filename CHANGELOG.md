@@ -1,9 +1,9 @@
 # Changelog
 
-## Unreleased — grouped TCL air conditioner
+## Unreleased — standalone TCL air conditioner
 
-- Add one TCL AC card in Smart Home's room and custom layouts: power, target/current temperature, cooling modes, fan, both swing directions, ECO and soft wind; sleep, display and beep stay inside More settings.
-- Include the mapped TCL companion entities when selecting its climate entity, preserving other devices and layout settings.
+- Add a separate TCL AC dashboard widget titled แอร์ห้องนอน: power, target/current temperature, cooling modes, fan, both swing directions, ECO and soft wind; sleep, display and beep stay inside More settings.
+- Keep the existing Smart Home widget, selected entities and layout settings unchanged. Add TCL AC explicitly from the widget picker; its fixed entity profile works independently of Smart Home selection, including an empty selection.
 - Validate live capabilities before sending through the existing HA service bridge. Wait for HA readback, disable stale/busy controls, and require a state refresh after failed or unconfirmed commands.
 - Keep HA credentials server-side and retain the existing loopback/Origin guards. See `docs/tcl-ac.md` for mock validation and physical-device checks.
 

@@ -120,6 +120,7 @@ Tap **Layout** in the top bar to edit. In Layout mode you can:
 
 - **Group widgets into tabs:** drag one tile onto the centre of another to merge them into a single tabbed tile (e.g. Calendar + Music); drag a tab's ⤤ out to split it back.
 - **Duplicate any widget:** the "+" can add another copy of a module so it lives on several pages at once. Most copies are **live mirrors** of the same source — tick a task, type a note or change a track in one and every copy updates. **Deck, Browser, Remote, Discord and Custom-widget copies are independent instead:** each keeps its own keys, address, page or tab, so a second Deck starts empty rather than shadowing the first (see [Deck](#deck) for the one-tap way to copy a profile into it). Each copy has its own **×** to remove just that copy.
+- **TCL Air Conditioner** is a separate widget from Smart Home, available under **+ → System**. Each copy has its own live controls for the same physical AC; removing the primary widget keeps its copies interactive. It leaves Smart Home's device selection and layout unchanged. See [TCL AC](docs/tcl-ac.md).
 
 ### Layout presets
 

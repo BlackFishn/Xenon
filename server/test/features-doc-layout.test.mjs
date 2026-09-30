@@ -65,7 +65,7 @@ test('every non-mirror duplicable widget is named where the guide claims mirrori
   const nonMirror = [...INSTANCES.DUPLICABLE_WIDGETS].filter(w => !INSTANCES.MIRROR_WIDGETS.has(w));
   assert.ok(nonMirror.length, 'no independent-instance widgets left? then this claim needs rewriting');
   // Widget id → the name the guide uses for it.
-  const NAMES = { deck: 'Deck', remote: 'Remote', browser: 'Browser', custom: 'Custom', discord: 'Discord' };
+  const NAMES = { deck: 'Deck', remote: 'Remote', browser: 'Browser', custom: 'Custom', discord: 'Discord', 'tcl-ac': 'TCL Air Conditioner' };
   const s = section('Tab-grouping & duplication');
   for (const id of nonMirror) {
     const name = NAMES[id];

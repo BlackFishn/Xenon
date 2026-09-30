@@ -31726,6 +31726,7 @@ Object.assign(i18n.nl, {
 
 Object.assign(i18n.en, {
   layout_widget_aiusage: 'AI Usage',
+  'layout_widget_tcl-ac': 'TCL Air Conditioner',
   aiu_today: 'Today', aiu_yesterday: 'Yesterday', aiu_month: '30 Days',
   aiu_period: 'Usage period', aiu_local: 'Local', aiu_refresh: 'Refresh usage',
   aiu_refresh_short: 'Refresh', aiu_refreshing: 'Refreshing…', aiu_checked: 'Last checked',
@@ -32027,6 +32028,7 @@ function applyTranslations() {
   if (window.TransferWidget && typeof window.TransferWidget.renderWidgets === 'function') window.TransferWidget.renderWidgets();
   if (window.CustomWidget && typeof window.CustomWidget.renderWidgets === 'function') window.CustomWidget.renderWidgets();
   if (window.SmartHome && typeof window.SmartHome.renderWidgets === 'function') window.SmartHome.renderWidgets();
+  if (window.TclAcWidget && typeof window.TclAcWidget.renderWidgets === 'function') window.TclAcWidget.renderWidgets();
   if (window.VitalsWidget && typeof window.VitalsWidget.renderWidgets === 'function') window.VitalsWidget.renderWidgets();
   // The YouTube widget re-labels in place rather than rebuilding: a language
   // change must not tear down a video the user is watching.
