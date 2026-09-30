@@ -1959,9 +1959,11 @@ function normalizeHomeAssistant(value) {
   const src = (value && typeof value === 'object') ? value : {};
   const isEntity = (s) => typeof s === 'string' && /^[a-z_]+\.[a-z0-9_]+$/.test(s.trim());
   const isCam = (s) => isEntity(s) && /^camera\./.test(String(s).trim());
-  const entities = Array.isArray(src.entities)
-    ? src.entities.filter(isEntity).filter((v, i, a) => a.indexOf(v) === i).slice(0, 100)
+  const selected = Array.isArray(src.entities)
+    ? src.entities.filter(isEntity).filter((v, i, a) => a.indexOf(v) === i)
     : [];
+  const tclAc = typeof window !== 'undefined' && window.Xenon && window.Xenon.tclAc;
+  const entities = tclAc ? tclAc.expandSelection(selected, 100) : selected.slice(0, 100);
   // Camera selection + per-camera view transforms — mirror server/actions/
   // home-assistant.js (normalizeHomeAssistant / normalizeHaCamAngles). Opt-in:
   // the `cameras` array is BOTH the selection and the display order.

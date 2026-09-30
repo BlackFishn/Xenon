@@ -16391,7 +16391,10 @@ const handleRequest = async (req, res) => {
   } else if (reqPath === '/api/homeassistant/state' && req.method === 'GET') {
     // Compact snapshot of the user's selected entities + connection flag (the same
     // shape the SSE `homeassistant` event pushes). Used as a fallback/first paint.
-    try { json(await buildHaState()); }
+    try {
+      if (urlObj.searchParams.get('refresh') === '1') await deckHa.refreshStates();
+      json(await buildHaState());
+    }
     catch (e) { err500(e.message); }
 
   } else if (reqPath === '/ha/deck-watch' && req.method === 'POST') {
