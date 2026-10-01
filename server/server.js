@@ -15405,6 +15405,22 @@ const handleRequest = async (req, res) => {
         console.warn('[settings] Save from a pre-24-column (stale) client: keeping stored layout/presets and prev-filling sections it omitted. That page needs a reload to edit the layout again.');
         incoming = { ...prev, ...incoming, dashboardLayout: prev.dashboardLayout, dashboardPresets: prev.dashboardPresets, customThemes: prev.customThemes, ambientScenes: prev.ambientScenes, contentInstalls: prev.contentInstalls };
       }
+      // Older pages only serialize the widget ids they know, including their
+      // unload beacon. An omitted newer widget is not an explicit hide/reset.
+      // Merge before normalization supplies its hidden factory default; modern
+      // clients still send visible:false when the user deliberately hides it.
+      if (prev && prev.dashboardLayout && incoming.dashboardLayout
+          && incoming.dashboardLayout.widgets && typeof incoming.dashboardLayout.widgets === 'object'
+          && !Array.isArray(incoming.dashboardLayout.widgets)) {
+        incoming.dashboardLayout = {
+          ...incoming.dashboardLayout,
+          copies: [
+            ...(Array.isArray(incoming.dashboardLayout.copies) ? incoming.dashboardLayout.copies : []),
+            ...(prev.dashboardLayout.copies || []).filter(copy => !Object.prototype.hasOwnProperty.call(incoming.dashboardLayout.widgets, copy.widget)),
+          ],
+          widgets: { ...prev.dashboardLayout.widgets, ...incoming.dashboardLayout.widgets },
+        };
+      }
       // lighting.providers / deviceModes are bridge-owned (set only via
       // /api/lighting/*) and the client mirror never carries them — refill them
       // from the live bridge so a client save can't wipe external devices and

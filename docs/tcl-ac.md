@@ -35,6 +35,13 @@ and the shared semantic theme contract keep both widgets consistent when the
 dashboard palette changes. The AC remains a separate movable/resizable widget;
 this visual alignment does not change Smart Home's renderer or saved settings.
 
+Settings saves preserve stored widget entries omitted by older dashboard pages,
+including unload beacons. Hydration also keeps server placements absent from a
+newer old-schema local mirror, before normalization can insert hidden defaults.
+Copies of widget IDs unknown to that older page are preserved too. Explicit
+`visible: false` and copy removal from a current page still work. This prevents older surfaces
+from removing the AC placement when they close or restart.
+
 ## Exact entity contract
 
 The explicit mapping is in `packages/core/src/tcl-ac.js`. This is deliberately

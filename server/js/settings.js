@@ -3466,6 +3466,19 @@ async function _hydrateHubSettingsImpl() {
       ...(localUnitsStale
         ? { ...data.settings, ...rawLocal, dashboardLayout: serverLayout, dashboardPresets: data.settings.dashboardPresets }
         : {}),
+      // A newer mirror written by an older page can omit newly-added widget ids.
+      // Read the raw keys: localRaw already filled those omissions with hidden
+      // defaults, which would otherwise overwrite their saved server placement.
+      ...(localNewer && !localUnitsStale && serverLayout
+        ? { dashboardLayout: {
+          ...(rawLocal.dashboardLayout || serverLayout),
+          copies: [
+            ...(Array.isArray(rawLocal.dashboardLayout && rawLocal.dashboardLayout.copies) ? rawLocal.dashboardLayout.copies : []),
+            ...(serverLayout.copies || []).filter(copy => !Object.prototype.hasOwnProperty.call((rawLocal.dashboardLayout && rawLocal.dashboardLayout.widgets) || {}, copy.widget)),
+          ],
+          widgets: { ...serverLayout.widgets, ...(rawLocal.dashboardLayout && rawLocal.dashboardLayout.widgets) },
+        } }
+        : {}),
       rev: Math.max(localRev, serverRev),
       // The server is authoritative and always answers '' (server-only secret).
       // The local fallback exists ONLY for the one-time migration of a key a
