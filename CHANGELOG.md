@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — Discord call view with avatars
+
+- Redraw the Discord widget's Controls tab around the call you are in: one tile per member with their Discord avatar, name, a green ring while they talk, and separate markers for their muted microphone, their deafened headphones and "muted for me".
+- Show the names of whoever is talking in the call header, next to the channel name and head-count.
+- Lay the call out as a grid of cards when the widget has the room (sized to the number of people) and as compact rows when it is narrow or short; the choice follows the widget's own size, so the short Xeneon Edge layout and a second, smaller Discord tile both stay readable.
+- Fold the call bar, both volumes and the audio toggles onto one line each on a wide widget, show your own avatar beside your controls, and make Leave red while there is a call to leave.
+- Send each member's avatar as an https URL on Discord's CDN, built on the server from the user id and avatar hash (default avatar when they have none). Pictures load straight from `cdn.discordapp.com`, like the notification icons already do; if one cannot load, the tile shows the first letter of the name.
+- Tapping someone still opens their volume and mute-for-me row; your own tile is still not a button. The Channels, Soundboard and Notifications tabs are unchanged.
+
 ## Unreleased — standalone TCL air conditioner
 
 - Add a separate TCL AC dashboard widget titled แอร์ห้องนอน: power, target/current temperature, cooling modes, fan, both swing directions, ECO and soft wind; sleep, display and beep stay inside More settings.

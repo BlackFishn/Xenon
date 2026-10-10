@@ -404,12 +404,37 @@ test('channelMembers maps voice_states to a client-safe member list', () => {
   };
   const m = dc.channelMembers(ch);
   assert.equal(m.length, 2);
-  assert.deepEqual(m[0], { id: '10', name: 'Bobby', mute: true, deaf: false, volume: 60, localMute: false, speaking: false });  // nick wins, self_mute → mute
+  assert.deepEqual(m[0], { id: '10', name: 'Bobby', avatar: '', mute: true, deaf: false, volume: 60, localMute: false, speaking: false });  // nick wins, self_mute → mute
   // Discord reported no local settings for ann: volume stays null rather than a
   // guessed 100, so a widget slider can't open at a value the machine isn't at.
-  assert.deepEqual(m[1], { id: '11', name: 'ann', mute: false, deaf: true, volume: null, localMute: false, speaking: false });
+  assert.deepEqual(m[1], { id: '11', name: 'ann', avatar: '', mute: false, deaf: true, volume: null, localMute: false, speaking: false });
   assert.deepEqual(dc.channelMembers(null), []);
   assert.equal(dc.channelMembers({ voice_states: Array.from({ length: 80 }, (_, i) => ({ user: { id: String(i), username: 'u' + i } })) }).length, 50);  // capped
+});
+
+// The avatar ends up in an <img src>, so the URL is built from the id and the
+// hash on a fixed host — nothing in the payload gets to choose where it points.
+test('avatarUrl builds a Discord CDN URL and never trusts the payload for one', () => {
+  const id = '175928847299117063';
+  const hash = '1234567890abcdef1234567890abcdef';
+  assert.equal(dc.avatarUrl({ id, avatar: hash }), `https://cdn.discordapp.com/avatars/${id}/${hash}.png?size=128`);
+  // Animated avatars are asked for as a still, not a GIF that decodes all call long.
+  assert.equal(dc.avatarUrl({ id, avatar: 'a_' + hash }), `https://cdn.discordapp.com/avatars/${id}/a_${hash}.png?size=128`);
+  // No picture of their own → the default Discord draws: (id >> 22) % 6 today,
+  // discriminator % 5 on an account that still has one.
+  assert.equal(dc.avatarUrl({ id }), 'https://cdn.discordapp.com/embed/avatars/' + Number((BigInt(id) >> 22n) % 6n) + '.png');
+  assert.equal(dc.avatarUrl({ id, discriminator: '0' }), dc.avatarUrl({ id }));
+  assert.equal(dc.avatarUrl({ id, discriminator: '1337' }), 'https://cdn.discordapp.com/embed/avatars/' + (1337 % 5) + '.png');
+  // A hash that is not a hash is not pasted into a URL: it falls back to the default.
+  for (const bad of ['../../evil', 'x'.repeat(32), hash + '?x=1', 'https://evil.example/a.png', 7, null]) {
+    assert.match(dc.avatarUrl({ id, avatar: bad }), /^https:\/\/cdn\.discordapp\.com\/embed\/avatars\/[0-5]\.png$/, String(bad));
+  }
+  // An id that is not a snowflake names nobody, so there is nothing to draw.
+  for (const u of [null, {}, { id: '' }, { id: 'abc' }, { id: '12' }, { id: '1/../2', avatar: hash }]) {
+    assert.equal(dc.avatarUrl(u), '', JSON.stringify(u));
+  }
+  const [m] = dc.channelMembers({ voice_states: [{ user: { id, username: 'bob', avatar: hash } }] });
+  assert.equal(m.avatar, `https://cdn.discordapp.com/avatars/${id}/${hash}.png?size=128`);
 });
 
 // The two mutes in one entry are different facts and must not be merged: the
@@ -593,7 +618,7 @@ test('provider.voiceRoster lists each voice channel with its current members', a
   assert.equal(general.name, 'General');
   assert.equal(general.guild, 'Server One');
   assert.equal(general.members.length, 1);
-  assert.deepEqual(general.members[0], { id: '900', name: 'Alice', mute: true, deaf: false, volume: null, localMute: false, speaking: false });
+  assert.deepEqual(general.members[0], { id: '900', name: 'Alice', avatar: '', mute: true, deaf: false, volume: null, localMute: false, speaking: false });
   assert.deepEqual(r.channels.find((c) => c.id === '102').members, []);   // nobody inside
   p.close();
 });

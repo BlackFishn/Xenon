@@ -8,6 +8,11 @@
 .discord-widget-mount { width: 100%; height: 100%; display: flex; min-height: 0; border-radius: inherit; }
 
 .dc-wrap {
+  /* Size container: the Controls tab draws the call as a grid of picture tiles
+     when the widget has the room and as a list of rows when it does not (see the
+     @container rules further down), judged from the TILE's own box rather than
+     the viewport — a small Discord tile on a huge monitor is still small. */
+  container: dcw / size;
   position: relative; box-sizing: border-box;
   width: 100%; height: 100%; min-height: 0;
   padding: 13px 15px; display: flex; flex-direction: column; gap: 9px;
@@ -116,16 +121,38 @@ body.overlay-frozen .dc-pill.in-voice .dc-pill-dot::after { animation-play-state
   font-size: 0.6rem; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase;
   color: var(--text-dim, #8b91a1);
 }
-/* ── Current call (Controls tab): title + member chips ──────────── */
-.dc-call { display: flex; flex-direction: column; gap: 6px; }
+/* ── Current call (Controls tab): header + one tile per member ──── */
+.dc-call { display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; min-height: 0; }
 .dc-call[hidden] { display: none; }
+/* Channel name and head-count on the left; the names talking on the right, so
+   "who is that?" is answered without finding the lit tile first. */
+.dc-call-head { display: flex; align-items: center; gap: 7px; min-width: 0; min-height: 20px; flex: 0 0 auto; }
+.dc-call-ico { display: inline-flex; flex: 0 0 auto; color: var(--muted-text, #8b91a1); }
+.dc-call-ico svg { width: 15px; height: 15px; }
 .dc-call-label {
-  font-size: 0.66rem; font-weight: 800; letter-spacing: 0.02em; text-transform: none;
-  color: #b7c0ff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0; font-size: 0.8rem; font-weight: 800; letter-spacing: 0.01em;
+  color: var(--text, #e7e9ee); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.dc-call-count {
+  flex: 0 0 auto; min-width: 18px; height: 17px; padding: 0 5px; box-sizing: border-box;
+  display: inline-flex; align-items: center; justify-content: center; border-radius: 999px;
+  font-size: 0.64rem; font-weight: 800; font-variant-numeric: tabular-nums;
+  color: #b7c0ff; background: rgba(88,101,242,0.24);
+}
+.dc-call-speaking {
+  margin-left: auto; min-width: 0; max-width: 62%;
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 0.76rem; font-weight: 800; color: var(--color-success, #3bd678);
+}
+/* `display` above outranks the UA [hidden] rule — both need an explicit guard. */
+.dc-call-count[hidden], .dc-call-speaking[hidden] { display: none; }
+.dc-call-speaking-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.dc-call-speaking-txt { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* ── Controls: mute / deafen / ptt / leave ──────────────────────── */
-.dc-btn-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+/* ── Controls: you + mute / deafen / ptt / leave ────────────────── */
+.dc-btn-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; flex: 0 0 auto; }
+/* You, beside your own controls. Only the wide layout has the room (below). */
+.dc-self { display: none; }
 .dc-btn {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
   min-height: 50px; padding: 8px 4px; border-radius: 10px; cursor: pointer;
@@ -142,6 +169,13 @@ body.overlay-frozen .dc-pill.in-voice .dc-pill-dot::after { animation-play-state
 .dc-ptt.is-on { color: #b7c0ff; border-color: rgba(88,101,242,0.5); background: rgba(88,101,242,0.16); }
 .dc-mute.is-on, .dc-deaf.is-on { color: #ff9d9d; border-color: rgba(237,66,69,0.5); background: rgba(237,66,69,0.16); }
 .dc-leave.is-idle { opacity: 0.4; }
+/* Hanging up is red while there is a call to hang up — the one control in the
+   bar that ends something, and the colour Discord's own call bar gives it. Fixed
+   rather than themed for the same reason the favourite star is gold: the meaning
+   is carried by the colour. Scoped under .dc-wrap to outrank the shared control
+   material in styles/theme-contract.css. */
+.dc-wrap .dc-btn.dc-leave:not(.is-idle) { color: #fff; background-color: #d3363b; border-color: transparent; }
+.dc-wrap .dc-btn.dc-leave:not(.is-idle):hover:not(:disabled) { color: #fff; background-color: #b92d32; border-color: transparent; }
 .dc-btn.ok { border-color: rgba(88,101,242,0.6); }
 .dc-btn.err { border-color: rgba(237,66,69,0.65); background: rgba(237,66,69,0.2); }
 
@@ -310,9 +344,143 @@ button.dc-guild.is-collapsed { background: #171a26; color: #9aa2ba; }
 .dc-panel--controls::-webkit-scrollbar-thumb { background: rgba(88,101,242,0.5); border-radius: 999px; }
 .dc-panel--controls::-webkit-scrollbar-track { background: transparent; }
 
-/* ── Members of the current call (+ live speaking) ──────────────── */
-.dc-members { display: flex; flex-wrap: wrap; gap: 4px; margin: 3px 0 5px; padding-left: 6px; }
-.dc-call-members { margin: 0; padding-left: 0; }
+/* ── Members of the current call: picture, name, live speaking ring ── */
+/* An avatar: the member's picture over a letter on a per-person tint. The
+   letter is what shows until the picture has loaded, and for good if it never
+   does. The ring is an outline so the gap between it and the picture is the
+   surface underneath, whatever theme that is. */
+.dc-av {
+  position: relative; flex: 0 0 auto; display: grid; place-items: center;
+  width: var(--dc-av-size, 28px); height: var(--dc-av-size, 28px); border-radius: 50%;
+  background: var(--dc-av-tint, #5865f2); color: #fff;
+  font-size: calc(var(--dc-av-size, 28px) * 0.42); font-weight: 800; line-height: 1;
+  outline: 2px solid transparent; outline-offset: 2px;
+  transition: outline-color 0.12s ease, opacity 0.15s ease;
+}
+.dc-av-img {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  border-radius: 50%; object-fit: cover; opacity: 0;
+}
+.dc-av.has-img { background: transparent; }
+.dc-av.has-img .dc-av-ini { visibility: hidden; }
+.dc-av.has-img .dc-av-img { opacity: 1; }
+
+/* The stage. By default — a narrow or short widget — every member is a row:
+   picture, name, markers. As many columns as fit, so a wide-but-short tile on
+   the Edge spends its width instead of scrolling. */
+.dc-call-members {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px;
+  align-content: start; margin: 0; padding: 0; min-height: 0;
+}
+.dc-tile {
+  position: relative; box-sizing: border-box; min-width: 0;
+  display: flex; align-items: center; gap: 10px;
+  min-height: 42px; margin: 0; padding: 5px 9px; border-radius: 10px;
+  font: inherit; text-align: left; color: var(--text, #e7e9ee);
+  background-color: var(--card-surface, rgba(255,255,255,0.04));
+  border: 1px solid var(--divider, rgba(255,255,255,0.08));
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+/* A tile you can act on. Only members of the CURRENT call become buttons, and
+   never your own: Discord has no per-user setting for your own account. */
+button.dc-tile { cursor: pointer; }
+button.dc-tile:hover { background-color: var(--hover-bg, rgba(255,255,255,0.09)); }
+.dc-tile.is-open { border-color: rgba(var(--accent-rgb), 0.75); background-color: rgba(var(--accent-rgb), 0.12); }
+/* Speaking = Discord's green ring, on the picture and on the tile. After
+   .is-open so the person talking stays green while their volume row is open. */
+.dc-tile.is-speaking { border-color: var(--color-success, #3bd678); background-color: var(--success-bg, rgba(59,214,120,0.12)); }
+.dc-tile.is-speaking .dc-av, .dc-self.is-speaking .dc-av { outline-color: var(--color-success, #3bd678); }
+.dc-tile-name {
+  flex: 1 1 auto; min-width: 0; font-size: 0.8rem; font-weight: 700;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dc-tile:is(.is-muted, .is-deaf) .dc-tile-name { color: var(--muted-text, #8b91a1); }
+.dc-tile:is(.is-muted, .is-deaf, .is-local-muted) .dc-av { opacity: 0.55; }
+/* Three markers, built once and shown by state. The microphone and the
+   headphones are THEIRS; the crossed speaker is YOURS — "I turned them down" is
+   not "they muted themselves", and without its own marker turning someone to
+   zero looks like their own mute. */
+.dc-tile-flags { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; }
+.dc-tile-flag { display: none; align-items: center; justify-content: center; color: var(--color-danger, #ff6268); }
+.dc-tile-flag svg { width: 15px; height: 15px; }
+.dc-tile.is-muted .dc-flag-mute,
+.dc-tile.is-deaf .dc-flag-deaf,
+.dc-tile.is-local-muted .dc-flag-local { display: inline-flex; }
+.dc-flag-local { color: var(--color-warn, #ffb86b); }
+.dc-tile.is-local-muted .dc-tile-name { text-decoration: line-through; text-decoration-color: rgba(237,66,69,0.8); }
+
+/* With the room for it, the stage is a grid of cards like Discord's own call
+   view: the picture in the middle, the name on a plate in the corner. The card
+   and picture sizes come from discord-widget.js (layoutStage), which cuts the
+   stage into equal tiles for however many people are in the call.
+
+   Two thresholds, because what is left for the stage depends on how much the
+   controls under it need: from 560px wide they fold onto one line each (the
+   next block), below that they stack and the widget has to be taller before a
+   grid is worth having. Short of either, the rows above are the better use of
+   the space than one strip of squeezed cards. */
+@container dcw ((min-width: 560px) and (min-height: 400px)) or ((min-width: 460px) and (min-height: 520px)) {
+  .dc-call { flex: 1 1 0; min-height: 150px; }
+  .dc-call-members {
+    flex: 1 1 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px;
+    /* Centred when the cards do not fill the stage (one or two people), and
+       `safe` so a call too big for it scrolls from the top instead of losing
+       its first row above the fold. flex-start is the answer for an engine
+       that does not know the keyword. */
+    align-content: flex-start; align-content: safe center;
+    overflow: hidden;
+  }
+  /* Scrollable only once the tiles are at their minimum and still do not fit
+     (discord-widget.js sets this). Always-on, a one-pixel overflow would grow a
+     scrollbar whose width wraps a tile and makes the overflow permanent. */
+  .dc-call-members.is-crowded {
+    overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(88,101,242,0.5) transparent;
+  }
+  .dc-tile {
+    --dc-av-size: var(--dc-tile-av, 56px);
+    flex: 0 0 auto; width: var(--dc-tile-w, 160px); height: var(--dc-tile-h, 110px);
+    min-height: 0; padding: 0 0 20px; justify-content: center;
+    border-width: 2px; border-radius: 14px;
+  }
+  .dc-tile .dc-av { outline-width: 3px; outline-offset: 3px; }
+  /* The plate is dark on every theme, so the name on it is light on every
+     theme — it sits over a picture's worth of colour, not the panel surface. */
+  .dc-tile .dc-tile-name {
+    position: absolute; left: 7px; bottom: 7px; max-width: calc(100% - 72px);
+    padding: 3px 8px; border-radius: 7px; font-size: 0.76rem;
+    color: #fff; background: rgba(6,9,15,0.62);
+  }
+  .dc-tile:is(.is-muted, .is-deaf) .dc-tile-name { color: rgba(255,255,255,0.72); }
+  .dc-tile-flags { position: absolute; right: 7px; bottom: 7px; }
+  .dc-tile-flag { width: 24px; height: 24px; border-radius: 50%; background: rgba(6,9,15,0.62); }
+}
+
+/* Wide enough for one line each: the call bar gains you on the left and its
+   buttons go side by side with their labels; the two volumes share a row, and
+   the audio toggles sit beside their heading. All of it is height handed back
+   to the stage. */
+@container dcw (min-width: 560px) {
+  .dc-btn-row {
+    display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px 10px; border-radius: 14px;
+    background-color: var(--card-surface, rgba(255,255,255,0.04));
+    border: 1px solid var(--divider, rgba(255,255,255,0.08));
+  }
+  .dc-self { --dc-av-size: 34px; display: flex; align-items: center; gap: 10px; min-width: 0; margin-right: auto; padding-right: 6px; }
+  .dc-self[hidden] { display: none; }
+  .dc-self-name {
+    min-width: 0; font-size: 0.82rem; font-weight: 800; color: var(--text, #e7e9ee);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .dc-btn-row .dc-btn { flex: 0 1 auto; flex-direction: row; gap: 8px; min-width: 48px; min-height: 44px; padding: 0 14px; }
+  /* Not in a call, so nobody on the left: the buttons take the whole bar. */
+  .dc-self[hidden] ~ .dc-btn { flex: 1 1 0; }
+  .dc-btn-row .dc-btn-lbl { min-width: 0; font-size: 0.72rem; }
+  .dc-ctl-vols { flex-direction: row; gap: 28px; }
+  .dc-ctl-vols .dc-vol { flex: 1 1 0; min-width: 0; }
+  .dc-ctl-audio { flex-direction: row; align-items: center; gap: 10px; }
+}
+
+/* ── Member chips (the Channels tab roster) ─────────────────────── */
 .dc-member {
   display: inline-flex; align-items: center; gap: 5px; max-width: 132px;
   padding: 2px 8px 2px 6px; border-radius: 999px;
@@ -328,20 +496,10 @@ button.dc-guild.is-collapsed { background: #171a26; color: #9aa2ba; }
 .dc-member.is-muted { opacity: 0.5; }
 .dc-member.is-muted .dc-member-dot { background: #ed4245; box-shadow: none; }
 
-/* A name you can act on. Only members of the CURRENT call become buttons, and
-   never your own: Discord has no per-user setting for your own account. */
-.dc-member.is-adjustable { cursor: pointer; font: inherit; font-size: 0.68rem; font-weight: 700; }
-.dc-member.is-adjustable:hover { background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.16); }
-.dc-member.is-open { color: #cdd3ff; border-color: rgba(88,101,242,0.65); background: rgba(88,101,242,0.20); }
-/* "I turned them down" is not "they muted themselves" — the dot is theirs, this
-   ring is yours. Without it, turning someone to zero looks like their own mute. */
-.dc-member.is-local-muted { box-shadow: inset 0 0 0 1px rgba(237,66,69,0.55); }
-.dc-member.is-local-muted .dc-member-name { text-decoration: line-through; text-decoration-color: rgba(237,66,69,0.8); }
-
-/* ── One person's volume, opened under the list ─────────────────── */
+/* ── One person's volume, opened under the stage ────────────────── */
 /* One row, no prose: a speaker to mute them just for you, a slider, the number.
-   The name is not repeated — it is lit up in the chip directly above — and every
-   label lives on as a tooltip so the row stays readable and translated. */
+   The name is not repeated — it is on the outlined tile directly above — and
+   every label lives on as a tooltip so the row stays readable and translated. */
 .dc-mctl { margin: 2px 0 6px; }
 .dc-mctl-row { display: flex; align-items: center; gap: 9px; padding: 0 2px 0 4px; }
 
