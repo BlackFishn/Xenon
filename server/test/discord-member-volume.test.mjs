@@ -105,9 +105,14 @@ test('the labels survive as tooltips, so nothing is lost with the prose', () => 
 test('"I turned them down" is drawn differently from "they muted themselves"', () => {
   // Two different facts sharing one row. If they shared one marker, turning
   // someone down would look exactly like their own microphone being off.
-  assert.match(WIDGET, /chip\.classList\.toggle\('is-local-muted', !!m\.localMute\)/);
-  assert.match(WIDGET, /chip\.classList\.toggle\('is-muted', !!\(m\.mute \|\| m\.deaf\)\)/);
-  assert.match(CSS, /\.dc-member\.is-local-muted \{/);
+  // The call is drawn as tiles now, and each fact has its own marker on one:
+  // their microphone, their headphones, and the crossed speaker that is yours.
+  assert.match(WIDGET, /tile\.classList\.toggle\('is-local-muted', !!m\.localMute\)/);
+  assert.match(WIDGET, /tile\.classList\.toggle\('is-muted', !!m\.mute\)/);
+  assert.match(WIDGET, /tile\.classList\.toggle\('is-deaf', !!m\.deaf\)/);
+  assert.match(CSS, /\.dc-tile\.is-muted \.dc-flag-mute,\s*\n\.dc-tile\.is-deaf \.dc-flag-deaf,\s*\n\.dc-tile\.is-local-muted \.dc-flag-local \{ display: inline-flex; \}/);
+  assert.match(CSS, /\.dc-tile\.is-local-muted \.dc-tile-name \{ text-decoration: line-through/);
+  // The roster chips in the Channels tab still dim someone who is muted.
   assert.match(CSS, /\.dc-member\.is-muted \{/);
 });
 

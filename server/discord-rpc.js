@@ -127,11 +127,35 @@ function userVolumeFor(mode, current, value) {
   return nudgedVolume(now, mode, USER_VOL_MAX);
 }
 
+// A member's avatar as an https URL on Discord's own CDN. It lands in an
+// <img src>, so it is BUILT here from the id and the hash rather than accepted
+// from the wire: the host is fixed and both parts are checked against the only
+// shapes Discord issues, which leaves nothing a payload could steer elsewhere.
+// Someone with no picture of their own gets the default one Discord would draw
+// for them (picked from the id, or from the discriminator on a legacy account),
+// so a tile never has to guess. '' for an id that is not a snowflake.
+const AVATAR_CDN = 'https://cdn.discordapp.com';
+const AVATAR_HASH = /^(a_)?[0-9a-f]{32}$/;
+function avatarUrl(u) {
+  const id = u && u.id != null ? String(u.id) : '';
+  if (!isSnowflake(id)) return '';
+  // An animated avatar (a_…) is asked for as a still: a row of looping GIFs
+  // would decode on every frame for as long as the call lasts.
+  if (typeof u.avatar === 'string' && AVATAR_HASH.test(u.avatar)) {
+    return `${AVATAR_CDN}/avatars/${id}/${u.avatar}.png?size=128`;
+  }
+  const disc = typeof u.discriminator === 'string' ? u.discriminator : '';
+  const index = (/^\d{4}$/.test(disc) && disc !== '0000')
+    ? Number(disc) % 5
+    : Number((BigInt(id) >> 22n) % 6n);
+  return `${AVATAR_CDN}/embed/avatars/${index}.png`;
+}
+
 // Map a GET_SELECTED_VOICE_CHANNEL response to a client-safe member list for the
-// widget: display name (server nick > global name > username), muted/deafened
-// flags (server- or self-imposed), what THIS machine hears them at, and a
-// speaking placeholder the live watch fills in. No avatars/tokens/emails — text
-// only, capped so a huge channel can't bloat the SSE payload.
+// widget: display name (server nick > global name > username), the avatar URL
+// built above, muted/deafened flags (server- or self-imposed), what THIS machine
+// hears them at, and a speaking placeholder the live watch fills in. No
+// tokens/emails, and capped so a huge channel can't bloat the SSE payload.
 //
 // Two different mutes live in one RPC entry and they are not interchangeable:
 // `voice_state.mute`/`self_mute` is the member's OWN microphone state (everyone
@@ -149,6 +173,7 @@ function channelMembers(ch, cap = 50) {
     out.push({
       id: String(u.id),
       name: vs.nick || u.global_name || u.username || '',
+      avatar: avatarUrl(u),
       mute: !!(st.mute || st.self_mute),
       deaf: !!(st.deaf || st.self_deaf),
       // null (not 100) when Discord doesn't report it: a slider that opens at a
@@ -913,8 +938,8 @@ function createDiscordProvider(deps) {
   // voice channel. GET_CHANNELS only lists the channels, so we GET_CHANNEL each one
   // to read its voice_states. Capped (a user with many channels can't fan out into
   // hundreds of calls) and read in bounded-parallel batches to stay responsive
-  // without flooding the pipe. Client-safe (display name + mute/deaf only, via
-  // channelMembers — no tokens/avatars). Degrades to { ok:false } like voiceState().
+  // without flooding the pipe. Client-safe (display name, avatar URL and
+  // mute/deaf, via channelMembers — no tokens). Degrades to { ok:false } like voiceState().
   async function voiceRoster(cap = 40) {
     try {
       const chans = await enumVoiceChannels(cap);
@@ -1249,6 +1274,7 @@ module.exports = {
   userVolumeAbs,
   userVolumeFor,
   channelMembers,
+  avatarUrl,
   encodeFrame,
   createDecoder,
   notifScopeState,

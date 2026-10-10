@@ -1,6 +1,6 @@
 'use strict';
-// Discord dashboard widget: live voice presence (current channel, its members +
-// who's speaking, self mute / deafen / voice mode) with one-tap controls — mute,
+// Discord dashboard widget: live voice presence (current channel, its members
+// with their avatars + who's speaking, self mute / deafen / voice mode) with one-tap controls — mute,
 // deafen, push-to-talk toggle, leave, mic & output volume — a voice-channel JOIN
 // list grouped by server, and the audio-processing toggles. Every control goes
 // through the allowlisted /actions/run dispatcher (the same discord* actions the
@@ -23,7 +23,8 @@
     deafOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 3 18 18M4 14v-2a8 8 0 0 1 12.5-6.6M20 12v2"/><rect x="2" y="14" width="5" height="6" rx="1.5"/><rect x="17" y="14" width="5" height="6" rx="1.5"/></svg>',
     ptt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="12" rx="2"/><path d="M7 11h.01M11 11h.01M15 11h.01M7 15h10"/></svg>',
     vad: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h2l2-5 3 12 3-16 2 9h4"/></svg>',
-    leave: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4"/><path d="M10 17 5 12l5-5M5 12h11"/></svg>',
+    // A handset turned face-down — the hang-up Discord's own call bar uses.
+    leave: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><g transform="rotate(135 12 12)"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></g></svg>',
     join: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M16 9a5 5 0 0 1 0 6"/></svg>',
     spkOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="m16 10 5 4M21 10l-5 4"/></svg>',
     minus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/></svg>',
@@ -188,17 +189,36 @@
 
     const body = el('div', 'dc-body');
 
-    // Controls panel: voice controls + current-call members + audio processing --
+    // Controls panel: the call you are in, then voice controls + audio processing -
     const pCtl = el('div', 'dc-panel dc-panel--controls'); pCtl.dataset.dtab = 'controls';
+    // Current call: its name, the head-count and who is talking, then one tile
+    // per member (picture, name, live speaking ring). Hidden when not in a call.
+    // First in the panel because it is what the widget gets glanced at for; the
+    // controls under it are the part that gets reached for.
+    const call = el('div', 'dc-call'); call.hidden = true;
+    const cHead = el('div', 'dc-call-head');
+    const cIco = el('span', 'dc-call-ico'); cIco.innerHTML = ICONS.join;   // static, trusted SVG
+    const speak = el('span', 'dc-call-speaking'); speak.hidden = true;
+    speak.append(el('span', 'dc-call-speaking-dot'), el('span', 'dc-call-speaking-txt'));
+    cHead.append(cIco, el('div', 'dc-call-label'), el('span', 'dc-call-count'), speak);
+    const stage = el('div', 'dc-call-members');
+    if (stageWatch) stageWatch.observe(stage);
+    const mctl = el('div', 'dc-mctl dc-call-mctl'); mctl.hidden = true;
+    call.append(cHead, stage, mctl);
+    pCtl.appendChild(call);
+    // The call bar: you (when in a call) and the four voice controls.
     const row = el('div', 'dc-btn-row');
+    const self = el('div', 'dc-self'); self.hidden = true;
+    self.append(buildAvatar(), el('span', 'dc-self-name'));
     row.append(
+      self,
       ctlBtn('dc-mute', (b) => runAction(b, { type: 'discordMute', mode: 'toggle' })),
       ctlBtn('dc-deaf', (b) => runAction(b, { type: 'discordDeafen', mode: 'toggle' })),
       ctlBtn('dc-ptt', (b) => runAction(b, { type: 'discordPtt', mode: 'toggle' })),
       ctlBtn('dc-leave', (b) => runAction(b, { type: 'discordLeave' })),
     );
     pCtl.appendChild(row);
-    // Volumes grouped so the panel can space its blocks (buttons / volumes / call /
+    // Volumes grouped so the panel can space its blocks (call / buttons / volumes /
     // audio) evenly down the full height instead of clustering them at the top.
     const vols = el('div', 'dc-ctl-group dc-ctl-vols');
     vols.append(
@@ -206,11 +226,6 @@
       volRow('dc-vol-out', 'deck_act_discordOutputVol', 'discordOutputVol'),
     );
     pCtl.appendChild(vols);
-    // Current call: title + members (with live speaking). Hidden when not in a call.
-    const call = el('div', 'dc-call'); call.hidden = true;
-    const mctl = el('div', 'dc-mctl dc-call-mctl'); mctl.hidden = true;
-    call.append(el('div', 'dc-sec-label dc-call-label'), el('div', 'dc-members dc-call-members'), mctl);
-    pCtl.appendChild(call);
     // Audio processing toggles.
     const audio = el('div', 'dc-ctl-group dc-ctl-audio');
     audio.appendChild(el('div', 'dc-sec-label', t('layout_card_audio', 'Audio')));
@@ -406,36 +421,190 @@
 
   // A compact member chip: display name + a live speaking highlight + a muted/
   // deafened marker. Names are dynamic Discord data → textContent (via el), never
-  // innerHTML. Reused by the current-call strip and the per-channel roster.
-  function memberChip(m, adjustable) {
-    const chip = el(adjustable ? 'button' : 'span', 'dc-member');
-    if (adjustable) {
-      chip.type = 'button';
-      chip.classList.add('is-adjustable');
-      chip.classList.toggle('is-open', openMember === m.id);
-      // "I turned them down" is a different fact from "they muted themselves",
-      // and the two markers must not be the same one: the dot is theirs, this is
-      // yours. Without it, turning someone to zero looks identical to them
-      // having muted their own microphone.
-      chip.classList.toggle('is-local-muted', !!m.localMute);
-      chip.addEventListener('click', () => {
-        openMember = (openMember === m.id) ? '' : m.id;
-        paint();
-      });
-    }
+  // innerHTML. Used by the per-channel roster in the Channels tab; the call you
+  // are in is drawn as tiles (below).
+  function memberChip(m) {
+    const chip = el('span', 'dc-member');
     chip.classList.toggle('is-speaking', !!m.speaking);
     chip.classList.toggle('is-muted', !!(m.mute || m.deaf));
     chip.append(el('span', 'dc-member-dot'), el('span', 'dc-member-name', m.name || '—'));
     return chip;
   }
 
-  // Fill a container with member chips for the current call.
-  function fillMembers(box) {
-    const members = callMembers();
-    const frag = document.createDocumentFragment();
-    members.forEach(m => frag.appendChild(memberChip(m, canAdjust(m))));
-    box.replaceChildren(frag);
+  // ── The call, drawn the way Discord draws it ──────────────────────────────
+  // One tile per person: their picture, their name, a green ring while they
+  // talk. The same tile is a row when the widget is narrow or short and a card
+  // in a grid when it has the room — that choice is CSS's (a container query on
+  // the widget's own box); the arithmetic for the grid is here.
+  const AVATAR_TINTS = ['#5865f2', '#c2367f', '#2d8a4b', '#c96a12', '#5d6673', '#b8432f'];
+  const STAGE_GAP = 8;        // px between tiles; mirrors `gap` on .dc-call-members
+  const STAGE_MIN_W = 104;    // a tile never gets smaller than this — the stage
+  const STAGE_MIN_H = 84;     // scrolls instead once a call is too big for it
+  const STAGE_MAX_H = 300;    // …nor taller: two people are two cards, not two pillars
+
+  // What stands in for a picture until it arrives, and for good if it never
+  // does (CDN unreachable, request blocked): the first letter of the name on a
+  // colour that stays the same for the same person. Pure.
+  function avatarFallback(m) {
+    const name = String((m && m.name) || '');
+    // Punctuation is skipped ("@Cc" is C), and so is a Thai leading vowel: it is
+    // written before the consonant it belongs to and alone it is a stray mark.
+    const letters = Array.from(name).filter((ch) => /[\p{L}\p{N}]/u.test(ch));
+    const first = letters.find((ch) => !/[เ-ไ]/.test(ch)) || letters[0] || '';
+    let sum = 0;
+    for (const ch of String((m && m.id) || name)) sum = (sum + ch.charCodeAt(0)) % 997;
+    return { initial: first.toUpperCase(), tint: AVATAR_TINTS[sum % AVATAR_TINTS.length] };
   }
+
+  function buildAvatar() {
+    const av = el('span', 'dc-av');
+    av.appendChild(el('span', 'dc-av-ini'));
+    return av;
+  }
+
+  // Point an avatar at a member. The <img> is made once per picture and kept:
+  // paint() runs on every speaking event, and one rebuilt each time would flash.
+  function setAvatar(av, m) {
+    const fb = avatarFallback(m);
+    const ini = av.firstChild;
+    if (ini.textContent !== fb.initial) ini.textContent = fb.initial;
+    av.style.setProperty('--dc-av-tint', fb.tint);
+    // https only, and only the URL the server built (avatarUrl in discord-rpc.js).
+    const src = (typeof m.avatar === 'string' && m.avatar.startsWith('https://')) ? m.avatar : '';
+    if (av.dataset.dcSrc === src) return;
+    av.dataset.dcSrc = src;
+    av.classList.remove('has-img');
+    const old = av.querySelector('img');
+    if (old) old.remove();
+    if (!src) return;
+    const img = document.createElement('img');
+    img.className = 'dc-av-img'; img.alt = ''; img.decoding = 'async'; img.draggable = false;
+    img.referrerPolicy = 'no-referrer';
+    // Shown only once it has loaded, so a slow or failed picture is the letter
+    // underneath rather than a broken-image glyph. A failure is not retried:
+    // the next paint sees the same src and leaves it alone.
+    img.addEventListener('load', () => av.classList.add('has-img'));
+    img.addEventListener('error', () => img.remove());
+    img.src = src;
+    av.appendChild(img);
+  }
+
+  // Everyone but you is a button that opens their volume (see canAdjust). The
+  // three markers are built once and shown by class, so a repaint touches no DOM.
+  function buildTile(adjustable) {
+    const tile = el(adjustable ? 'button' : 'div', 'dc-tile');
+    if (adjustable) {
+      tile.type = 'button';
+      tile.classList.add('is-adjustable');
+      tile.addEventListener('click', () => {
+        const id = tile.dataset.dcId || '';
+        openMember = (openMember === id) ? '' : id;
+        paint();
+      });
+    }
+    const flags = el('span', 'dc-tile-flags');
+    [['dc-flag-local', ICONS.spkOff], ['dc-flag-mute', ICONS.micOff], ['dc-flag-deaf', ICONS.deafOff]].forEach(([cls, svg]) => {
+      const flag = el('span', 'dc-tile-flag ' + cls);
+      flag.innerHTML = svg;   // static, trusted SVG
+      flags.appendChild(flag);
+    });
+    tile.append(buildAvatar(), el('span', 'dc-tile-name'), flags);
+    return tile;
+  }
+
+  function updateTile(tile, m) {
+    tile.classList.toggle('is-open', openMember === m.id);
+    tile.classList.toggle('is-speaking', !!m.speaking);
+    // "I turned them down" is a different fact from "they muted themselves",
+    // and the markers must not be the same one: the microphone and the
+    // headphones are theirs, the crossed speaker is yours. Without it, turning
+    // someone to zero looks identical to them having muted their own microphone.
+    tile.classList.toggle('is-muted', !!m.mute);
+    tile.classList.toggle('is-deaf', !!m.deaf);
+    tile.classList.toggle('is-local-muted', !!m.localMute);
+    setAvatar(tile.firstChild, m);
+    // Names are dynamic Discord data → textContent, never innerHTML.
+    const label = m.name || '—';
+    const name = tile.querySelector('.dc-tile-name');
+    if (name.textContent !== label) name.textContent = label;
+    tile.title = label;   // the full name on hover when the tile truncates it
+  }
+
+  // Tiles are kept by member id rather than rebuilt: paint() runs on every
+  // speaking event, and a rebuilt tile would reload its picture and drop a
+  // press that was halfway down on it.
+  function syncTiles(box) {
+    const have = new Map(Array.from(box.children).map((n) => [n.dataset.dcId || '', n]));
+    let prev = null;
+    callMembers().forEach((m) => {
+      const adjustable = canAdjust(m);
+      let tile = have.get(m.id);
+      // Whether a tile is a button is decided when it is built, and it can change
+      // under the same id: `selfId` may arrive one read after the member list.
+      if (tile && tile.classList.contains('is-adjustable') !== adjustable) tile = null;
+      if (tile) have.delete(m.id);
+      else { tile = buildTile(adjustable); tile.dataset.dcId = m.id; }
+      updateTile(tile, m);
+      const at = prev ? prev.nextSibling : box.firstChild;
+      if (tile !== at) box.insertBefore(tile, at);
+      prev = tile;
+    });
+    have.forEach((n) => n.remove());
+  }
+
+  // How to cut the stage into equal tiles: the column count that leaves each
+  // one the largest 3:2 box, the shape a picture with a name under it wants.
+  // Past the minimum the tiles stop shrinking and the stage scrolls; past the
+  // maximum they stop growing and sit centred in it. Pure.
+  function stageFit(count, width, height, gap) {
+    const n = Math.max(1, count | 0);
+    let best = { cols: 1, w: 0, h: 0, side: -1 };
+    for (let cols = 1; cols <= n; cols++) {
+      const rows = Math.ceil(n / cols);
+      const w = (width - gap * (cols - 1)) / cols;
+      const h = (height - gap * (rows - 1)) / rows;
+      const side = Math.min(w / 1.5, h);
+      if (side > best.side) best = { cols, w, h, side };
+    }
+    const h = Math.max(STAGE_MIN_H, Math.min(STAGE_MAX_H, Math.floor(best.h)));
+    // Capped so one person alone in a wide widget is a card, not a banner.
+    const w = Math.max(STAGE_MIN_W, Math.min(Math.floor(best.w), Math.round(h * 1.9)));
+    // `crowded`: the tiles had to be held at their minimum, so they no longer
+    // fit and the stage is allowed to scroll — and only then (see layoutStage).
+    return { cols: best.cols, w, h, crowded: best.h < STAGE_MIN_H || best.w < STAGE_MIN_W };
+  }
+
+  // Size the tiles to the stage. Only the grid layout reads these properties,
+  // so in the list layout this is arithmetic nobody looks at — cheaper than
+  // asking the stylesheet which layout it picked.
+  function layoutStage(stage) {
+    const n = stage.children.length;
+    // offset*, not client*: a scrollbar appearing must not change the answer,
+    // or the tiles and the scrollbar take turns making room for each other.
+    const width = stage.offsetWidth, height = stage.offsetHeight;
+    if (!n || !(width > 0 && height > 0)) return;
+    const fit = stageFit(n, width, height, STAGE_GAP);
+    const av = Math.round(Math.max(34, Math.min(104, fit.h * 0.46, fit.w * 0.42)));
+    const sig = fit.w + 'x' + fit.h + 'x' + av + (fit.crowded ? 'c' : '');
+    if (stage.dataset.dcFit === sig) return;
+    stage.dataset.dcFit = sig;
+    // The stage scrolls ONLY when the call is too big for it. Left scrollable
+    // all the time, a stage that shrinks by a pixel (a font finishing loading
+    // is enough) overflows for one frame, grows a scrollbar, loses the width
+    // of it, wraps a tile onto a new row — and now really does overflow, for
+    // good. Clipped instead, that one frame is invisible and the re-fit that
+    // follows puts every tile back inside.
+    stage.classList.toggle('is-crowded', fit.crowded);
+    stage.style.setProperty('--dc-tile-w', fit.w + 'px');
+    stage.style.setProperty('--dc-tile-h', fit.h + 'px');
+    stage.style.setProperty('--dc-tile-av', av + 'px');
+  }
+
+  // Re-cut the grid when the widget is resized, a tab is switched back to, or
+  // the volume row opens under the stage and takes some of its height.
+  const stageWatch = (typeof ResizeObserver === 'function')
+    ? new ResizeObserver((entries) => entries.forEach((e) => layoutStage(e.target)))
+    : null;
 
   // One row, no prose: a speaker you can tap to mute them just for you, a slider,
   // and the number. The name is not repeated — you tapped it a moment ago and it
@@ -930,17 +1099,49 @@
         chip.classList.toggle('is-on', on);
       });
 
-      // Current call (Controls tab): title + members with live speaking. Hidden when
-      // not in a call.
+      // Current call (Controls tab): title, head-count, who is talking, and a tile
+      // per member. Hidden when not in a call.
       const call = mount.querySelector('.dc-call');
       if (call) {
         call.hidden = !inChan;
         if (inChan) {
+          const members = callMembers();
           call.querySelector('.dc-call-label').textContent = callTitle();
-          fillMembers(call.querySelector('.dc-call-members'));
+          const count = call.querySelector('.dc-call-count');
+          count.hidden = !members.length;
+          count.textContent = String(members.length);
+          // Who is talking, by name: the ring says it on the tile, this says it
+          // for someone reading the widget from across the desk.
+          const talking = members.filter(m => m.speaking).map(m => m.name).filter(Boolean);
+          const speak = call.querySelector('.dc-call-speaking');
+          speak.hidden = !talking.length;
+          speak.querySelector('.dc-call-speaking-txt').textContent = talking.join(', ');
+          const stage = call.querySelector('.dc-call-members');
+          syncTiles(stage);
+          // The grid is re-cut when the head-count changes; a resize reaches it
+          // through stageWatch. Measuring on every paint would force a layout
+          // each time someone in the call opens their mouth.
+          if (stage.dataset.dcCount !== String(members.length)) {
+            stage.dataset.dcCount = String(members.length);
+            layoutStage(stage);
+          }
           fillMemberCtl(call.querySelector('.dc-call-mctl'));
         } else {
           openMember = '';   // left the call: nothing to point at any more
+        }
+      }
+
+      // You, in the call bar: the same picture and ring as your tile, next to the
+      // controls that act on you. Only in a call — outside one there is no member
+      // entry to take the picture from.
+      const self = mount.querySelector('.dc-self');
+      if (self) {
+        const me = inChan ? callMembers().find(m => m.id === (voice.selfId || '')) : null;
+        self.hidden = !me;
+        if (me) {
+          setAvatar(self.firstChild, me);
+          self.classList.toggle('is-speaking', !!me.speaking);
+          self.querySelector('.dc-self-name').textContent = me.name || username || '';
         }
       }
 
