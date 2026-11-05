@@ -424,7 +424,12 @@ function createSelfUpdate(opts) {
   // window freezes until somebody answers; a Linux .deb or .rpm asks through
   // pkexec. Those installs update the app on the user's own tap only.
   function shellUpdatesSilently() {
-    return platform === 'win32';
+    // A git checkout (this fork's daily-use tree, a developer's clone) did not
+    // come from the release channel, so the version it reports says nothing
+    // about which native build belongs with it. Following it would swap a
+    // locally built app for the published one with nobody there to see it.
+    // The Update button still offers the app's update when asked.
+    return platform === 'win32' && !isGitCheckout();
   }
 
   return {

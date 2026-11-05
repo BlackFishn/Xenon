@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — upstream v4.11.13 sync
+
+- Bring upstream v4.11.11 to v4.11.13 into the fork (see their sections below): lyrics, Codex and Ask ChatGPT tiles, the redesigned Claude tile and Claude Code mod, Developer cleanup, Home Assistant history and cameras, automatic updates, and their fixes.
+- Keep the fork's Media widget (YouTube, local video, Focus, subtitles): upstream's new YouTube watch layouts are not taken; Twitch gets them.
+- Keep the System tile's power-plan button; upstream's Optimize/Restore relabel skips it.
+- Keep AI Usage, TCL AC, the Discord avatar call view, the usage-only Claude quota link, Crosshair Studio and the stable-release Whisper installer. AI Usage now prices models with upstream's per-model table (1-hour cache writes, cheaper cache reads).
+- Microphones picked in Xenon now follow upstream's "Also switch the communication device" setting.
+- On a git checkout the native app no longer replaces itself with the published build unattended when the dashboard version moves ahead; the Update button still offers it.
+
 ## Unreleased — Discord call view with avatars
 
 - Redraw the Discord widget's Controls tab around the call you are in: one tile per member with their Discord avatar, name, a green ring while they talk, and separate markers for their muted microphone, their deafened headphones and "muted for me".

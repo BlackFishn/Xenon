@@ -192,6 +192,10 @@ test('only Windows updates the app with nobody at the PC', () => {
   assert.equal(mk('win32').shellUpdatesSilently(), true);
   assert.equal(mk('darwin').shellUpdatesSilently(), false);
   assert.equal(mk('linux').shellUpdatesSilently(), false);
+  // A git checkout never replaces the app unattended: its version did not come
+  // from the release channel, so the published app is not necessarily its match.
+  const gitFs = { existsSync: (p) => /[\\/]\.git$/.test(String(p)) };
+  assert.equal(createSelfUpdate({ root: '/x', dataDir: '/x/data', platform: 'win32', fsImpl: gitFs }).shellUpdatesSilently(), false);
   const route = SERVER.slice(SERVER.indexOf("reqPath === '/update/auto-status'"));
   assert.match(route.slice(0, 1200),
     /if \(urlObj\.searchParams\.get\('safe'\) === '1'\) \{\n\s*out\.safeNow = await autoUpdater\.safeNow\(\);\n\s*out\.shellSilent = selfUpdate\.shellUpdatesSilently\(\);/);
