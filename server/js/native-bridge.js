@@ -385,7 +385,7 @@
   // entirely in the dashboard, so it also works on already-installed shells
   // without a native rebuild. It mirrors the fractional-DPR compensation in
   // index.html (which is disabled in the native shell so the two never fight).
-  const ZOOM_MIN = 0.6, ZOOM_MAX = 1.6, ZOOM_STEP = 0.1;
+  const ZOOM_MIN = 0.6, ZOOM_MAX = 2.5, ZOOM_STEP = 0.1;
   let currentNativeZoom = 1; // last applied scale (also read by the wheel/keys)
 
   function clampZoom(value) {
@@ -413,11 +413,69 @@
   // unzoomed viewport). `__pageZoom` is the contract client-coordinate code reads
   // to divide out the magnification — draggables that clamp with
   // getBoundingClientRect (see clampDashboardDock) rely on it plus a safety reset.
+  //
+  // The macOS shell is the exception (cap `nativePageZoom`): there WKWebView
+  // carries a CSS `zoom` into the sandboxed widget frames without shrinking
+  // their viewport, so SDK widgets rendered enlarged, blurry and cropped. The
+  // shell applies WKWebView page zoom instead, which scales frames like Safari's
+  // own zoom; the page then lays out at the smaller viewport and client
+  // coordinates need no correction, so `__pageZoom` stays 1. Sent with the same
+  // load-safe deferral as the other shell signals; only the latest scale goes.
+  let pageZoomShellSignal = null; // last scale signalled to the shell
+  let pageZoomSignalTimer = null;
+  function sendPageZoomSignalSoon() {
+    if (pageZoomSignalTimer) return; // already queued — it reads the latest scale
+    const fire = () => {
+      pageZoomSignalTimer = setTimeout(() => {
+        pageZoomSignalTimer = null;
+        if (pageZoomShellSignal === currentNativeZoom) return;
+        pageZoomShellSignal = currentNativeZoom;
+        try { window.location.href = 'xenon-zoom:set?z=' + currentNativeZoom; } catch (e) { /* not native */ }
+      }, 120);
+    };
+    if (document.readyState === 'complete') fire();
+    else window.addEventListener('load', fire, { once: true });
+  }
+
+  // A frame that loads while the page is already scaled comes out unscaled:
+  // WKWebView sizes a new frame without the page zoom and only corrects it on
+  // the next zoom change (Discord, Oct 2026: a widget added at 150% was
+  // enlarged and cropped until the scale went to 100% and back). So a frame
+  // load at any scale but 100% re-sends it with `nudge=1`, which the shell
+  // applies as a change. Debounced: a page of widgets mounting is one nudge.
+  let pageZoomNudgeTimer = null;
+  function nudgePageZoomSoon() {
+    if (currentNativeZoom === 1 || pageZoomNudgeTimer) return;
+    pageZoomNudgeTimer = setTimeout(() => {
+      pageZoomNudgeTimer = null;
+      if (currentNativeZoom === 1 || document.readyState !== 'complete') return;
+      try { window.location.href = 'xenon-zoom:set?z=' + currentNativeZoom + '&nudge=1'; } catch (e) { /* not native */ }
+    }, 200);
+  }
+
+  function watchFrameLoadsForPageZoom() {
+    const caps = window.__XENON_NATIVE_CAPS__;
+    if (!caps || caps.nativePageZoom !== true) return;
+    // `load` does not bubble; the capture phase sees every iframe's.
+    document.addEventListener('load', (e) => {
+      if (e.target instanceof HTMLIFrameElement) nudgePageZoomSoon();
+    }, true);
+  }
+
   function applyNativeZoomCss(scale) {
     const z = clampZoom(scale);
     currentNativeZoom = z;
     const el = document.documentElement;
     const body = document.body;
+    const caps = window.__XENON_NATIVE_CAPS__;
+    if (caps && caps.nativePageZoom === true) {
+      if (el) el.style.zoom = '';
+      if (body) { body.style.width = ''; body.style.height = ''; body.style.minHeight = ''; }
+      window.__pageZoom = 1;
+      sendPageZoomSignalSoon();
+      scheduleZoomRelayout();
+      return;
+    }
     if (z === 1) {
       if (el) el.style.zoom = '';
       if (body) { body.style.width = ''; body.style.height = ''; body.style.minHeight = ''; }
@@ -446,6 +504,7 @@
 
   function initNativeZoom() {
     if (!isNative) return;
+    watchFrameLoadsForPageZoom();
     // Ctrl + wheel to zoom (WebView2's own zoom is left disabled, so this is the
     // only handler — no double zoom). preventDefault stops the page scrolling
     // while zooming; the pager ignores Ctrl+wheel so nothing else claims it.
@@ -835,10 +894,9 @@
 
   // ── Native shell: don't steal the game's focus ────────────────────────
   // Tapping the kiosk normally activates its window, so a foreground game
-  // loses focus (exclusive-fullscreen titles minimize outright). While the
-  // dashboard is in game mode (settings.js toggles `body.game-mode` off the
-  // same detector that pauses ambient FX), tell the shell to arm its focus
-  // guard (WS_EX_NOACTIVATE + give-back, see focus_guard.rs). Typing is the
+  // loses focus (exclusive-fullscreen titles minimize outright). While a game
+  // is running (settings.js toggles `body.game-running` off the game detector),
+  // tell the shell to arm its focus guard (WS_EX_NOACTIVATE + give-back, see focus_guard.rs). Typing is the
   // deliberate exception: focusing a text field (AI chat, notes, search)
   // signals type-start so the shell lifts the guard and takes real focus —
   // the keyboard works exactly as before — and leaving the field signals
@@ -868,7 +926,10 @@
     // Always report the initial state (the shell may still be armed from
     // before a dashboard reload) and every change after.
     function syncGameMode() {
-      const on = document.body.classList.contains('game-mode');
+      // Not `game-mode`: that one also needs the Game mode switch, which is
+      // about the background. Whether to guard is the tray's "Keep games
+      // focused", checked by the shell.
+      const on = document.body.classList.contains('game-running');
       if (on === guardOn) return;
       guardOn = on;
       if (!on) {

@@ -13,13 +13,13 @@ Monitor your PC, control media and audio, mute your mic, manage your day, talk t
 And it has a personality. Xenon is a companion, not just a control panel: a built-in AI you can actually talk to, and **Bit** — a little pixel guardian who lives in the corner, watches your habits, and roasts you (kindly) into drinking some water and standing up now and then.
 
 Everything runs **100% locally**: no cloud, no telemetry, no account required. The app does check for
-updates at launch, and reaches the network for features you turn on (weather, media artwork, the
+updates at launch, and reaches the network for features you turn on (weather, media artwork, song lyrics, the
 community catalog) — every one of those calls is listed in the [privacy page](https://xenon-app.com/privacy.html).
 
 ![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D6)
 ![node](https://img.shields.io/badge/node-%E2%89%A5%2018.15-brightgreen)
 ![license](https://img.shields.io/badge/license-non--commercial-blue)
-![version](https://img.shields.io/badge/version-4.11.10-informational)
+![version](https://img.shields.io/badge/version-4.11.13-informational)
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/MBVrw9kZyg)
 
 <p align="center">
@@ -72,6 +72,8 @@ A quick tour — see **[FEATURES.md](FEATURES.md)** for the full breakdown with 
 - **Share your setup** — export your **theme**, a **dashboard page**, a full **Deck profile**, a single **community widget**, a **code-defined background**, or a whole **package** (theme + pages + widgets in one code) as a link or `.json`, and import someone else's in one step. Any export can be **protected with access codes** (encrypted locally, installs only for people you hand a code to), and every import is re-validated (widgets never auto-grant — you approve each one) so a shared preset can never run code behind your back. **Installed content** records what each download added and removes its theme, pages, Deck profiles, widgets, Ambient scenes, background and fonts together in one action.
 - **Make it yours, down to the last detail** — a full theme editor (colours, corner roundness, glass blur/saturation, borders, shadows), the same controls per individual widget, Xenon AI that can build a whole theme *or* an animated background from a description, and an **animated background** you can pick from a nine-item gallery, have the AI write, import, or code yourself in JavaScript (with your own bundled images) — running in an isolated sandbox.
 - **System & network monitor** — CPU, GPU, RAM, disks, throughput, ping/jitter, and real in-game FPS (PresentMon on Windows, MangoHud on Linux). Live graphs keep a rolling five-minute history across dashboard pages and System tabs while the app is visible; hiding the app pauses network sampling.
+- **Claude Code on a second screen** — a tile with your sessions, the real 5-hour and weekly quota, and permission requests you answer with a tap. One press on **Connect Claude Code** also installs the Xenon mod for Claude Code, which adds each sub-agent's model and a `/xenon` check. See **[FEATURES.md](FEATURES.md#claude-code)**.
+- **Developer cleanup** *(supporters)* — finds the space Docker images and build cache, Ollama models, editor folders of deleted projects and the WSL/Docker virtual disks hold, and frees it safely; on Windows it can also compact those virtual disks.
 - **Media** — now-playing from any SMTC app, transport controls, album art, per-source volume.
 - **Audio & microphone** — output/input device pickers, master volume, mute, and a per-app mixer with real app icons.
 - **Xenon AI** — a voice + vision + chat assistant that can control the whole dashboard, started hands-free with the local **"Hey Xenon"** wake word. It **remembers facts about you**, stays coherent across long conversations, starts **speaking its reply almost immediately**, and offers **one-tap undo** for changes it makes. Runs on **Google Gemini (cloud)** or a **free local provider (Ollama)**.
@@ -146,7 +148,7 @@ You may see SmartScreen refuse to run the setup, your browser cancel the downloa
 
 > **That last part is being fixed, and supporters are paying for it.** The first year of a code-signing certificate is being funded on Buy Me a Coffee — [see how close it is](https://buymeacoffee.com/marcimastro98/goals/share/720743). Worth being straight about what it buys: signing does not clear the warning overnight. Windows builds trust as more people download a signed file, so it fades over a few weeks instead of resetting to zero with every release, which is what happens today.
 
-**A plain name with no suffix, such as `Trojan:Win32/Vigorf.A`.** This is a generic behavioural signature, so the reasoning above does not apply to it, and it is worth being straight about what Defender is reacting to. The setup carries a PowerShell script inside it: the backend installer. When you choose **Complete setup** in the app, that script downloads an archive from GitHub, verifies its signature before unpacking anything, and registers the task that starts the dashboard when you sign in. It also installs LibreHardwareMonitor and the PawnIO driver, which are what read CPU and disk temperatures. None of it happens behind your back: the setup itself only installs the app, and the script runs in a console window you can read and stop. But compressed into one sentence, "an unsigned installer carrying a script that downloads code and installs a kernel driver" is also an accurate description of a dropper, and a generic signature has no way to tell the two apart.
+**A plain name with no suffix, such as `Trojan:Win32/Vigorf.A`.** This is a generic behavioural signature, so the reasoning above does not apply to it, and it is worth being straight about what Defender is reacting to. The setup carries a PowerShell script inside it: the backend installer. When you choose **Complete setup** in the app, that script downloads an archive from GitHub, verifies its signature before unpacking anything, and registers the task that starts the dashboard when you sign in. It also installs LibreHardwareMonitor and the PawnIO driver, which are what read CPU and disk temperatures. None of it happens behind your back: the setup itself only installs the app, and the script runs in a console window you can read and stop. But compressed into one sentence, "an installer carrying a script that downloads code and installs a kernel driver" is also an accurate description of a dropper, and a generic signature has no way to tell the two apart.
 
 Two things are worth knowing about that last part. Those temperature components are installed through **winget**, so their binaries come from their own developers through Microsoft's package manager, not from this project. And PawnIO is the *signed* replacement for WinRing0, the driver behind most of the older hardware-monitoring false positives. Xenon has never shipped WinRing0 and never will.
 
@@ -288,7 +290,7 @@ To remove Xenon on Windows, open **Settings → Apps → Installed apps**, find 
 
 ### Updating
 
-Xenon updates itself. When a new release is out, the dashboard shows an **update prompt** — one tap downloads it (signature-verified), installs the dashboard engine first and then the app, shows real progress, and automatically restores your previous version if anything goes wrong. Your data, layouts and settings are always preserved, and leftover files from old versions are cleaned up. No manual downloads needed.
+Xenon updates itself. When a new release is out, the dashboard shows an **update prompt** — one tap downloads it (signature-verified), installs the dashboard engine first and then the app, shows real progress, and automatically restores your previous version if anything goes wrong. Your data, layouts and settings are always preserved, and leftover files from old versions are cleaned up. No manual downloads needed. Widgets from the Store update themselves too, a day or more after a new version is published, and only when it asks for no new permissions; anything that does is left for you to approve. One switch in Settings turns it off.
 
 ---
 
@@ -348,13 +350,13 @@ Anything unavailable is **hidden**, not offered and then failed: a Deck key that
 | "Hey Xenon" wake word | ✅ | ✅ ⁵ | ✅ ⁵ |
 | Network lighting (WLED, Hue, Nanoleaf, OpenRGB) | ✅ | ✅ | ✅ |
 | CORSAIR iCUE lighting | ✅ | — | — |
-| Streaming, Spotify, Discord, Home Assistant, Claude Code | ✅ | ✅ | ✅ |
+| Streaming, Spotify, Discord, Home Assistant, Claude Code, OpenAI Codex | ✅ | ✅ | ✅ |
 | In-game FPS counter | ✅ | — | ✅ ¹³ |
 | Game mode (auto-pauses effects while playing) | ✅ | ✅ ³ | ✅ ¹⁶ |
 | Mirroring desktop notifications | ✅ | — | ✅ ⁶ |
 | Incoming-call card (ring + silence + open the app) | ✅ | Discord only ¹⁸ | ✅ ⁶ |
-| Answering a call from the dashboard | ✅ | ✅ ¹⁹ | ✅ ²⁰ |
-| Living Index, PC search, disk cleanup | ✅ | — | ✅ ¹⁰ |
+| Answering a call from the dashboard | ✅ | Discord only ¹⁹ | ✅ ²⁰ |
+| Living Index, PC search, disk cleanup | ✅ | ✅ ²¹ | ✅ ¹⁰ |
 | Embedded browser tile | ✅ | ✅ ⁷ | ✅ ⁷ |
 | Phone as a second screen (QR pairing) | ✅ | ✅ | ✅ |
 | Secure access away from home (Tailscale + HTTPS) | ✅ | ✅ ¹⁷ | ✅ ¹⁷ |
@@ -398,9 +400,11 @@ Anything unavailable is **hidden**, not offered and then failed: a Deck key that
 
 ¹⁸ macOS gives no application a way to read another app's notifications, so the ring can only come from an app that reports it directly. Discord does, over its local RPC connection, so Discord calls ring on a Mac exactly as they do everywhere else. Teams, Zoom and mirrored phone calls do not raise a card there.
 
-¹⁹ Discord is answered outright over its RPC connection, on all three systems. Teams and Zoom are answered the way you would by hand — Xenon brings their window to the front and presses the shortcut each app documents — which on macOS needs Xenon Helper allowed under System Settings → Privacy & Security → Accessibility. Until you allow it, the card still rings, silences and opens the app, and Settings says which permission is missing.
+¹⁹ Discord calls are answered outright over its RPC connection, as on the other two systems. Teams, Zoom and phone calls never ring on a Mac (see ¹⁸), so there is nothing of theirs to answer.
 
-²⁰ Same two routes as macOS. Pressing a shortcut into another window needs `xdotool` on an X11 session, or `ydotool` on Wayland, which forbids one application from typing into another by design. Without either, Discord calls are still answered (that path is a network call, not a keystroke) and everything else rings and offers to open the app.
+²⁰ Discord is answered outright over its RPC connection. Teams and Zoom are answered the way you would by hand: Xenon brings their window to the front and presses the shortcut each app documents. Pressing a shortcut into another window needs `xdotool` on an X11 session, or `ydotool` on Wayland, which forbids one application from typing into another by design. Without either, Discord calls are still answered (that path is a network call, not a keystroke) and everything else rings and offers to open the app.
+
+²¹ Through the Xenon Helper, which holds the index for the folders you choose and moves what you clean to the Trash, so a cleanup can be undone from there. The Trash and most of `~/Library/Caches` are only visible once Xenon has [Full Disk Access](#macos-full-disk-access). Search matches file names: content search, the part Windows Search provides, is not offered on a Mac.
 
 macOS and Linux support is **new**. It is written against each platform's documented behaviour and covered by unit tests, but it has had far less real-world use than the Windows build — if something misbehaves, please [open an issue](https://github.com/marcimastro98/Xenon/issues) or say so on [Discord](https://discord.gg/MBVrw9kZyg).
 
@@ -430,7 +434,7 @@ iCUE's embedded WebView can reject some MP4 files even when they play fine in Ch
 - **Port 3030 already in use** — close any other instance, or change the port in `server/server.js`.
 - **No CPU temperature** — rerun `INSTALL.bat` and accept the admin prompt so it can install LibreHardwareMonitor/PawnIO and register the elevated startup task.
 - **Mic mute does nothing on first launch** — wait a second or two; the device cache populates right after startup.
-- **Defender quarantined Xenon, or the download was blocked** — a false positive: either an unsigned build with no reputation yet, or a generic signature reacting to an installer that downloads what it installs. See [If Windows blocks the download, or flags Xenon as a virus](#if-windows-blocks-the-download-or-flags-xenon-as-a-virus) for how to tell which, verify the file, and restore it.
+- **Defender quarantined Xenon, or the download was blocked**: a false positive, either a signed build whose reputation is still building (since 4.11.9 the Windows downloads are signed, and SmartScreen grants reputation over time), or a generic signature reacting to an installer that downloads what it installs. See [If Windows blocks the download, or flags Xenon as a virus](#if-windows-blocks-the-download-or-flags-xenon-as-a-virus) for how to tell which, verify the file, and restore it.
 - **Nothing happens when you launch Xenon, and Defender never said anything** — on Windows 11 this is usually Smart App Control, which is separate from your antivirus and is not affected by an exclusion. See [If Xenon simply will not start: Smart App Control](#if-xenon-simply-will-not-start-smart-app-control).
 - **"Can not find script file …\server\open-dashboard.vbs" every time you sign in, but Xenon starts anyway** — that is the optional "open the dashboard in your browser at logon" task, pointing at a launcher that is no longer where it was: the install moved, or an antivirus quarantined the `.vbs`. Xenon now repoints or removes that task the next time the engine starts, so the box stops after one more sign-in. To clear it by hand: **Task Scheduler → Task Scheduler Library → Xenon Edge Dashboard → Delete**, or in PowerShell `Unregister-ScheduledTask -TaskName 'Xenon Edge Dashboard' -Confirm:$false`. If the script was quarantined, **Protection history** has it, and restoring it plus the folder exclusions above brings the feature back.
 - **Windows says one version and Xenon says another** — the setup `.exe` installs the app; the dashboard engine behind it is a separate piece. Before 4.11.8 the setup left an engine that was already there untouched, whatever version it was, so *Apps & features* could read one version ahead of the dashboard. Either update from inside Xenon, or download the release's **source zip** and run its `INSTALL.bat`, which always replaces the engine. From 4.11.8 the setup updates an engine that is behind it.

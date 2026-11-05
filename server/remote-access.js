@@ -110,6 +110,7 @@ const REMOTE_DENY = new Set([
   // are visible.
   '/api/native/install',
   '/api/gamemode/install-presentmon',
+  '/audio/levels/install-helper',
   '/api/lighting/sdk-install',
   '/api/ai-local/whisper-install',
   '/embedded-browser/adblock/install',
@@ -124,6 +125,14 @@ const REMOTE_DENY = new Set([
   '/api/claude/permission',
   '/api/claude/question',
   '/api/claude/turn-end',
+  '/api/claude/mod',
+  '/api/claude/mod/permission',
+  // Hands a tile message to the mod: the answer is the text of the message.
+  '/api/claude/mod/inbox',
+  // The OpenAI Codex ingest, posted by codex-hook.js (which Codex runs) against
+  // a token minted on the PC. Same reason as Claude's.
+  '/api/codex/event',
+  '/api/codex/permission',
   // The channel's RTMP stream key. Whoever holds it can broadcast to the user's
   // channel, and it is the one credential the dashboard is asked to show on
   // screen. It stays on the PC the user is standing at.
@@ -176,6 +185,8 @@ const DEFAULT_GET_MUTATORS = new Set([
   // in itself, but a navigation is the one request shape this door cannot
   // attribute, and nothing should be able to throw a window on screen with it.
   '/macos/fda-settings',
+  // "Postpone the automatic update" is allowed from a phone, by POST only.
+  '/update/auto/postpone',
   // Answering a call IS reachable from a paired device — a phone showing the
   // ringing card is the whole point — but only by POST. Answering focuses
   // another app and presses keys into it, so a top-level GET navigation to this
@@ -186,8 +197,13 @@ const DEFAULT_GET_MUTATORS = new Set([
   '/audio/app/volume', '/audio/app/mute', '/notes',
   '/media/source', '/media/playpause', '/media/next', '/media/previous',
   '/api/community/catalog', '/api/community/code', '/api/community/messages',
+  '/api/lyrics', '/api/features/lyrics/unlock', '/api/features/lyrics/trial', '/api/lyrics/offset', '/api/lyrics/translate',
   '/api/community/installed', '/api/community/installs', '/api/community/poll',
-  '/api/community/redeem', '/api/community/limited-status', '/api/community/ratings',
+  '/api/community/support-goal', '/api/community/redeem', '/api/community/limited-status', '/api/community/ratings',
+  // The owner update: POST-only like the redeem it sits beside. It hands back a
+  // content key (and sometimes a private file), so a navigation must not reach it.
+  // A paired phone DOES reach it by POST: updating what you own is the dashboard.
+  '/api/community/update',
   // The remembered supporter pass. Both are POST-only for the same reason the
   // redeem above is: a top-level navigation is a GET, and these throw away
   // something only the user can put back, or plant a code they never typed. The
@@ -199,8 +215,12 @@ const DEFAULT_GET_MUTATORS = new Set([
   '/api/claude/event', '/api/claude/permission', '/api/claude/question', '/api/claude/turn-end',
   '/api/claude/decide', '/api/claude/answer', '/api/claude/reply', '/api/claude/link', '/api/claude/link-usage',
   '/api/claude/unlink', '/api/claude/run', '/api/claude/run/stop', '/api/claude/attach',
+  '/api/claude/history/delete',
+  '/api/codex/event', '/api/codex/permission', '/api/codex/decide', '/api/codex/link', '/api/codex/unlink',
+  '/api/chatgpt/ask', '/api/chatgpt/cancel', '/api/chatgpt/delete',
   '/search/open', '/search/reveal', '/search/ai',
-  '/disk/scan', '/disk/scan/cancel', '/disk/clean', '/disk/clean/cancel', '/api/disk/advisor',
+  '/disk/scan', '/disk/scan/cancel', '/disk/clean', '/disk/clean/cancel', '/disk/reveal', '/api/disk/advisor',
+  '/api/devclean/run', '/api/devclean/compact', '/api/features/devclean/unlock',
   '/spotlight/claimed', '/api/screenshot', '/api/screenshot/monitor',
   '/api/remote-access/enable', '/api/remote-access/pair', '/api/remote-access/pair/cancel',
   '/api/remote-access/redeem', '/api/remote-access/rename', '/api/remote-access/revoke',
@@ -268,13 +288,19 @@ const GET_READ_EXCEPTIONS = new Set([
   '/api/community/catalog',
   '/api/community/code',
   '/api/community/messages',
+  // A cache miss asks LRCLIB once for the song already playing; the phone is
+  // showing the same lyrics view the PC does.
+  '/api/lyrics',
   '/api/community/installs',
+  // The supporter count on the Settings support page and the December card.
+  '/api/community/support-goal',
   '/api/community/ratings',
   '/api/community/limited-status',
   '/stream/youtube/chat',
   '/api/screenshot',
   '/api/screenshot/monitor',
   '/api/claude/link',
+  '/api/codex/link',
 ]);
 
 /** server.js calls this once at boot with its own CSRF_MUTATION_PATHS. */
@@ -296,6 +322,11 @@ const REMOTE_ADMIN = new Set([
   '/api/remote-access/rename',
   '/api/remote-access/revoke',
   '/api/remote-access/revoke-all',
+  // A UAC prompt on the PC and a supporter-pass device slot: both decisions
+  // belong to the person sitting at the PC, not to a paired phone.
+  '/api/devclean/compact',
+  '/api/features/devclean/unlock',
+  '/api/features/lyrics/unlock',
 ]);
 
 const REMOTE_METHODS = new Set(['GET', 'HEAD', 'POST', 'PATCH', 'DELETE', 'OPTIONS']);

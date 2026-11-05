@@ -6,16 +6,78 @@ try {
       # A folder opens most reliably (and comes to the foreground) via Explorer;
       # files / apps / URLs go through the shell's default handler.
       if (Test-Path -LiteralPath $value -PathType Container) {
+        # The window is created by the running Explorer, which has no right to
+        # take the foreground from whatever the user was looking at, so the
+        # folder opened behind it or minimized (Discord, Oct 2026). Find the
+        # window that showed the folder and bring it forward the way the
+        # Windows tile's focus does. Best effort: the folder is open either way.
+        $shell = New-Object -ComObject Shell.Application
+        $before = @{}
+        foreach ($w in @($shell.Windows())) { try { $before[[int64]$w.HWND] = $true } catch { } }
         Start-Process -FilePath 'explorer.exe' -ArgumentList ('"' + $value + '"')
+        $want = ''
+        try { $want = [IO.Path]::GetFullPath($value).TrimEnd('\') } catch { }
+        $hwnd = [int64]0
+        $deadline = (Get-Date).AddMilliseconds(2500)
+        while ($hwnd -eq 0 -and (Get-Date) -lt $deadline) {
+          Start-Sleep -Milliseconds 100
+          foreach ($w in @($shell.Windows())) {
+            try {
+              if ($w.FullName -notmatch 'explorer\.exe$') { continue }
+              $h = [int64]$w.HWND
+              $here = ''
+              try { $here = ([string]$w.Document.Folder.Self.Path).TrimEnd('\') } catch { }
+              # A new window, or (a tab added to one already open) the window
+              # now showing this folder.
+              if (-not $before.ContainsKey($h) -or ($want -and $here -ieq $want)) { $hwnd = $h; break }
+            } catch { }
+          }
+        }
+        if ($hwnd -ne 0) {
+          try {
+            Add-Type -Namespace XenonDeck -Name Win -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+[DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr h, int cmd);
+[DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+[DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, int flags, UIntPtr extra);
+'@
+            $h = [IntPtr]$hwnd
+            [XenonDeck.Win]::ShowWindowAsync($h, $(if ([XenonDeck.Win]::IsIconic($h)) { 9 } else { 5 })) | Out-Null
+            [XenonDeck.Win]::BringWindowToTop($h) | Out-Null
+            # A lone Alt press lifts the foreground lock for this call, as in
+            # windows.ps1's Focus.
+            [XenonDeck.Win]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
+            [XenonDeck.Win]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
+            [XenonDeck.Win]::SetForegroundWindow($h) | Out-Null
+          } catch { }
+        }
       } else {
         # Set WorkingDirectory to the exe's own folder so apps that look for
         # resources relative to themselves (e.g. OBS locale/) can find them.
         $dir = Split-Path -Parent $value
-        if ($dir -and (Test-Path -LiteralPath $dir -PathType Container)) {
-          Start-Process -FilePath $value -WorkingDirectory $dir
-        } else {
-          Start-Process -FilePath $value
+        $sp = @{ FilePath = $value }
+        if ($dir -and (Test-Path -LiteralPath $dir -PathType Container)) { $sp['WorkingDirectory'] = $dir }
+        # Launch arguments (openApp): $opt is a base64 JSON array, so a quote or a
+        # space inside one argument cannot re-cut the line. Each token is quoted
+        # the way CommandLineToArgvW reads it back, then joined into the single
+        # string Start-Process wants.
+        if ($opt) {
+          # No @(...) around the parse: Windows PowerShell 5.1 emits the array as ONE
+          # object, so wrapping it nests it and every argument fuses into one.
+          $list = ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($opt)))
+          $tokens = foreach ($t in @($list)) {
+            $s = [string]$t
+            if ($s -ne '' -and $s -notmatch '[\s"]') { $s }
+            else {
+              $s = [regex]::Replace($s, '(\\*)"', '$1$1\"')
+              $s = [regex]::Replace($s, '(\\+)$', '$1$1')
+              '"' + $s + '"'
+            }
+          }
+          if ($tokens) { $sp['ArgumentList'] = ($tokens -join ' ') }
         }
+        Start-Process @sp
       }
     }
     'openapp' {

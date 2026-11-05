@@ -48,6 +48,46 @@ function isAllowedAppPath(p, platform) {
   return APP_PATH_EXT.test(v);
 }
 
+// Launch arguments for openApp ("--restore-last-session", "--profile-directory=\"Profile 1\"").
+// One free-text field becomes an argv ARRAY here, at the boundary: whitespace
+// separates tokens, double quotes group, a backslash is literal (Windows paths
+// are full of them). Nothing here ever reaches a shell. Returns null for what
+// cannot be one honest argument list: an unbalanced quote, control characters,
+// or more tokens than any real launch line needs.
+const MAX_LAUNCH_ARGS = 32;
+function parseLaunchArgs(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return [];
+  if (/[\x00-\x1f\x7f]/.test(s)) return null;
+  const out = [];
+  let cur = '';
+  let inQuote = false;
+  let started = false;
+  for (const ch of s) {
+    if (ch === '"') { inQuote = !inQuote; started = true; continue; }
+    if (!inQuote && /\s/.test(ch)) {
+      if (started) { out.push(cur); cur = ''; started = false; }
+      continue;
+    }
+    cur += ch;
+    started = true;
+  }
+  if (inQuote) return null;
+  if (started) out.push(cur);
+  return out.length <= MAX_LAUNCH_ARGS ? out : null;
+}
+
+// Which launch routes can really hand arguments to the program. A Windows .lnk
+// carries its own, a Linux .desktop entry is started by `gio launch` (which takes
+// none): saying so beats starting the app and silently dropping what was typed.
+function appPathTakesArgs(p, platform) {
+  const v = String(p == null ? '' : p).trim();
+  const plat = platform || process.platform;
+  if (plat === 'darwin') return /\.app\/?$/i.test(v) || /\.exe$/i.test(v);
+  if (plat === 'linux') return !/\.desktop$/i.test(v);
+  return /\.exe$/i.test(v);
+}
+
 // macOS hides the `.app` extension everywhere a person can see a path: Finder
 // shows "Helium", so does Get Info, so does the Applications folder. The path a
 // Mac user reads off their own screen and types into a key is therefore
@@ -287,6 +327,7 @@ function isRunnableScriptPath(p, platform) {
 // deps: { fileExists(path)->bool, openExternal(path)->Promise,
 //         mediaAction(cmd)->Promise, micMute(mode)->Promise<{muted}>, volume(mode)->Promise,
 //         obs(requestType, requestData)->Promise, obsNext()->Promise,
+//         pageTurn(target) (relay a page turn to every dashboard),
 //         lighting(action)->Promise<boolean>,
 //         claudeRun({projectId,prompt,model})->Promise<{ok,error}>, claudeStop()->bool,
 //         remote: RemoteControl orchestrator instance (optional, injected after init),
@@ -331,16 +372,19 @@ function createRegistry(deps) {
             p = resolved;
           }
           if (!d.fileExists(p)) return { ok: false, error: 'not_found' };
+          const argv = parseLaunchArgs(action.args);
+          if (!argv) return { ok: false, error: 'bad_args' };
+          if (argv.length && !appPathTakesArgs(p, platform)) return { ok: false, error: 'args_not_supported' };
           // Linux has no registered-handler route to "run this program":
           // xdg-open on a binary or a .desktop file OPENS it as a document (or
           // refuses), so launching goes through its own dep. macOS' `open` and
           // Windows' Start-Process both launch apps natively via openExternal.
           if (platform === 'linux') {
             if (typeof d.launchApp !== 'function') return { ok: false, error: 'unavailable' };
-            const r = await d.launchApp(p);
+            const r = await d.launchApp(p, argv);
             return r && r.ok === false ? { ok: false, error: r.error || 'launch_failed' } : { ok: true };
           }
-          await d.openExternal(p);
+          await d.openExternal(p, argv);
           return { ok: true };
         }
         case 'openFile': {
@@ -457,6 +501,16 @@ function createRegistry(deps) {
           if (typeof d.lockWorkstation !== 'function') return { ok: false, error: 'unavailable' };
           const r = await d.lockWorkstation();
           return r && r.ok === false ? { ok: false, error: r.error || 'failed' } : { ok: true };
+        }
+        case 'dashboardPage': {
+          // A page id or next/prev/back; each dashboard resolves it against its
+          // own layout, so the server only relays the name (never validates it
+          // against pages it cannot see).
+          const target = String(action.page || '').trim();
+          if (!target) return { ok: false, error: 'bad_page' };
+          if (typeof d.pageTurn !== 'function') return { ok: false, error: 'unavailable' };
+          d.pageTurn(target);
+          return { ok: true };
         }
         case 'media': await d.mediaAction(action.cmd); return { ok: true };
         case 'mediaSeek': {
@@ -578,6 +632,18 @@ function createRegistry(deps) {
           const b = String(action.deviceB || '').trim();
           if (!a || !b || a.length > 260 || b.length > 260) return { ok: false, error: 'no_device' };
           const r = await d.audioDeviceToggle(a, b);
+          return r && r.ok === false ? { ok: false, error: r.error || 'audio_device_failed' } : { ok: true };
+        }
+        case 'audioDeviceFirst': {
+          // An ordered list of outputs: the first one connected right now wins.
+          // Same shape check as audioDevice for each id given; device3 is optional
+          // (validateAction drops it when empty), one id is enough. Which device it
+          // ends on is decided in the dep against the live list (pickFirstConnected).
+          if (typeof d.audioDeviceFirst !== 'function') return { ok: false, error: 'unavailable' };
+          const ids = [action.device1, action.device2, action.device3]
+            .map((v) => String(v == null ? '' : v).trim()).filter(Boolean);
+          if (!ids.length || ids.some((v) => v.length > 260)) return { ok: false, error: 'no_device' };
+          const r = await d.audioDeviceFirst(ids);
           return r && r.ok === false ? { ok: false, error: r.error || 'audio_device_failed' } : { ok: true };
         }
         case 'obsSceneNext': {
@@ -927,4 +993,16 @@ function pickToggleDevice(a, b, speakers) {
   return current && current.id === first.id ? second : first;
 }
 
-module.exports = { createRegistry, isHttpUrl, isAllowedAppPath, completeDarwinBundle, completePosixTypedPath, completeWindowsEnvPath, isBlockedOpenPath, isRunnableScriptPath, isAppUserModelId, isSteamAppId, normalizeUrl, normalizeKeys, resolveOutputDevice, pickToggleDevice };
+// The output an ordered list lands on: the first id that is in the live list,
+// each through the same check as a single device (a microphone id never
+// resolves). Null when none of them is connected, so the key can say so
+// instead of picking something that was not on the list.
+function pickFirstConnected(ids, speakers) {
+  for (const id of Array.isArray(ids) ? ids : []) {
+    const hit = resolveOutputDevice(id, speakers);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+module.exports = { createRegistry, isHttpUrl, isAllowedAppPath, parseLaunchArgs, appPathTakesArgs,completeDarwinBundle, completePosixTypedPath, completeWindowsEnvPath, isBlockedOpenPath, isRunnableScriptPath, isAppUserModelId, isSteamAppId, normalizeUrl, normalizeKeys, resolveOutputDevice, pickToggleDevice, pickFirstConnected };

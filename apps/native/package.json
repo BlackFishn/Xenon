@@ -1,6 +1,6 @@
 {
   "name": "@xenon/native",
-  "version": "4.11.10",
+  "version": "4.11.13",
   "private": true,
   "description": "Xenon native kiosk app (Tauri) for any screen you give it, a CORSAIR Xeneon Edge included. Renders the same dashboard as the browser and the iCUE iframe, loaded from the local backend service.",
   "license": "SEE LICENSE IN ../../LICENSE",
@@ -9,7 +9,9 @@
     "dev": "tauri dev",
     "build": "tauri build",
     "build:mac": "tauri build --target universal-apple-darwin",
-    "build:linux": "NO_STRIP=true tauri build"
+    "build:linux": "NO_STRIP=true tauri build",
+    "build:arch": "NO_STRIP=true tauri build --no-bundle && node ../../tools/package-arch.mjs",
+    "package:arch": "node ../../tools/package-arch.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.4"

@@ -9,7 +9,7 @@
 //             'haEntity' | 'wlChannel' | 'lightDevice' | 'sound' (picker controls).
 
 const ACTION_CATALOG = [
-  { type: 'openApp',  group: 'system', labelKey: 'deck_act_openApp',  params: [{ name: 'path', kind: 'path' }] },
+  { type: 'openApp',  group: 'system', labelKey: 'deck_act_openApp',  params: [{ name: 'path', kind: 'path' }, { name: 'args', kind: 'text', optional: true, maxLen: 500, labelKey: 'deck_param_app_args' }] },
   { type: 'openFile', group: 'system', labelKey: 'deck_act_openFile', params: [{ name: 'path', kind: 'path' }] },
   { type: 'runScript', group: 'system', labelKey: 'deck_act_runScript', params: [{ name: 'path', kind: 'path' }, { name: 'window', kind: 'select', options: ['visible', 'hidden'] }] },
   { type: 'openStoreApp', group: 'system', requires: 'powershell', labelKey: 'deck_act_openStoreApp', params: [{ name: 'appId', kind: 'storeApp' }] },
@@ -33,6 +33,11 @@ const ACTION_CATALOG = [
   { type: 'phoneCall', group: 'system', requires: 'phone', labelKey: 'deck_act_phoneCall', params: [{ name: 'number', kind: 'text', maxLen: 40 }] },
   { type: 'phoneMessage', group: 'system', requires: 'phone', labelKey: 'deck_act_phoneMessage', params: [{ name: 'number', kind: 'text', maxLen: 40 }, { name: 'text', kind: 'text', maxLen: 1000 }] },
   { type: 'lockWorkstation', group: 'system', labelKey: 'deck_act_lockWorkstation', params: [] },
+  // Turn the dashboard to one of its own pages: a page id, or next / prev / back.
+  // Runs in the browser that pressed the key (deck.js) so only THAT screen turns;
+  // a surface with no pager (the Virtual Deck window) falls through to the server
+  // registry, which relays it to every dashboard like a global page shortcut.
+  { type: 'dashboardPage', group: 'system', labelKey: 'deck_act_dashboardPage', params: [{ name: 'page', kind: 'dashboardPage', maxLen: 64 }] },
   { type: 'webhook',  group: 'system', labelKey: 'deck_act_webhook',  params: [{ name: 'url', kind: 'url' }, { name: 'method', kind: 'select', options: ['GET', 'POST'] }, { name: 'body', kind: 'text' }] },
   { type: 'media',    group: 'media',  requires: 'media', labelKey: 'deck_act_media',    params: [{ name: 'cmd',  kind: 'select', options: ['playpause', 'next', 'previous'] }] },
   // SDK-only absolute timeline seek. A separate hidden type keeps the Deck
@@ -80,6 +85,11 @@ const ACTION_CATALOG = [
   // the same live-list check as the key above; the key's state follows which
   // output is really active (deck-model 'outputDevice'), so its second face
   // is right even when the output is changed from the OS instead.
+  // An ordered list of outputs: the key lands on the first one connected right
+  // now (headphones when they are on, speakers otherwise). Same picker and live
+  // check; the third choice is optional. Its face lights while the first choice
+  // is the output in use.
+  { type: 'audioDeviceFirst', group: 'audio', requires: 'soundVolumeView', labelKey: 'deck_act_audioDeviceFirst', params: [{ name: 'device1', kind: 'audioDevice' }, { name: 'device2', kind: 'audioDevice' }, { name: 'device3', kind: 'audioDevice', optional: true }] },
   { type: 'audioDeviceToggle', group: 'audio', requires: 'soundVolumeView', labelKey: 'deck_act_audioDeviceToggle', params: [{ name: 'deviceA', kind: 'audioDevice' }, { name: 'deviceB', kind: 'audioDevice' }] },
   { type: 'obsScene',  group: 'obs', labelKey: 'deck_act_obsScene',  params: [{ name: 'scene',  kind: 'obsScene' }] },
   { type: 'obsSceneNext', group: 'obs', labelKey: 'deck_act_obsSceneNext', params: [] },
@@ -129,10 +139,10 @@ const ACTION_CATALOG = [
   { type: 'spotifyQueueUri', group: 'spotify', hidden: true, labelKey: 'deck_act_spotifyQueueUri', params: [{ name: 'uri', kind: 'text', maxLen: 64 }] },
   { type: 'spotifyDevice',   group: 'spotify', labelKey: 'deck_act_spotifyDevice',   params: [{ name: 'device', kind: 'text' }] },
   { type: 'haToggle',      group: 'homeassistant', labelKey: 'deck_act_haToggle',      params: [{ name: 'entity', kind: 'haEntity' }, { name: 'mode', kind: 'select', options: ['toggle', 'on', 'off'] }] },
-  { type: 'haLight',       group: 'homeassistant', labelKey: 'deck_act_haLight',       params: [{ name: 'entity', kind: 'haEntity', domain: 'light' }, { name: 'mode', kind: 'select', options: ['toggle', 'on', 'off', 'brighter', 'dimmer', 'brightness'] }, { name: 'value', kind: 'text', optional: true }] },
-  { type: 'haMedia',       group: 'homeassistant', labelKey: 'deck_act_haMedia',       params: [{ name: 'entity', kind: 'haEntity', domain: 'media_player' }, { name: 'cmd', kind: 'select', options: ['playpause', 'next', 'previous', 'stop', 'volume_up', 'volume_down', 'mute', 'unmute'] }] },
-  { type: 'haCover',       group: 'homeassistant', labelKey: 'deck_act_haCover',       params: [{ name: 'entity', kind: 'haEntity', domain: 'cover' }, { name: 'cmd', kind: 'select', options: ['open', 'close', 'stop', 'toggle'] }] },
-  { type: 'haClimate',     group: 'homeassistant', labelKey: 'deck_act_haClimate',     params: [{ name: 'entity', kind: 'haEntity', domain: 'climate' }, { name: 'mode', kind: 'select', options: ['off', 'heat', 'cool', 'auto', 'dry', 'fan_only'] }] },
+  { type: 'haLight',       group: 'homeassistant', labelKey: 'deck_act_haLight',       params: [{ name: 'entity', kind: 'haEntity', domain: 'light' }, { name: 'mode', kind: 'select', options: ['toggle', 'on', 'off', 'brighter', 'dimmer', 'brightness', 'kelvin'] }, { name: 'value', kind: 'text', optional: true }] },
+  { type: 'haMedia',       group: 'homeassistant', labelKey: 'deck_act_haMedia',       params: [{ name: 'entity', kind: 'haEntity', domain: 'media_player' }, { name: 'cmd', kind: 'select', options: ['playpause', 'next', 'previous', 'stop', 'volume_up', 'volume_down', 'mute', 'unmute', 'volume_set'] }, { name: 'value', kind: 'text', optional: true }] },
+  { type: 'haCover',       group: 'homeassistant', labelKey: 'deck_act_haCover',       params: [{ name: 'entity', kind: 'haEntity', domain: 'cover' }, { name: 'cmd', kind: 'select', options: ['open', 'close', 'stop', 'toggle', 'position'] }, { name: 'value', kind: 'text', optional: true }] },
+  { type: 'haClimate',     group: 'homeassistant', labelKey: 'deck_act_haClimate',     params: [{ name: 'entity', kind: 'haEntity', domain: 'climate' }, { name: 'mode', kind: 'select', options: ['off', 'heat', 'cool', 'auto', 'dry', 'fan_only', 'temperature'] }, { name: 'value', kind: 'text', optional: true }] },
   { type: 'haFan',         group: 'homeassistant', labelKey: 'deck_act_haFan',         params: [{ name: 'entity', kind: 'haEntity', domain: 'fan' }, { name: 'mode', kind: 'select', options: ['toggle', 'on', 'off'] }] },
   { type: 'haVacuum',      group: 'homeassistant', labelKey: 'deck_act_haVacuum',      params: [{ name: 'entity', kind: 'haEntity', domain: 'vacuum' }, { name: 'cmd', kind: 'select', options: ['start', 'pause', 'stop', 'return', 'locate'] }] },
   { type: 'haLock',        group: 'homeassistant', labelKey: 'deck_act_haLock',        params: [{ name: 'entity', kind: 'haEntity', domain: 'lock' }, { name: 'mode', kind: 'select', options: ['lock', 'unlock'] }] },

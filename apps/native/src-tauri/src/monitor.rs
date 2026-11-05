@@ -19,7 +19,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::thread;
-use std::time::Duration;
+#[cfg(target_os = "macos")]
+use std::time::Instant;
+use std::time::{Duration, SystemTime};
 use tauri::{AppHandle, LogicalSize, Manager, Monitor, PhysicalSize, WebviewWindow};
 
 use crate::prefs;
@@ -61,11 +63,12 @@ fn game_mode() -> bool {
 /// driving the screen the kiosk is on. Only Windows pins anything (see gpu.rs), so
 /// elsewhere the answer is always "no disagreement".
 #[cfg(windows)]
-fn gpu_mismatch() -> bool {
-    crate::gpu::mismatch()
+fn gpu_mismatch(window: &WebviewWindow) -> bool {
+    let presenting = current_of(window).and_then(|m| m.name().cloned());
+    crate::gpu::mismatch(presenting.as_deref())
 }
 #[cfg(not(windows))]
-fn gpu_mismatch() -> bool {
+fn gpu_mismatch(_window: &WebviewWindow) -> bool {
     false
 }
 
@@ -152,6 +155,61 @@ fn placement_cache() -> PlacementCache {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone()
+}
+
+// ── Screen reads, always made on the main thread ────────────────────────────
+//
+// Every monitor read in this crate goes through these five, never through
+// `available_monitors()` / `primary_monitor()` / `current_monitor()` directly.
+// Tauri hands the QUERY to the event loop but builds the `Monitor` it returns on
+// the CALLING thread, and on Linux that build asks GDK for the work area: an X11
+// request on the connection the main thread is reading events from. The app-level
+// variants do not even hop. From the watchdog (every 3 s) that is two threads on
+// one Xlib connection, and Xlib aborts the process with "[xcb] Unknown request in
+// queue while dequeuing" — which is how the AppImage died at launch in the
+// AppImageHub test (PR #7417). On macOS the same build reads NSScreen, which
+// AppKit also expects on the main thread. `run_on_main_thread` runs inline when
+// already there, so these are safe from any thread, and from a background thread
+// they block exactly as the window getters they replace already did.
+
+fn on_main<R, F>(app: &AppHandle, f: F) -> Option<R>
+where
+    R: Send + 'static,
+    F: FnOnce() -> R + Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(f());
+    })
+    .ok()?;
+    // An event loop that has already exited drops the task unrun: `recv` then
+    // fails instead of waiting forever.
+    rx.recv().ok()
+}
+
+fn monitors_of(window: &WebviewWindow) -> Option<Vec<Monitor>> {
+    let w = window.clone();
+    on_main(window.app_handle(), move || w.available_monitors().ok()).flatten()
+}
+
+fn primary_of(window: &WebviewWindow) -> Option<Monitor> {
+    let w = window.clone();
+    on_main(window.app_handle(), move || w.primary_monitor().ok().flatten()).flatten()
+}
+
+fn current_of(window: &WebviewWindow) -> Option<Monitor> {
+    let w = window.clone();
+    on_main(window.app_handle(), move || w.current_monitor().ok().flatten()).flatten()
+}
+
+fn app_monitors(app: &AppHandle) -> Vec<Monitor> {
+    let a = app.clone();
+    on_main(app, move || a.available_monitors().unwrap_or_default()).unwrap_or_default()
+}
+
+pub(crate) fn app_primary(app: &AppHandle) -> Option<Monitor> {
+    let a = app.clone();
+    on_main(app, move || a.primary_monitor().ok().flatten()).flatten()
 }
 
 /// Mark this session as a deliberate, user-initiated launch, so phone mode does
@@ -258,6 +316,132 @@ const WATCHDOG_INTERVAL: Duration = Duration::from_secs(3);
 /// legitimately needs repairing is left unrepaired.
 const MAX_REPIN_ATTEMPTS: u32 = 5;
 
+/// After the quick attempts, one more full re-placement this often while the
+/// window is still off its screen, instead of never again. Reported from a Mac:
+/// after every wake from sleep the dashboard sat on the main screen as a small
+/// window until it was moved back by hand. The quick attempts had run out while
+/// the displays were still coming back, the layout then read the same as before
+/// the sleep (so no "topology change" re-armed them), and nothing ever tried again.
+/// Once a minute cannot thrash a display that is flapping, and it does not apply
+/// in a game (see `repin_action`).
+const SLOW_REPIN_EVERY: Duration = Duration::from_secs(60);
+
+/// A gap between two watchdog ticks longer than this means the machine slept.
+/// Measured on the wall clock: the monotonic clock stops during sleep on macOS,
+/// so an `Instant` would see three seconds where the user saw a night.
+const SLEEP_GAP: Duration = Duration::from_secs(20);
+
+/// After a wake, how long the attempt cap is lifted: the time a display takes to
+/// come back from sleep, renegotiate its link and report its real mode. The Edge
+/// can be the last screen to do so.
+const SETTLE_AFTER_WAKE: Duration = Duration::from_secs(30);
+
+/// Slow retries write to the crash log at most this often, so a window that can
+/// never land (a display that is gone for good) does not fill the file.
+const SLOW_REPIN_LOG_EVERY: Duration = Duration::from_secs(30 * 60);
+
+/// How long a cross-screen move on macOS may take before the window is sized. See
+/// `wait_until_on`.
+#[cfg(target_os = "macos")]
+const LANDING_WAIT: Duration = Duration::from_millis(600);
+#[cfg(target_os = "macos")]
+const LANDING_POLL: Duration = Duration::from_millis(50);
+
+/// The length of the sleep between two ticks, or `None` when there was none (an
+/// ordinary tick, or a clock that was set back, which is not a sleep).
+fn slept(prev: SystemTime, now: SystemTime) -> Option<Duration> {
+    match now.duration_since(prev) {
+        Ok(gap) if gap > SLEEP_GAP => Some(gap),
+        _ => None,
+    }
+}
+
+/// Whether a re-placement goes in the crash log: every quick attempt, and a slow
+/// retry only when the last logged one is old enough.
+fn should_log_repin(attempts: u32, since_last_slow_log: Option<Duration>) -> bool {
+    attempts < MAX_REPIN_ATTEMPTS || since_last_slow_log.map_or(true, |d| d >= SLOW_REPIN_LOG_EVERY)
+}
+
+/// What one watchdog tick does about a kiosk or full-screen window.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum Repin {
+    Nothing,
+    /// The whole re-placement: leave full-screen, move, re-enter, maybe focus.
+    Full,
+    /// Slide the window back onto its screen and nothing else (`move_back_quietly`).
+    Quiet,
+}
+
+/// The one rule for re-placing a window that should own a whole screen.
+///
+/// Outside a game: re-place on a topology change, or while the window sits off
+/// its screen, up to the attempt cap.
+///
+/// During a game, a topology change alone is left alone. It is almost always the
+/// game switching resolution for exclusive full-screen, and a full re-place there
+/// once bounced the game in and out of full-screen until Xenon was force-quit
+/// (see the Edge branch of `start_watchdog`). But a window that has LEFT its
+/// screen is still brought back, quietly. Windows moves windows off a display
+/// whose mode changes under them, and a game turning HDR on does exactly that:
+/// reported on Discord with Control Resonant in borderless full-screen, the
+/// dashboard moved to the main display and stayed there, behind the game, until
+/// Alt+Tab ended game mode. Turning HDR on from Windows settings moved it too,
+/// and it came back a few seconds later, because nothing was being played.
+///
+/// `since_last` is the time since the previous attempt. Past the cap, a window
+/// still off its screen gets one full attempt per `SLOW_REPIN_EVERY`, outside a
+/// game only: in a game the quick, quiet attempts are all there is.
+fn repin_action(gaming: bool, drifted: bool, topology_changed: bool, attempts: u32, since_last: Option<Duration>) -> Repin {
+    let quick = drifted && attempts < MAX_REPIN_ATTEMPTS;
+    let slow = drifted && since_last.map_or(false, |d| d >= SLOW_REPIN_EVERY);
+    if gaming {
+        if quick { Repin::Quiet } else { Repin::Nothing }
+    } else if topology_changed || quick || slow {
+        Repin::Full
+    } else {
+        Repin::Nothing
+    }
+}
+
+/// Put the window back over the whole of `monitor` without activating it, without
+/// changing its z-order and without a full-screen transition: a single
+/// `SetWindowPos` with `SWP_NOACTIVATE`. This is what makes it safe mid-game.
+/// `place_on_edge` drops and re-enters full-screen and may raise the window, and
+/// either can take the foreground from the game; a plain move takes nothing.
+/// The window keeps its borderless kiosk chrome while it is moved, so covering
+/// the screen's rectangle looks exactly like full-screen on it. When game mode
+/// ends, the ordinary re-pin is free to run again.
+#[cfg(windows)]
+fn move_back_quietly(window: &WebviewWindow, monitor: &Monitor) {
+    #[link(name = "user32")]
+    extern "system" {
+        fn SetWindowPos(hwnd: isize, after: isize, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> i32;
+    }
+    const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_NOACTIVATE: u32 = 0x0010;
+    const SWP_NOOWNERZORDER: u32 = 0x0200;
+    let Ok(hwnd) = window.hwnd() else { return };
+    // Physical pixels on both sides: Monitor reports them, and the process is
+    // per-monitor DPI aware, which is what SetWindowPos then takes.
+    let p = monitor.position();
+    let s = monitor.size();
+    unsafe {
+        SetWindowPos(
+            hwnd.0 as isize,
+            0,
+            p.x,
+            p.y,
+            s.width as i32,
+            s.height as i32,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+        );
+    }
+}
+
+/// Game mode only exists on Windows (see `game_mode`), so this never runs elsewhere.
+#[cfg(not(windows))]
+fn move_back_quietly(_window: &WebviewWindow, _monitor: &Monitor) {}
+
 /// True when a monitor's physical size matches the Edge panel. Some hubs also let
 /// us confirm via the device name, but the exact panel size is the reliable
 /// signal across DisplayPort/USB-C connections.
@@ -279,7 +463,7 @@ fn is_edge(monitor: &Monitor) -> bool {
 /// wrong or unavailable, the worst case is the old behaviour rather than no Edge
 /// at all.
 fn find_edge(window: &WebviewWindow) -> Option<Monitor> {
-    find_edge_in(window.available_monitors().ok()?)
+    find_edge_in(monitors_of(window)?)
 }
 
 /// The same search over a list read from anywhere — the window, or the app handle
@@ -300,9 +484,9 @@ fn find_edge_in(monitors: Vec<Monitor>) -> Option<Monitor> {
 
 /// Whether the window currently sits on the given monitor (compared by origin).
 fn window_is_on(window: &WebviewWindow, monitor: &Monitor) -> bool {
-    match window.current_monitor() {
-        Ok(Some(current)) => current.position() == monitor.position(),
-        _ => false,
+    match current_of(window) {
+        Some(current) => current.position() == monitor.position(),
+        None => false,
     }
 }
 
@@ -403,9 +587,42 @@ fn place_on_edge(window: &WebviewWindow, edge: &Monitor, focus: bool) {
     let _ = window.set_decorations(false);
     let _ = window.set_skip_taskbar(true);
     let _ = window.set_position(point(rect.x, rect.y));
+    #[cfg(target_os = "macos")]
+    if !wait_until_on(window, edge) {
+        crate::crash_log::note("display", "the window had not reached its screen after 600 ms; sizing it anyway");
+    }
     enter_borderless_fullscreen(window, edge);
     if focus {
         let _ = window.set_focus();
+    }
+}
+
+/// Let a cross-screen move land before the window is sized.
+///
+/// tao queues `set_position` and `set_size` on the main queue, and after a wake
+/// from sleep the resize could be applied while the window was still on the main
+/// screen: AppKit then fitted it to that screen and it stayed there as a small
+/// window. Reported from a Mac, together with the way out the reporter found by
+/// hand: put the window on the Edge first, then choose the Edge. This is that,
+/// automatically: wait until the window really is on the target, then size it.
+///
+/// Only off the main thread (the watchdog). On the main thread the queued move
+/// cannot run while we wait, so waiting would only freeze the app; there the
+/// sizing follows straight away, as before.
+#[cfg(target_os = "macos")]
+fn wait_until_on(window: &WebviewWindow, monitor: &Monitor) -> bool {
+    if thread::current().name() == Some("main") {
+        return window_is_on(window, monitor);
+    }
+    let deadline = Instant::now() + LANDING_WAIT;
+    loop {
+        if window_is_on(window, monitor) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(LANDING_POLL);
     }
 }
 
@@ -428,8 +645,61 @@ fn enter_borderless_fullscreen(window: &WebviewWindow, monitor: &Monitor) {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn enter_borderless_fullscreen(window: &WebviewWindow, _monitor: &Monitor) {
+fn enter_borderless_fullscreen(window: &WebviewWindow, monitor: &Monitor) {
+    // On Wayland `set_fullscreen(true)` names no output, so the compositor keeps the
+    // window on the one it was mapped on (a client cannot position itself there, so
+    // the set_position before this call is ignored). Naming the output is the only
+    // way to land on the Edge; on X11 the same call sets _NET_WM_FULLSCREEN_MONITORS.
+    #[cfg(target_os = "linux")]
+    if fullscreen_on_gdk_monitor(window, monitor) {
+        return;
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = monitor;
     let _ = window.set_fullscreen(true);
+}
+
+/// Fullscreen on the GDK monitor at `monitor`'s origin. False when it cannot be
+/// matched (or the window has no GDK window yet), so the caller falls back to the
+/// plain call. GTK is single-threaded and the watchdog calls this from its own
+/// thread, so the GTK half always runs on the main thread (see `on_main`).
+#[cfg(target_os = "linux")]
+fn fullscreen_on_gdk_monitor(window: &WebviewWindow, monitor: &Monitor) -> bool {
+    let w = window.clone();
+    let target = *monitor.position();
+    on_main(window.app_handle(), move || gdk_fullscreen_on(&w, target)).unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+fn gdk_fullscreen_on(window: &WebviewWindow, target: tauri::PhysicalPosition<i32>) -> bool {
+    use gdk::prelude::MonitorExt;
+    use gtk::prelude::WidgetExt;
+
+    // Redundant inside this Linux-only fn, but check-platform-apis reads only the
+    // lines just above a gated API, and a name-wide exemption would hide a later
+    // ungated call.
+    #[cfg(target_os = "linux")]
+    let Ok(gtk_win) = window.gtk_window() else { return false };
+    if !gtk_win.is_realized() {
+        gtk_win.realize();
+    }
+    let display = gtk_win.display();
+    // Tauri reports a monitor's origin in PHYSICAL pixels, GDK's logical geometry
+    // times that monitor's own scale (how tao builds it), so compare in those units:
+    // a logical-only compare misses every HiDPI screen and quietly falls back.
+    let idx = (0..display.n_monitors()).find(|&i| {
+        display.monitor(i).is_some_and(|m| {
+            let (g, s) = (m.geometry(), m.scale_factor());
+            g.x() * s == target.x && g.y() * s == target.y
+        })
+    });
+    match (idx, gtk_win.window()) {
+        (Some(i), Some(gdk_window)) => {
+            gdk_window.fullscreen_on_monitor(i);
+            true
+        }
+        _ => false,
+    }
 }
 
 /// A window sized to the screen that HOSTS it: the monitor's own proportions, at
@@ -475,24 +745,55 @@ fn windowed_size_for(monitor: &Monitor) -> LogicalSize<f64> {
 /// second-screen display, which advertises 2560×720 — so a user who had chosen a
 /// real monitor got the full-screen flash this is meant to remove.
 pub fn initial_window(app: &AppHandle, prefs: &prefs::DisplayPrefs) -> (f64, f64, bool) {
-    let monitors = app.available_monitors().unwrap_or_default();
-    let primary = app.primary_monitor().ok().flatten();
+    let (target, fullscreen) = initial_target(app, prefs);
+    match target {
+        Some(m) => {
+            if fullscreen {
+                let scale = m.scale_factor();
+                let size = m.size();
+                (
+                    size.width as f64 / scale,
+                    size.height as f64 / scale,
+                    true,
+                )
+            } else {
+                let size = windowed_size_for(&m);
+                (size.width, size.height, false)
+            }
+        }
+        // No monitor answered — the Edge's own size is as good a guess as any,
+        // and `place_now` corrects it as soon as a screen can be read.
+        None => (EDGE_WIDTH as f64, EDGE_HEIGHT as f64, false),
+    }
+}
+
+/// The OS name of the screen the window is about to open on, for `gpu::arm`:
+/// the render GPU has to be the one driving THAT screen, and it is chosen before
+/// any window exists.
+pub fn initial_screen_name(app: &AppHandle, prefs: &prefs::DisplayPrefs) -> Option<String> {
+    initial_target(app, prefs).0.and_then(|m| m.name().cloned())
+}
+
+/// `(target screen, kiosk-or-fullscreen)` before the window exists, mirroring
+/// `resolve` (see `initial_window` for why it must).
+fn initial_target(app: &AppHandle, prefs: &prefs::DisplayPrefs) -> (Option<Monitor>, bool) {
+    let monitors = app_monitors(app);
+    let primary = app_primary(app);
     // (target screen, kiosk-or-fullscreen), mirroring `resolve`.
     let (target, fullscreen) = match prefs.placement {
         // Nothing on this PC. A deliberate launch still shows an ORDINARY window
         // (see `apply_target`), so size it like one and never full-screen.
         Placement::Phone => (primary, false),
         Placement::Screen => {
-            let chosen = prefs
-                .monitor
-                .as_deref()
-                .and_then(|id| find_by_id(&monitors, id))
-                .or_else(|| {
-                    prefs.monitor_fingerprint.as_deref().and_then(|fp| {
-                        monitors.iter().position(|m| fingerprint(m) == fp)
-                    })
-                })
-                .map(|i| monitors[i].clone());
+            // The same rule as `chosen_monitor`, so the first frame and the
+            // first placement agree on the screen.
+            let chosen = pick_in(
+                &monitors,
+                prefs.monitor.as_deref(),
+                prefs.monitor_fingerprint.as_deref(),
+            )
+            .index()
+            .map(|i| monitors[i].clone());
             match chosen {
                 // The Edge chosen by name is the kiosk; any other screen honours
                 // the saved full-screen preference.
@@ -519,26 +820,7 @@ pub fn initial_window(app: &AppHandle, prefs: &prefs::DisplayPrefs) -> (f64, f64
             }
         },
     };
-    let target = target.or_else(|| monitors.into_iter().next());
-    match target {
-        Some(m) => {
-            if fullscreen {
-                let scale = m.scale_factor();
-                let size = m.size();
-                (
-                    size.width as f64 / scale,
-                    size.height as f64 / scale,
-                    true,
-                )
-            } else {
-                let size = windowed_size_for(&m);
-                (size.width, size.height, false)
-            }
-        }
-        // No monitor answered — the Edge's own size is as good a guess as any,
-        // and `place_now` corrects it as soon as a screen can be read.
-        None => (EDGE_WIDTH as f64, EDGE_HEIGHT as f64, false),
-    }
+    (target.or_else(|| monitors.into_iter().next()), fullscreen)
 }
 
 /// Ordinary, controllable desktop window on the given monitor: a title bar, a
@@ -566,17 +848,19 @@ fn place_fullscreen_on(window: &WebviewWindow, monitor: &Monitor) {
     let _ = window.set_skip_taskbar(false);
     let rect = monitor_rect(monitor);
     let _ = window.set_position(point(rect.x, rect.y));
+    // macOS takes a window full screen on the display it is on NOW, so the same
+    // wait as `place_on_edge`: the move first, then full screen.
+    #[cfg(target_os = "macos")]
+    if !wait_until_on(window, monitor) {
+        crate::crash_log::note("display", "the window had not reached its screen after 600 ms; going full screen anyway");
+    }
     let _ = window.set_fullscreen(true);
     let _ = window.set_focus();
 }
 
 /// The primary monitor, or the first available one if the primary is unknown.
 fn primary_or_first(window: &WebviewWindow) -> Option<Monitor> {
-    window
-        .primary_monitor()
-        .ok()
-        .flatten()
-        .or_else(|| window.available_monitors().ok().and_then(|m| m.into_iter().next()))
+    primary_of(window).or_else(|| monitors_of(window).and_then(|m| m.into_iter().next()))
 }
 
 /// Prefix marking a display id that is a PLACE, not an OS name (see `display_ids`).
@@ -631,7 +915,7 @@ fn display_ids(monitors: &[Monitor]) -> Vec<String> {
 /// The id of one specific monitor, computed in the context of every monitor
 /// attached with it. Matched by ORIGIN, the one property no two screens share.
 fn id_of(window: &WebviewWindow, target: &Monitor) -> Option<String> {
-    let monitors = window.available_monitors().ok()?;
+    let monitors = monitors_of(window)?;
     let i = monitors
         .iter()
         .position(|m| m.position() == target.position())?;
@@ -645,7 +929,7 @@ fn id_of(window: &WebviewWindow, target: &Monitor) -> Option<String> {
 /// name was unique at the time): a plain OS name that has since stopped being
 /// unique still finds its screen instead of falling through to "not connected".
 fn monitor_by_id(window: &WebviewWindow, id: &str) -> Option<Monitor> {
-    let monitors = window.available_monitors().ok()?;
+    let monitors = monitors_of(window)?;
     let i = find_by_id(&monitors, id)?;
     monitors.into_iter().nth(i)
 }
@@ -680,21 +964,163 @@ fn fingerprint(monitor: &Monitor) -> String {
     format!("{}x{}@{}", s.width, s.height, monitor.scale_factor())
 }
 
-fn monitor_by_fingerprint(window: &WebviewWindow, fp: &str) -> Option<Monitor> {
-    window
-        .available_monitors()
-        .ok()?
-        .into_iter()
-        .find(|m| fingerprint(m) == fp)
+/// How a saved screen choice resolved against the screens attached right now.
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum Pick {
+    /// The saved id, and that screen still has the shape that was chosen.
+    Name(usize),
+    /// Found by its shape. `moved` means the saved id now names a DIFFERENT
+    /// screen, the Windows renumbering below.
+    Shape { index: usize, moved: bool },
+    /// The saved id names a screen of another shape, and the screen that was
+    /// chosen is the Edge, which is not connected yet. Wait for it.
+    Waiting,
+    /// The saved id names a screen of another shape, no screen has the saved
+    /// shape, and that shape is an ordinary monitor: most likely its resolution
+    /// was changed, so it is still the one.
+    Resized(usize),
+    /// Neither the id nor the shape is attached.
+    Missing,
 }
 
-/// Resolve the screen the user explicitly chose: by name first, then by shape.
-/// `None` means it is genuinely not connected right now.
-fn chosen_monitor(window: &WebviewWindow, cache: &PlacementCache) -> Option<Monitor> {
-    if let Some(found) = cache.monitor.as_deref().and_then(|n| monitor_by_id(window, n)) {
-        return Some(found);
+impl Pick {
+    fn index(self) -> Option<usize> {
+        match self {
+            Pick::Name(i) | Pick::Shape { index: i, .. } | Pick::Resized(i) => Some(i),
+            Pick::Waiting | Pick::Missing => None,
+        }
     }
-    cache.fingerprint.as_deref().and_then(|fp| monitor_by_fingerprint(window, fp))
+}
+
+/// `"2560x720@1"` → `"2560x720"`: the size alone, which a change of Windows
+/// scaling leaves alone.
+fn fp_size(fp: &str) -> &str {
+    fp.split('@').next().unwrap_or(fp)
+}
+
+/// True when a saved fingerprint is the shape of a Xeneon Edge.
+fn fp_is_edge(fp: &str) -> bool {
+    let mut it = fp_size(fp).split('x').map(|n| n.parse::<u32>());
+    match (it.next(), it.next(), it.next()) {
+        (Some(Ok(w)), Some(Ok(h)), None) => is_edge_size(PhysicalSize::new(w, h)),
+        _ => false,
+    }
+}
+
+/// Which screen is the one the user chose, given the screen the saved id names
+/// (`by_name`), the fingerprint of every screen attached (`shapes`) and the
+/// fingerprint saved with the choice (`saved`).
+///
+/// The id alone is not enough on Windows. There it is `\\.\DISPLAYn`, numbered
+/// in the order the screens come up, and after a restart the Edge often comes up
+/// last: "Display 2" is then the MAIN screen, and the kiosk opened on it as a
+/// small window and stayed there, because the shape was only consulted when no
+/// screen had the id at all. Reported on Discord: "it opens as a window on my
+/// main screen and not in fullscreen on my Xeneon Edge". So the id has to agree
+/// with the shape, and when it does not, the shape wins.
+fn pick_chosen(by_name: Option<usize>, shapes: &[String], saved: Option<&str>) -> Pick {
+    // A choice saved before shapes were recorded: the id is all there is.
+    let Some(saved) = saved else {
+        return by_name.map_or(Pick::Missing, Pick::Name);
+    };
+    if let Some(i) = by_name {
+        if shapes.get(i).map_or(false, |s| fp_size(s) == fp_size(saved)) {
+            return Pick::Name(i);
+        }
+    }
+    let found = shapes
+        .iter()
+        .position(|s| s == saved)
+        .or_else(|| shapes.iter().position(|s| fp_size(s) == fp_size(saved)));
+    if let Some(index) = found {
+        return Pick::Shape { index, moved: by_name.is_some() };
+    }
+    match by_name {
+        None => Pick::Missing,
+        // Putting the kiosk on a screen the user did not pick is the one outcome
+        // this must never have; the Edge arriving a few seconds late is normal.
+        Some(_) if fp_is_edge(saved) => Pick::Waiting,
+        Some(i) => Pick::Resized(i),
+    }
+}
+
+/// `pick_chosen` over a live monitor list.
+fn pick_in(monitors: &[Monitor], id: Option<&str>, saved: Option<&str>) -> Pick {
+    let by_name = id.and_then(|id| find_by_id(monitors, id));
+    let shapes: Vec<String> = monitors.iter().map(fingerprint).collect();
+    pick_chosen(by_name, &shapes, saved)
+}
+
+/// The last unusual `Pick` written to the crash log, so the watchdog, which
+/// resolves the choice every 3 seconds, says it once and not every tick.
+static LAST_PICK_NOTE: Mutex<String> = Mutex::new(String::new());
+
+fn note_pick(pick: Pick, monitors: &[Monitor], id: Option<&str>, saved: Option<&str>) {
+    let describe = |i: usize| {
+        monitors.get(i).map_or_else(String::new, |m| {
+            format!("{} {}", m.name().map(String::as_str).unwrap_or("?"), fingerprint(m))
+        })
+    };
+    let id = id.unwrap_or("-");
+    let saved = saved.unwrap_or("-");
+    let line = match pick {
+        Pick::Shape { index, moved: true } => format!(
+            "the saved screen {id} is now another screen; using {} ({saved}) instead",
+            describe(index)
+        ),
+        Pick::Waiting => format!(
+            "the saved screen {id} is now another screen and the Edge ({saved}) is not connected yet; waiting for it"
+        ),
+        Pick::Resized(i) => format!(
+            "the saved screen {id} changed shape ({saved} -> {}); keeping it",
+            describe(i)
+        ),
+        Pick::Name(_) | Pick::Shape { moved: false, .. } | Pick::Missing => String::new(),
+    };
+    let mut last = LAST_PICK_NOTE.lock().unwrap_or_else(|e| e.into_inner());
+    if *last != line {
+        if !line.is_empty() {
+            crate::crash_log::note("display", &line);
+        }
+        *last = line;
+    }
+}
+
+/// Resolve the screen the user explicitly chose (see `pick_chosen`). `None`
+/// means it is genuinely not connected right now.
+///
+/// A choice found by its shape is saved again under the id that screen has now,
+/// so Settings and the tray mark the right screen as chosen and the next lookup
+/// is a plain id match.
+fn chosen_monitor(window: &WebviewWindow, cache: &PlacementCache) -> Option<Monitor> {
+    let monitors = monitors_of(window)?;
+    let id = cache.monitor.as_deref();
+    let saved = cache.fingerprint.as_deref();
+    let pick = pick_in(&monitors, id, saved);
+    note_pick(pick, &monitors, id, saved);
+    let found = monitors.get(pick.index()?)?.clone();
+    if let Pick::Shape { .. } = pick {
+        if let Some(new_id) = display_ids(&monitors).get(pick.index()?).cloned() {
+            heal_saved_id(window.app_handle(), id, new_id);
+        }
+    }
+    Some(found)
+}
+
+/// Re-save the chosen screen under its current id, unless the choice changed in
+/// the meantime (a pick from the tray racing the watchdog).
+fn heal_saved_id(app: &AppHandle, old: Option<&str>, new_id: String) {
+    let old = old.map(str::to_string);
+    let mut snapshot = None;
+    prefs::update(app, |p| {
+        if p.placement == Placement::Screen && p.monitor == old {
+            p.monitor = Some(new_id);
+            snapshot = Some(p.clone());
+        }
+    });
+    if let Some(p) = snapshot {
+        set_placement_cache(&p);
+    }
 }
 
 /// True when this monitor IS the Edge panel, judged on size alone (either
@@ -793,10 +1219,7 @@ fn apply_target(window: &WebviewWindow, target: Target, focus: bool) {
                 // placement gets. (Same repair `exit_home` already performs for this
                 // mode, and safe to do here: the watchdog `continue`s on `Phone`, so
                 // this runs on deliberate placements only, never every tick.)
-                if let Some(m) = window
-                    .current_monitor()
-                    .ok()
-                    .flatten()
+                if let Some(m) = current_of(window)
                     .or_else(|| primary_or_first(window))
                 {
                     place_windowed_on(window, &m);
@@ -816,6 +1239,72 @@ fn apply_target(window: &WebviewWindow, target: Target, focus: bool) {
 pub fn place_now(window: &WebviewWindow) {
     let cache = placement_cache();
     apply_target(window, resolve(window, &cache), true);
+}
+
+/// One crash-log line per launch: how it started, what was asked, which screens
+/// were there and where the window went. A report of "it opened on the wrong
+/// screen after a restart" then carries the answer instead of a guess.
+pub fn note_startup(window: &WebviewWindow, autostarted: bool) {
+    let cache = placement_cache();
+    let screens = monitors_of(window)
+        .unwrap_or_default()
+        .iter()
+        .map(|m| {
+            let p = m.position();
+            format!("{} {} at {},{}", m.name().map(String::as_str).unwrap_or("?"), fingerprint(m), p.x, p.y)
+        })
+        .collect::<Vec<_>>();
+    let asked = match cache.mode {
+        Placement::Auto => "automatic".to_string(),
+        Placement::Phone => "phone".to_string(),
+        Placement::Screen => format!(
+            "screen {} ({})",
+            cache.monitor.as_deref().unwrap_or("-"),
+            cache.fingerprint.as_deref().unwrap_or("-")
+        ),
+    };
+    let placed = match resolve(window, &cache) {
+        Target::Kiosk(m) => format!("kiosk on {}", fingerprint(&m)),
+        Target::Windowed(m, fs) => format!(
+            "{} on {}",
+            if fs { "full screen" } else { "window" },
+            fingerprint(&m)
+        ),
+        Target::Nothing(NoScreen::Phone) => "nothing (phone)".to_string(),
+        Target::Nothing(NoScreen::ChosenMissing) => "hidden until its screen is connected".to_string(),
+    };
+    crate::crash_log::note(
+        "display",
+        &format!(
+            "started {}; show on: {asked}; screens: {}; placed: {placed}",
+            if autostarted { "at login" } else { "by hand" },
+            if screens.is_empty() { "none readable".to_string() } else { screens.join(", ") }
+        ),
+    );
+}
+
+/// Xenon opened again while it is already running.
+///
+/// It used to only un-hide the window, wherever it was, which could leave the
+/// dashboard as a small window on the main screen. When the window is already
+/// visible where it belongs this only brings it forward (re-placing the kiosk
+/// would make it flash); otherwise it does what the tray's "Show Xenon" does.
+pub fn reveal(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else { return };
+    // The round home button is a place the user chose; just bring it forward.
+    let settled = HOME_MODE.load(Ordering::SeqCst)
+        || (window.is_visible().unwrap_or(false)
+            && match resolve(&window, &placement_cache()) {
+                Target::Kiosk(m) | Target::Windowed(m, _) => window_is_on(&window, &m),
+                Target::Nothing(_) => false,
+            });
+    if settled {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    } else {
+        show_now(app);
+    }
 }
 
 /// Tray "Show Xenon": reveal the window now even when a rule wants it hidden
@@ -992,7 +1481,7 @@ pub fn enter_home(window: &WebviewWindow) {
     // a different screen from the one the dashboard was just filling.
     let target = chosen_monitor(window, &cache)
         .or_else(|| find_edge(window))
-        .or_else(|| window.current_monitor().ok().flatten())
+        .or_else(|| current_of(window))
         .or_else(|| primary_or_first(window));
     // The kiosk carries a 640×240 minimum; drop it so the button can be this small.
     let _ = window.set_min_size(None::<LogicalSize<f64>>);
@@ -1053,7 +1542,7 @@ pub fn exit_home(window: &WebviewWindow) {
     // just promised the current session it could keep — so give it back as an
     // ordinary desktop window on the screen it is already on.
     if placement_cache().mode == Placement::Phone {
-        if let Some(monitor) = window.current_monitor().ok().flatten() {
+        if let Some(monitor) = current_of(window) {
             place_windowed_on(window, &monitor);
         }
     } else {
@@ -1098,8 +1587,8 @@ impl DisplayInfo {
 /// the dashboard renders them as chips, and the tray, which has no chips, spells
 /// them into the label itself (see `tray_label`).
 pub fn displays(window: &WebviewWindow) -> Vec<DisplayInfo> {
-    let primary = window.primary_monitor().ok().flatten();
-    let monitors = window.available_monitors().ok().unwrap_or_default();
+    let primary = primary_of(window);
+    let monitors = monitors_of(window).unwrap_or_default();
     describe(monitors, primary)
 }
 
@@ -1112,8 +1601,8 @@ pub fn displays(window: &WebviewWindow) -> Vec<DisplayInfo> {
 /// dashboard loads, and that a page which never gets one leaves stuck on "Reading
 /// the screens on this PC…".
 pub fn displays_for_app(app: &AppHandle) -> Vec<DisplayInfo> {
-    let primary = app.primary_monitor().ok().flatten();
-    let monitors = app.available_monitors().unwrap_or_default();
+    let primary = app_primary(app);
+    let monitors = app_monitors(app);
     describe(monitors, primary)
 }
 
@@ -1165,10 +1654,7 @@ pub fn display_state(window: &WebviewWindow) -> serde_json::Value {
     // Reported with `display_id`, the same key the list uses, so the dashboard's
     // `d.id === state.active` comparison keeps working on outputs the OS did not
     // name (where it used to compare against `null` and never match).
-    let active = window
-        .current_monitor()
-        .ok()
-        .flatten()
+    let active = current_of(window)
         .and_then(|m| id_of(window, &m));
     let missing = cache.mode == Placement::Screen && chosen_monitor(window, &cache).is_none();
     serde_json::json!({
@@ -1188,7 +1674,7 @@ pub fn display_state(window: &WebviewWindow) -> serde_json::Value {
             // as long as the app stays up and can only be fixed by restarting it
             // (see gpu.rs). Reported here because Settings → Screen is both where
             // this becomes true and where the user is standing when it does.
-            "gpuMismatch": gpu_mismatch(),
+            "gpuMismatch": gpu_mismatch(window),
         }
     })
 }
@@ -1305,7 +1791,7 @@ pub fn push_display_state(app: &AppHandle) {
 /// tell a genuine topology change from an idle tick. Empty if monitors can't be
 /// read this tick (treated as "unknown", never a change).
 fn topology_signature(window: &WebviewWindow) -> String {
-    let Ok(monitors) = window.available_monitors() else { return String::new() };
+    let Some(monitors) = monitors_of(window) else { return String::new() };
     let mut parts: Vec<String> = monitors
         .iter()
         .map(|m| {
@@ -1320,10 +1806,7 @@ fn topology_signature(window: &WebviewWindow) -> String {
     // Edge; the position list alone can miss that if the remaining monitors keep
     // their coordinates, so key the primary's size + name in explicitly so such a
     // change still moves the signature and re-asserts fullscreen over the taskbar.
-    let primary = window
-        .primary_monitor()
-        .ok()
-        .flatten()
+    let primary = primary_of(window)
         .map(|m| {
             let s = m.size();
             let name = m.name().cloned().unwrap_or_default();
@@ -1331,6 +1814,34 @@ fn topology_signature(window: &WebviewWindow) -> String {
         })
         .unwrap_or_default();
     format!("P:{}|{}", primary, parts.join("|"))
+}
+
+/// One crash-log line per re-placement of a window that was off its screen:
+/// where it was, where it is going, and which attempt this is, so a report of
+/// "it is still on the wrong screen" comes with what was tried. Slow retries are
+/// logged sparingly (`should_log_repin`); the moment the quick attempts run out
+/// is said once.
+fn note_repin(window: &WebviewWindow, target: &Monitor, attempts: u32, now: SystemTime, last_slow_log: &mut Option<SystemTime>) {
+    let since = last_slow_log.and_then(|t| now.duration_since(t).ok());
+    if !should_log_repin(attempts, since) {
+        return;
+    }
+    if attempts >= MAX_REPIN_ATTEMPTS {
+        *last_slow_log = Some(now);
+    }
+    let r = monitor_rect(target);
+    let from = current_of(window)
+        .map(|m| format!("{} at {},{}", m.name().map(String::as_str).unwrap_or("?"), m.position().x, m.position().y))
+        .unwrap_or_else(|| "unknown screen".to_string());
+    let name = target.name().map(String::as_str).unwrap_or("?");
+    let mut line = format!(
+        "re-placing the window (attempt {}): it is on {}, its screen is {} {:.0}x{:.0} at {:.0},{:.0}",
+        attempts + 1, from, name, r.w, r.h, r.x, r.y
+    );
+    if attempts + 1 == MAX_REPIN_ATTEMPTS {
+        line.push_str("; last quick attempt, then once a minute");
+    }
+    crate::crash_log::note("display", &line);
 }
 
 /// Start the background watchdog. Re-pins the window to the Edge whenever it is
@@ -1348,8 +1859,29 @@ pub fn start_watchdog(app: AppHandle) {
         // Consecutive ticks spent chasing a window that has not landed. Reset the
         // moment it lands or the layout changes; see MAX_REPIN_ATTEMPTS.
         let mut repin_attempts: u32 = 0;
+        // Wake from sleep, and the slow retry past the cap (see SLOW_REPIN_EVERY).
+        let mut last_tick = SystemTime::now();
+        let mut settle_until: Option<SystemTime> = None;
+        let mut last_attempt: Option<SystemTime> = None;
+        let mut last_slow_log: Option<SystemTime> = None;
         loop {
         thread::sleep(WATCHDOG_INTERVAL);
+
+        // The machine slept. The displays come back one by one, and the OS has
+        // probably moved the window onto whichever came back first; the layout
+        // will read the same as before the sleep, so nothing else would re-arm the
+        // repair. Lift the attempt cap for a while and start counting afresh.
+        let now = SystemTime::now();
+        if let Some(gap) = slept(last_tick, now) {
+            crate::crash_log::note("display", &format!("woke after {} s: checking the window is on its screen", gap.as_secs()));
+            settle_until = Some(now + SETTLE_AFTER_WAKE);
+            repin_attempts = 0;
+        }
+        last_tick = now;
+        if settle_until.map_or(false, |t| now < t) {
+            repin_attempts = 0;
+        }
+        let since_last = last_attempt.and_then(|t| now.duration_since(t).ok());
 
         let window = match app.get_webview_window("main") {
             Some(w) => w,
@@ -1433,6 +1965,7 @@ pub fn start_watchdog(app: AppHandle) {
                 Some(target) => {
                     if NO_SCREEN.swap(false, Ordering::SeqCst) {
                         // The chosen screen is back. Reveal and re-place once.
+                        crate::crash_log::note("display", "the chosen screen is connected again: showing the window on it");
                         place_now(&window);
                         push_display_state(&app);
                         repin_attempts = 0;
@@ -1446,25 +1979,50 @@ pub fn start_watchdog(app: AppHandle) {
                     if !drifted || topology_changed {
                         repin_attempts = 0;
                     }
-                    if !game_mode()
-                        && (topology_changed || (drifted && repin_attempts < MAX_REPIN_ATTEMPTS))
-                    {
-                        if drifted {
+                    match repin_action(game_mode(), drifted, topology_changed, repin_attempts, since_last) {
+                        Repin::Nothing => {}
+                        Repin::Quiet => {
+                            // `drifted` is only ever true for the kiosk and
+                            // full-screen targets, which both own the whole screen.
                             repin_attempts += 1;
+                            last_attempt = Some(now);
+                            move_back_quietly(&window, &target);
                         }
-                        let focus = kiosk_has_foreground(&window);
-                        if is_edge_panel(&target) {
-                            place_on_edge(&window, &target, focus);
-                        } else if cache.fullscreen {
-                            place_fullscreen_on(&window, &target);
-                        } else if topology_changed {
-                            // Windowed: only re-place on a real topology change.
-                            // Chasing `window_is_on` here would drag the window
-                            // back every time the user moved it themselves.
-                            place_windowed_on(&window, &target);
+                        Repin::Full => {
+                            if drifted {
+                                note_repin(&window, &target, repin_attempts, now, &mut last_slow_log);
+                                repin_attempts = repin_attempts.saturating_add(1);
+                                last_attempt = Some(now);
+                            }
+                            let focus = kiosk_has_foreground(&window);
+                            if is_edge_panel(&target) {
+                                place_on_edge(&window, &target, focus);
+                            } else if cache.fullscreen {
+                                place_fullscreen_on(&window, &target);
+                            } else if topology_changed {
+                                // Windowed: only re-place on a real topology change.
+                                // Chasing `window_is_on` here would drag the window
+                                // back every time the user moved it themselves.
+                                place_windowed_on(&window, &target);
+                            }
                         }
                     }
                 }
+            }
+            continue;
+        }
+
+        // Auto hid the window because no screen could be read when it was first
+        // placed, early at login typically. Nothing below would show it again:
+        // the Edge branch only moves it, so Xenon sat in the tray, running and
+        // invisible, which reads as "it did not start". Place it the way a launch
+        // would, as soon as a screen can be read; until then this is a no-op.
+        if NO_SCREEN.load(Ordering::SeqCst) {
+            place_now(&window);
+            if !NO_SCREEN.load(Ordering::SeqCst) {
+                crate::crash_log::note("display", "the screens can be read again: showing the window");
+                push_display_state(&app);
+                repin_attempts = 0;
             }
             continue;
         }
@@ -1489,21 +2047,31 @@ pub fn start_watchdog(app: AppHandle) {
             // focus_guard keeps the game foreground, and the watchdog re-pins once
             // the game exits. last_topology stays current (updated above), so the
             // resolution reverting on exit is not itself seen as a change to chase.
+            // What stays allowed mid-game is bringing back a window that has left
+            // the Edge, by a move that activates nothing (see `repin_action`).
             let drifted = !window_is_on(&window, &edge);
             if !drifted || topology_changed {
                 repin_attempts = 0;
             }
-            if !game_mode()
-                && (topology_changed || (drifted && repin_attempts < MAX_REPIN_ATTEMPTS))
-            {
-                if drifted {
+            match repin_action(game_mode(), drifted, topology_changed, repin_attempts, since_last) {
+                Repin::Nothing => {}
+                Repin::Quiet => {
                     repin_attempts += 1;
+                    last_attempt = Some(now);
+                    move_back_quietly(&window, &edge);
                 }
-                // Re-place, but only re-raise if the kiosk already had the
-                // foreground — see `place_on_edge`. A window the user moved onto
-                // the Edge must stay in front of the dashboard.
-                let focus = kiosk_has_foreground(&window);
-                place_on_edge(&window, &edge, focus);
+                Repin::Full => {
+                    if drifted {
+                        note_repin(&window, &edge, repin_attempts, now, &mut last_slow_log);
+                        repin_attempts = repin_attempts.saturating_add(1);
+                        last_attempt = Some(now);
+                    }
+                    // Re-place, but only re-raise if the kiosk already had the
+                    // foreground — see `place_on_edge`. A window the user moved onto
+                    // the Edge must stay in front of the dashboard.
+                    let focus = kiosk_has_foreground(&window);
+                    place_on_edge(&window, &edge, focus);
+                }
             }
         } else {
             // Off the Edge: keep the baseline current so returning to it re-pins once.
@@ -1515,4 +2083,153 @@ pub fn start_watchdog(app: AppHandle) {
         }
         }
     });
+}
+
+#[cfg(test)]
+mod repin_tests {
+    use super::*;
+
+    const NEVER: Option<Duration> = None;
+    fn secs(n: u64) -> Option<Duration> { Some(Duration::from_secs(n)) }
+
+    #[test]
+    fn outside_a_game_a_topology_change_or_a_drift_re_places_fully() {
+        assert_eq!(repin_action(false, false, true, 0, NEVER), Repin::Full);
+        assert_eq!(repin_action(false, true, false, 0, NEVER), Repin::Full);
+        assert_eq!(repin_action(false, false, false, 0, NEVER), Repin::Nothing);
+    }
+
+    #[test]
+    fn a_game_switching_resolution_is_left_alone() {
+        // The exclusive full-screen bounce: the layout changed, the window is where
+        // it belongs. Nothing may run, or the game loses the foreground.
+        assert_eq!(repin_action(true, false, true, 0, NEVER), Repin::Nothing);
+    }
+
+    #[test]
+    fn a_window_moved_off_its_screen_mid_game_comes_back_quietly() {
+        // A game turning HDR on: Windows moved the dashboard to the main display.
+        assert_eq!(repin_action(true, true, true, 0, NEVER), Repin::Quiet);
+        assert_eq!(repin_action(true, true, false, 2, secs(3)), Repin::Quiet);
+    }
+
+    #[test]
+    fn the_attempt_cap_holds_in_and_out_of_a_game() {
+        assert_eq!(repin_action(true, true, false, MAX_REPIN_ATTEMPTS, secs(3)), Repin::Nothing);
+        assert_eq!(repin_action(false, true, false, MAX_REPIN_ATTEMPTS, secs(3)), Repin::Nothing);
+        // A real layout change outside a game still re-places past the cap.
+        assert_eq!(repin_action(false, true, true, MAX_REPIN_ATTEMPTS, secs(3)), Repin::Full);
+    }
+
+    #[test]
+    fn past_the_cap_a_window_still_off_its_screen_is_retried_once_a_minute() {
+        // The Mac after a wake: five quick attempts did not land, the layout reads
+        // the same as before the sleep. It used to stay on the main screen for good.
+        assert_eq!(repin_action(false, true, false, MAX_REPIN_ATTEMPTS, secs(59)), Repin::Nothing);
+        assert_eq!(repin_action(false, true, false, MAX_REPIN_ATTEMPTS, secs(60)), Repin::Full);
+        assert_eq!(repin_action(false, true, false, MAX_REPIN_ATTEMPTS + 40, secs(600)), Repin::Full);
+        // Only while it is off its screen, and never in a game.
+        assert_eq!(repin_action(false, false, false, MAX_REPIN_ATTEMPTS, secs(600)), Repin::Nothing);
+        assert_eq!(repin_action(true, true, false, MAX_REPIN_ATTEMPTS, secs(600)), Repin::Nothing);
+    }
+
+    #[test]
+    fn a_long_gap_between_ticks_is_a_sleep_and_a_short_one_is_not() {
+        let t0 = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        assert_eq!(slept(t0, t0 + Duration::from_secs(3)), None, "an ordinary tick");
+        assert_eq!(slept(t0, t0 + SLEEP_GAP), None, "exactly the threshold is not a sleep");
+        assert_eq!(slept(t0, t0 + Duration::from_secs(8 * 3600)), Some(Duration::from_secs(8 * 3600)));
+        assert_eq!(slept(t0, t0 - Duration::from_secs(3600)), None, "a clock set back is not a sleep");
+    }
+
+    #[test]
+    fn slow_retries_are_logged_sparingly() {
+        assert!(should_log_repin(0, None));
+        assert!(should_log_repin(MAX_REPIN_ATTEMPTS - 1, Some(Duration::from_secs(1))));
+        assert!(should_log_repin(MAX_REPIN_ATTEMPTS, None), "the first slow retry is logged");
+        assert!(!should_log_repin(MAX_REPIN_ATTEMPTS, Some(Duration::from_secs(60))));
+        assert!(should_log_repin(MAX_REPIN_ATTEMPTS, Some(SLOW_REPIN_LOG_EVERY)));
+    }
+}
+
+#[cfg(test)]
+mod pick_tests {
+    use super::*;
+
+    fn shapes(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+    const EDGE: &str = "2560x720@1";
+    const MAIN: &str = "3840x2160@1.5";
+
+    #[test]
+    fn the_saved_id_still_on_the_chosen_screen_is_used() {
+        assert_eq!(pick_chosen(Some(1), &shapes(&[MAIN, EDGE]), Some(EDGE)), Pick::Name(1));
+        // A change of Windows scaling is not a different screen.
+        assert_eq!(pick_chosen(Some(1), &shapes(&[MAIN, "2560x720@1.25"]), Some(EDGE)), Pick::Name(1));
+    }
+
+    #[test]
+    fn after_a_restart_the_numbers_shift_and_the_shape_wins() {
+        // "DISPLAY2" was the Edge; after the restart it is the main screen and the
+        // Edge came up as DISPLAY1.
+        assert_eq!(
+            pick_chosen(Some(1), &shapes(&[EDGE, MAIN]), Some(EDGE)),
+            Pick::Shape { index: 0, moved: true }
+        );
+    }
+
+    #[test]
+    fn the_edge_not_up_yet_is_waited_for_not_replaced_by_the_main_screen() {
+        assert_eq!(pick_chosen(Some(0), &shapes(&[MAIN]), Some(EDGE)), Pick::Waiting);
+        // Vertical mount: still the Edge.
+        assert_eq!(pick_chosen(Some(0), &shapes(&[MAIN]), Some("720x2560@1")), Pick::Waiting);
+    }
+
+    #[test]
+    fn an_ordinary_screen_with_a_new_resolution_is_still_the_one() {
+        assert_eq!(
+            pick_chosen(Some(1), &shapes(&[MAIN, "1920x1080@1"]), Some("2560x1440@1")),
+            Pick::Resized(1)
+        );
+    }
+
+    #[test]
+    fn a_vanished_id_falls_back_to_the_shape_as_before() {
+        assert_eq!(
+            pick_chosen(None, &shapes(&[MAIN, EDGE]), Some(EDGE)),
+            Pick::Shape { index: 1, moved: false }
+        );
+        assert_eq!(pick_chosen(None, &shapes(&[MAIN]), Some(EDGE)), Pick::Missing);
+    }
+
+    #[test]
+    fn an_exact_fingerprint_beats_a_same_size_screen() {
+        assert_eq!(
+            pick_chosen(None, &shapes(&["2560x720@1.25", EDGE]), Some(EDGE)),
+            Pick::Shape { index: 1, moved: false }
+        );
+    }
+
+    #[test]
+    fn a_choice_saved_without_a_shape_trusts_the_id() {
+        assert_eq!(pick_chosen(Some(0), &shapes(&[MAIN]), None), Pick::Name(0));
+        assert_eq!(pick_chosen(None, &shapes(&[MAIN]), None), Pick::Missing);
+    }
+
+    #[test]
+    fn index_is_none_only_when_there_is_nowhere_to_go() {
+        assert_eq!(Pick::Waiting.index(), None);
+        assert_eq!(Pick::Missing.index(), None);
+        assert_eq!(Pick::Resized(2).index(), Some(2));
+        assert_eq!(Pick::Shape { index: 1, moved: true }.index(), Some(1));
+    }
+
+    #[test]
+    fn fp_is_edge_reads_the_saved_shape() {
+        assert!(fp_is_edge("2560x720@1"));
+        assert!(fp_is_edge("720x2560@2"));
+        assert!(!fp_is_edge("1920x1080@1"));
+        assert!(!fp_is_edge("garbage"));
+    }
 }

@@ -609,8 +609,11 @@ function parseNetstatIb(out) {
     if (/^lo\d*$/.test(iface)) continue;
     if (seen.has(iface)) continue;
     seen.add(iface);
-    const irx = Number(f[6]) || 0;
-    const itx = Number(f[9]) || 0;
+    // A link row without a hardware address (utun, llw) has no Address column,
+    // so its byte counters sit one field to the left.
+    const at = f.length >= 11 ? 0 : -1;
+    const irx = Number(f[6 + at]) || 0;
+    const itx = Number(f[9 + at]) || 0;
     const real = !VIRTUAL_IFACE.test(iface);
     if (real) { rx += irx; tx += itx; }
     // macOS has a friendly name per service ("Wi-Fi", "Thunderbolt Ethernet"),
@@ -623,7 +626,10 @@ function parseNetstatIb(out) {
 }
 
 async function readNetBytes() {
-  const out = await runSoft('netstat', ['-ib'], 5000);
+  // -n: without it netstat reverse-resolves every address row, which can take
+  // longer than the timeout on a busy LAN and leave the tile at 0 B/s (GitHub
+  // #138). The <Link#n> rows parsed below are the same either way.
+  const out = await runSoft('netstat', ['-ibn'], 5000);
   return out === null ? { rx: 0, tx: 0, interfaces: [] } : parseNetstatIb(out);
 }
 
@@ -1257,9 +1263,25 @@ function rootReachesHome(root, home) {
   return h.startsWith(r.endsWith(path.sep) ? r : r + path.sep);
 }
 
+// --- Idle time: seconds since the last keyboard/mouse/trackpad input ---------
+// The automatic updater installs only on a PC nobody is using. IOHIDSystem
+// keeps HIDIdleTime in nanoseconds for the whole session, readable without any
+// permission prompt (unlike an event tap). null = could not tell, which the
+// caller treats as "unknown", never as "idle".
+function parseHidIdleTime(text) {
+  const m = /"HIDIdleTime"\s*=\s*(\d+)/.exec(String(text || ''));
+  if (!m) return null;
+  const ns = Number(m[1]);
+  return Number.isFinite(ns) && ns >= 0 ? Math.floor(ns / 1e9) : null;
+}
+async function idleSeconds() {
+  const out = await runSoft('/usr/sbin/ioreg', ['-c', 'IOHIDSystem', '-d', '4'], 4000);
+  return out == null ? null : parseHidIdleTime(out);
+}
+
 module.exports = {
   gpu, disks, diskIo, cpuTemp, memory, network, windows, audioRows, audioCommand, audioAvailable, lock,
-  processes, fullDiskAccess, rootReachesHome,
+  processes, fullDiskAccess, rootReachesHome, idleSeconds, parseHidIdleTime,
   // exported for unit tests
   parsePsTime, parsePsProcesses,
   parseMacmon, parseHelperTemps, parseDisplaysJson, parseDisks, parseMountTypes, parsePing,

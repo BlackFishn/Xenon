@@ -66,6 +66,8 @@ test('only what needs a person at the PC is refused', () => {
     ['/second-screen/create-display', 'POST'],
     ['/api/claude/event', 'POST'],       // Claude Code's own token-gated ingest
     ['/api/claude/permission', 'POST'],
+    ['/api/codex/event', 'POST'],        // the same for OpenAI Codex (codex-hook.js)
+    ['/api/codex/permission', 'POST'],
     // …plus the pairing admin, which is loopback-only by being denied here: a
     // phone must not enrol another phone or revoke the device that kicks it off.
     ['/api/remote-access/status', 'GET'],
@@ -131,6 +133,8 @@ test('the refused surface matches an explicit, reviewed list', () => {
     'DELETE /api/crosshair/presets',
     'GET /api/ai/chatgpt/models',
     'GET /api/ai/chatgpt/status',
+    // The Claude Code mod /xenon check, token-gated like the ingest below.
+    'GET /api/claude/mod',
     'GET /api/crosshair',
     'GET /api/crosshair/assets',
     'GET /api/crosshair/presets',
@@ -166,6 +170,11 @@ test('the refused surface matches an explicit, reviewed list', () => {
     // Claude Code's own ingest, posted by the `claude` process against a token
     // minted on the PC. Nothing in the dashboard calls these.
     'POST /api/claude/event',
+    // The Claude Code mod feed, posted by the claude process like /event.
+    'POST /api/claude/mod',
+    // The mod asking for a tile message: the answer IS the message text.
+    'POST /api/claude/mod/inbox',
+    'POST /api/claude/mod/permission',
     'POST /api/claude/permission',
     // Same family, and the sharper case for refusing them: /question returns
     // text that is put in front of the model, and /turn-end can tell a session
@@ -175,10 +184,22 @@ test('the refused surface matches an explicit, reviewed list', () => {
     // are the same actions taken by a person the hub has already authenticated.
     'POST /api/claude/question',
     'POST /api/claude/turn-end',
+    // The OpenAI Codex twins: posted by codex-hook.js, which Codex runs, against
+    // a token minted on the PC. A phone answers a Codex card through
+    // /api/codex/decide, like any other dashboard.
+    'POST /api/codex/event',
+    'POST /api/codex/permission',
     'POST /api/crosshair',
     'POST /api/crosshair/assets',
     'POST /api/crosshair/open',
     'POST /api/crosshair/presets',
+    // Dev cleanup: compaction raises a UAC prompt on the PC, and the unlock
+    // spends one of the supporter pass's three device slots. Both are decided
+    // by whoever sits at the PC; pruning and the overview stay open.
+    'POST /api/devclean/compact',
+    'POST /api/features/devclean/unlock',
+    // Same supporter-slot decision, for the Lyrics widget.
+    'POST /api/features/lyrics/unlock',
     'POST /api/gamemode/install-presentmon',
     'POST /api/lighting/sdk-install',
     'POST /api/native/install',
@@ -210,6 +231,9 @@ test('the refused surface matches an explicit, reviewed list', () => {
     // The other half of the transfer settings pair above: the only writer of
     // the folder arrivals land in.
     'POST /api/transfer/settings',
+    // Installs Xenon Helper from Settings: downloads an exe the server then
+    // runs. Same class as the other installers, and done at the PC.
+    'POST /audio/levels/install-helper',
     'POST /embedded-browser/adblock/install',
     'POST /media/local/import',
     'POST /media/local/pick',

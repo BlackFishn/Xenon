@@ -12,7 +12,7 @@ test('a visible idle mixer renews fallback demand beyond two minutes, then stops
   const listeners = new Map();
   const pane = { getClientRects: () => pane.visible ? [{}] : [], visible: true, currentPage: true };
   const context = vm.createContext({
-    Date: { now: () => now }, _serverHubSettings: {},
+    Date: { now: () => now }, _serverHubSettings: {}, sdkStreamGranted: () => false,
     document: { hidden: false, querySelectorAll: () => [pane], addEventListener: (name, fn) => listeners.set(name, fn) },
     window: { addEventListener: (name, fn) => listeners.set(name, fn) },
     onVisiblePage: el => el.currentPage,

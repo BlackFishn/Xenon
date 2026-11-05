@@ -10,15 +10,18 @@ permissions before it renders.
 
 ## Quick start
 
-1. In Xenon, open **Settings → Widgets & sharing** and enable third-party widgets.
-2. Add the **Custom widget** tile from the "+" palette and tap
-   **Install example** — that installs `hello-xenon`, the reference widget this
-   guide is based on (source in `server/sdk-example/hello-xenon/`).
-3. To develop your own: create a folder under `server/data/widgets/<your-id>/`
-   with a `manifest.json` and an `index.html`, then **Rescan** from the tile.
+1. In Xenon, enter Layout mode and tap **+** on a page. Choose the **Installed**
+   filter and tap **Hello Xenon** under *Examples to install*: that installs
+   `hello-xenon`, the reference widget this guide is based on (source in
+   `server/sdk-example/hello-xenon/`), and puts it on the page. Adding a widget
+   switches third-party widgets on (Settings → Widgets & sharing) if they were off.
+2. To develop your own: create a folder under `server/data/widgets/<your-id>/`
+   with a `manifest.json` and an `index.html`, then open **+** again. The panel
+   reads the installed widgets every time it opens, so yours is listed under
+   **Installed** and in its group (see `category`).
 
-After editing a widget's files, use the tile's **Reload** button (↻ in the tile
-header) — or **Rescan** — to reload the changed files. Each reload cache-busts the
+After editing a widget's files, use the tile's **Reload** button (↻, shown on the
+tile in Layout mode) to reload the changed files. Each reload cache-busts the
 widget's assets, so the edit shows up even on a surface you can't hard-refresh
 (e.g. a touchscreen you cannot reach a keyboard on); reload on each surface you want updated.
 
@@ -61,6 +64,8 @@ not need to do anything to support it.
   "storageGroup": "my-widget-set",
   "secrets": true,
   "shape": { "preset": "hexagon" },
+  "icon": ["M3 10h7c3 0 4-8 6-8s2 8 5 8", "M3 16h18", "M3 21h11"],
+  "category": "system",
   "deck": {
     "actions": [
       { "id": "quiet", "name": "Quiet mode",
@@ -81,7 +86,7 @@ not need to do anything to support it.
 | `name` | yes | ≤ 60 chars. |
 | `version`, `author`, `description` | no | Shown to the user (description ≤ 200 chars). |
 | `entry` | no | HTML entry document, defaults to `index.html`. Must live in the package root. |
-| `streams` | no | Data streams you request: `status`, `system`, `network`, `media`, `audio`, `audioLevels`, `wavelink`, `voicemeeter`, `stocks`, `football`, `news`, `claude`, `obs`, `discord`, `discordChannels`, `discordSoundboard`, `discordNotifications`, `streamerbot`, `homeassistant`, `twitchWatch`, `twitchChat`, `youtubeLive`, `youtube`, `tasks`, `notes`, `agenda`, `weather`, `battery`. *Capability reference* below is generated from the code and is the list that cannot go stale. See *Hardware sensors* for fans/power/battery. |
+| `streams` | no | Data streams you request: `status`, `system`, `network`, `media`, `audio`, `audioLevels`, `wavelink`, `voicemeeter`, `stocks`, `football`, `news`, `claude`, `codex`, `obs`, `discord`, `discordChannels`, `discordSoundboard`, `discordNotifications`, `streamerbot`, `homeassistant`, `twitchWatch`, `twitchChat`, `youtubeLive`, `youtube`, `tasks`, `notes`, `agenda`, `weather`, `battery`. *Capability reference* below is generated from the code and is the list that cannot go stale. See *Hardware sensors* for fans/power/battery. |
 | `surface` | no | `"tile"` (default) or `"ambient"` — an ambient package renders fullscreen as an Ambient/screensaver scene instead of a dashboard tile (see *Ambient scenes*). |
 | `actions` | no | Action categories you request: `media`, `volume`, `audioDevice`, `mic`, `lighting`, `chroma`, `wavelink`, `voicemeeter`, `spotify`, `steam`, `obs`, `discord`, `homeassistant`, `twitch`, `youtube`, `youtubePlayer`, `streamerbot`, `url`, `browser`, `watch`, `tasks`, `soundboard`. *Capability reference* below is generated from the code and is the list that cannot go stale. |
 | `hosts` | no | Up to 8 exact hostnames the widget may reach **through the host-mediated fetch proxy** (see *Network*). Loopback/link-local names are rejected at install time. |
@@ -99,6 +104,8 @@ not need to do anything to support it.
 | `accent` | no | `true` → your widget may tint the **dashboard accent colour** while it runs (the same channel the album-art accent uses). Accent only, never saved, released when your widget goes away. See *Dashboard accent*. |
 | `expand` | no | `true` → your widget may **ask to fill the screen**, painting its tile over the whole dashboard, for content that genuinely needs the room (a board, a map, a game). Only in response to the user touching your widget; the way back out is drawn by Xenon. Ignored on an `ambient` package, which is already fullscreen. See *Filling the screen*. |
 | `shape` | no | The **silhouette of your own tile**: `{ "preset": "hexagon" }` or your own closed SVG path, `{ "path": "M .5 0 L 1 .5 L .5 1 L 0 .5 Z" }`. Optional `"fit": "fit"` keeps the proportions instead of stretching, and `"inset"` (0–25) is extra safe margin in percent. Not a permission — it cannot reach past your tile — and the user's own shape for that tile always wins. Ignored on an `ambient` package. See *Tile shape*. |
+| `category` | no | Where the "+" panel files your widget (v4.11.11): `"productivity"`, `"media"`, `"system"` or `"streaming"`, the same groups as Xenon's own widgets. Without it the panel uses the category of your widget's Store entry, and failing that it goes under *Other*. Every installed widget is also listed under the panel's **Installed** filter. Not a permission; any other value is dropped. |
+| `icon` | no | **Your widget's own glyph** (v4.11.11), shown on its tab in a tab group and on its result in the "+" panel's search, instead of the generic puzzle. SVG path data in a **24×24 box**, drawn the way every built-in widget icon is drawn: a 2 px round stroke in the text colour. A string, or up to 4 paths as an array; `{ "path": …, "fill": true }` draws a solid glyph instead. Not a permission. A malformed icon is dropped and your package still installs, with the puzzle. See *Widget icon*. |
 
 An invalid entry in any of these (a loopback host, an out-of-catalog macro step,
 a malformed id) rejects the **whole manifest** — the package shows up as invalid
@@ -243,6 +250,13 @@ than the manifest requested):
       surfaceSoft: 'rgba(22, 25, 26, 0.92)', panelAlpha: 0.92
     }
   },
+  // Which copy of the tile this frame is (v4.11.13): 'custom' for the first,
+  // 'custom~k3x9' for a copy. Stable across reloads, so key per-copy settings
+  // on it and two copies of your widget can show two different things. A
+  // storage key allows only [A-Za-z0-9._-], so map the rest first:
+  // 'layout.' + instance.replace(/[^A-Za-z0-9._-]/g, '_').
+  // null for a background service frame or an ambient scene.
+  instance: 'custom~k3x9',
   lang:   'en',                       // active UI language (en/it/ko/ja/zh)
   streams: ['system', 'media'],       // granted data streams
   actions: ['media'],                 // granted action categories
@@ -280,14 +294,16 @@ The payloads are the dashboard's own SSE events, unmodified:
 - `status` — mic mute, game mode/activity, foreground process
 - `system` — `cpu` (%), `gpu` (%|null), `memory.percent`, temperatures, clock speeds, `fps` / `presentFps` / `displayFps`, uptime… see *Clock speeds and frame rate* below
 - `diskIo` — `{ ok, disks:[…] }`: **per physical disk** throughput, IOPS, model and the volumes on it. See *Per-disk I/O* below. A **pull** stream, like `network`
+- `devStorage` — `{ ok, docker, ollama, vscode, vhdx, reclaimable }`: how much space developer tools hold and how much could be freed, **numbers only**. See *Developer storage* below. A **pull** stream
 - `network` — `{ ok, downloadBps, uploadBps, ping, latency, interfaces:[…] }`: **every network adapter the machine has, one entry each**, so a monitoring widget can graph a 10GbE NAS link, the internet link and a VMware VMnet separately. See *Per-adapter network* below. A **pull** stream: send a `refresh` message for it at whatever cadence your graph wants (900ms floor)
-- `media` — `title`, `artist`, `album`, playback state, source, plus `position` and `duration` in seconds. A zero/absent `duration` means the current source has no seekable timeline
+- `media` — `title`, `artist`, `album`, playback state, source, plus `position` and `duration` in seconds. A zero/absent `duration` means the current source has no seekable timeline. `position` is a whole number of seconds and can trail the real position by up to a second or two; when you need to time something to the song (lyrics, a beat-synced effect), read `positionMs` instead, the unrounded position in milliseconds as of the moment the event was sent (absent from an older Xenon Helper: fall back to `position * 1000`). Between events, add the time since you received the event to it while `playbackStatus` is `Playing`
 - `audio` — volume, mute, output device (`speaker` is the current default output; `speakers[]` lists every connected one, each with an `id` and `isDefault`), and `speakerApps[]` / `micApps[]`: the per-application mixer (one entry per active session, with `proc`, `volume`, `muted` and a resolved `icon`). Polled, so it updates about every 8 seconds
 - `audioLevels` — **how loud each app actually is right now**: `{ "discord": 0.42, "spotify": 0.81 }`, peak per process in `0..1`, roughly 12 times a second. See *Real audio levels* below — this one has conditions
 - `stocks` — the quotes/indices the user follows (same payload the Stocks tile gets)
 - `football` — followed teams' fixtures, live scores and results
 - `news` — merged headlines from the user's news sources
 - `claude` — local Claude Code usage aggregate (the "Xenon Pulse" data)
+- `codex` — OpenAI Codex plan usage: the plan's usage windows, tokens per day and how many sessions are working. Numbers only, never a folder, a project, a conversation or a command. See *OpenAI Codex plan usage* below
 - `obs` — OBS state (current scene, recording/streaming flags, audio sources)
 - `discord` — Discord voice state (connected, mute/deafen, current channel, speaking) plus `members[]` for the channel the user is in: `{ id, name, avatar, mute, deaf, speaking, volume, localMute }`. `avatar` is the https URL of that person's Discord avatar on `cdn.discordapp.com` (their default one when they have none, `''` when the id is unusable). `mute`/`deaf` are that person's own mic state; `volume` (0-200, `null` if unreported) and `localMute` are what THIS machine hears — the pair `discordUserVol` writes
 - `discordChannels` — `{ ok, channels:[{ id, name, guild, guildId, members:[] }] }`; Discord voice-channel catalog merged with the live roster (same `members[]` shape). `guild` is the server's name and `guildId` its snowflake — group by the id, not the name: it survives a rename and tells two servers that share a name apart
@@ -415,6 +431,27 @@ Six things to design around:
 grant for the memory total. If the data cannot be collected at all (the sensor
 host is down), the host sends `{ problem: 'unavailable', apps: [] }` once on this
 stream — say so in your empty state instead of rendering an idle-looking machine.
+
+**The last five minutes arrive at start (v4.11.11).** A widget that draws this
+stream over time does not have to open empty and fill up while the user
+watches. Right after `init`, and before the latest `data`, the host sends the
+readings it kept:
+
+```js
+if (m.type === 'history' && m.stream === 'processes') {
+  // m.items: [{ t, data }, …] oldest first, at most 5 minutes and 160 items.
+  // t is Date.now() time in YOUR frame's clock; data is a normal payload.
+  for (const it of m.items) addSample(it.t, it.data);
+}
+```
+
+The same message comes again when your tile returns to view, covering the
+readings you missed while it was hidden, so merge by `t` instead of appending.
+The latest `data` that follows is usually the last history item again: drop an
+identical payload. On an older Xenon, or on a page that has no readings yet,
+there is no `history` message at all, so a chart must still work by
+collecting `data` from zero. Readings are only kept while some widget holds this
+grant and a dashboard is open, so a gap in `t` is real: draw it as one.
 
 The rich Discord streams are **lazy snapshots**, not polling feeds. Request one
 only while its UI is visible:
@@ -726,6 +763,40 @@ allow the user to select which ones to display individually."* `streams:
   BSD name. `serial` rides along for anyone who wants to be certain across a
   re-plug.
 
+### 3b-quater. Developer storage (v4.11.12)
+
+How much space Docker, Ollama, editor folders and the WSL/Docker virtual disks
+take on this machine. `streams: ["devStorage"]`.
+
+```js
+{
+  ok: true,
+  docker: { available: true, bytes: 9800000000, reclaimable: 7200000000 },
+  ollama: { available: true, bytes: 14100000000, reclaimable: 9600000000, count: 5 },
+  vscode: { available: true, bytes: 1300000000, reclaimable: 640000000, stale: 9 },
+  vhdx:   { available: true, bytes: 12700000000, reclaimable: 4100000000, count: 2 },
+  reclaimable: 21540000000,   // sum of what the Developer cleanup tile could free
+}
+```
+
+- **Numbers, never names.** No image, model, project or path is in it: a widget
+  learns how much space, never what is on the disk. `count` is how many Ollama
+  models or virtual disks there are, `stale` how many editor folders belong to
+  projects that no longer exist. Ollama's `reclaimable` leaves out the model
+  Xenon's own AI uses.
+- **`available: false` means the tool is not there or not running** (Docker
+  daemon off, Ollama closed, `vhdx` off Windows), with `bytes` and `reclaimable`
+  at 0. Show it as "not available", not as an empty disk.
+- **Read-only.** The cleanup itself (prune, delete a model, move folders to the
+  Trash, compact a disk) is the built-in Developer cleanup tile, for supporters,
+  and there is no action for it: a widget can never delete anything through it.
+  The stream is open to every widget that asks for it.
+- **It is a PULL stream, and a slow one.** Each reading runs `docker system df`,
+  asks Ollama and walks the editor folders, so it is cached for a minute on the
+  widget side and 15s on the server. Refresh it when your widget is shown, not on
+  a timer. The server answers `{ ok: false, error: 'not_granted' }` while no
+  installed package holds the grant.
+
 ### 3c. Clock speeds and frame rate (v4.11.7)
 
 Six more numbers ride the `system` payload, so `streams: ["system"]` is the
@@ -812,8 +883,15 @@ Same shape as `lang`, for the same reason. The `init` payload carries
 pushed to every widget already on screen:
 
 ```js
-{ xenonSdk: 1, type: 'tempUnit', tempUnit: 'f' }
+{ xenonSdk: 1, type: 'tempUnit', tempUnit: 'f', hwTempUnit: 'c' }
 ```
+
+Since v4.11.12 both carry `hwTempUnit` as well: the unit the user reads CPU and
+GPU temperatures in. It is the same as `tempUnit` unless the user set it apart in
+Settings (a forecast in °F with the CPU in °C, say), and it is always `'c'` or
+`'f'`. A widget that shows hardware temperatures reads `hwTempUnit`; a weather
+widget reads `tempUnit`. On an older Xenon the field is missing, so fall back to
+`tempUnit`.
 
 **The numbers are not converted, and will not be.** Every temperature Xenon
 reports — `cpuTemp`, `gpuTemp`, the weather stream, everything — is Celsius, and
@@ -1093,6 +1171,57 @@ Errors: `not_connected` (no YouTube account linked — say so, don't draw an emp
 library), `bad_id`, `bad_page`, `bad_op`, `rate_limited` (the per-widget gate),
 `quotaExceeded` and Google's other reasons passed through by name.
 
+### 3f-bis. Reading Home Assistant history and cameras — `haQuery` (v4.11.13)
+
+The `homeassistant` stream gives you the current state of the entities the user
+picked in Settings → Home Assistant. Two more reads cover what a state alone
+cannot draw: the last hours of a sensor, and a camera frame. Requires the
+**`homeassistant` stream** grant, and works only for entities in that same
+selection; anything else answers `not_selected` without Home Assistant being
+asked.
+
+```js
+// The last 24 hours of up to 12 entities (1 to 72 hours).
+window.parent.postMessage({
+  xenonSdk: 1, type: 'haQuery', id: 21,
+  op: 'history', params: { ids: ['sensor.outside_temp', 'binary_sensor.patio_door'], hours: 24 },
+}, '*');
+
+// One camera frame.
+window.parent.postMessage({
+  xenonSdk: 1, type: 'haQuery', id: 22, op: 'camera', params: { id: 'camera.gate' },
+}, '*');
+
+addEventListener('message', (e) => {
+  const m = e.data;
+  if (!m || m.xenonSdk !== 1 || m.type !== 'haQueryResult') return;
+  if (m.id === 21 && m.ok) {
+    // m.series['sensor.outside_temp'] = { source: 'statistics', points: [{ t, avg, max }, …] }
+    drawTrace(m.series);
+  }
+  if (m.id === 22 && m.ok) img.src = m.src;   // a data:image/jpeg URL; m.at = when it was taken
+});
+```
+
+- **History** uses Home Assistant's hourly statistics when the sensor has them
+  (it has a `stateClass` in the stream), otherwise the recorded states in 48
+  even buckets. On/off style states (`on`, `open`, `home`, `detected`) read as
+  1 and their opposites as 0, so a door or a motion sensor draws a trace too.
+  Answers are cached for five minutes: ask once when shown, not on a timer.
+- **Camera** returns one JPEG (at most 2 MB) as a `data:` URL, the only image
+  your frame can show without network. Ask for a new one every few seconds
+  while visible, and stop on `visibility: false`.
+
+Errors: `not_configured` (Home Assistant not set up), `not_selected`,
+`bad_ids`, `too_many_ids`, `bad_hours`, `bad_camera`, `no_frame`,
+`frame_too_large`, `rate_limited`, `not_allowed`, and Home Assistant's own
+timeouts (`ha_timeout`, `ha_request_timeout`).
+
+The stream itself carries a little more since v4.11.13: `weather.*` entities
+have `temperature`, `tempUnit`, `humidity`, `windSpeed`, `windUnit`; sensors
+have `stateClass`; `person.*` and `device_tracker.*` carry only their state
+(`home`, `not_home`, a zone name), never coordinates. Every entity has `changed`, the epoch ms of its last state change (not of every attribute update), so a widget can say "open for 12 minutes".
+
 ### 3g. A YouTube player inside your widget — `youtubePlayer` (v4.11.8)
 
 `ytWatchPlay` (§ action categories) plays a video in **Xenon's** YouTube tile.
@@ -1159,6 +1288,41 @@ Seven things the host decides, not you:
 Fullscreen is deliberately withheld from the embed (it breaks the kiosk surface),
 so YouTube's own fullscreen button does not appear. Make the player bigger with
 `rect` — or, if the user expanded your tile, with `rect` again at the new size.
+
+### 3h. OpenAI Codex plan usage — `codex` (v4.12)
+
+The same numbers the built-in Codex tile shows about the user's OpenAI Codex
+plan, which Codex shares across the ChatGPT desktop app, the editor extension
+and the `codex` command. Xenon reads them from Codex itself, so the stream is
+pushed only while something uses it (your widget counts once it is granted).
+
+```js
+{
+  available: true,          // Codex is installed and answering
+  signedIn: true,           // null while Xenon does not know yet
+  plan: 'plus',             // Codex's own plan id, '' when unknown
+  limits: [{                // one entry per limit bucket, the main one first
+    id: 'codex', label: '',
+    primary:   { usedPct: 42, windowMins: 300,   resetsAt: 1800000000000 },
+    secondary: { usedPct: 7,  windowMins: 10080, resetsAt: 1800500000000 },
+    reached: false,
+  }],
+  credits: { has: false, unlimited: false },   // or null
+  usage: { today: 0, last7: 0, last30: 0, days: [{ date: '2026-10-06', tokens: 0 }] },  // or null
+  activity: { running: 1, waiting: 0, approvals: 0 },
+}
+```
+
+- **Name a window from `windowMins`, never from its position.** Paid plans
+  read 5 hours (300) and one week (10080); the Free plan has a single 30-day
+  window (43200) in `primary` and `secondary: null`. A window Codex did not
+  report is `null`, never `0`.
+- `resetsAt` is milliseconds since the epoch. `usage.days` is always the last
+  30 local days, oldest first, with zeros on days without work; the tokens are
+  the whole account's, as Codex reports them, not this PC's alone.
+- **What it never contains:** a folder, a project or conversation name, a
+  prompt, a command or patch, a session id or the account's email. The live
+  approval cards stay in the built-in tile; a widget sees only their count.
 
 ### 4. `theme` — host → widget
 
@@ -1419,6 +1583,35 @@ addEventListener('message', (e) => {
 });
 ```
 
+### 4c-ter. Widget icon — `icon` (v4.11.11)
+
+Every widget has an icon: on its tab when the user groups tiles into tabs, and
+beside its name when they search for it in the "+" panel. A built-in widget has
+its own; a package without an `icon` gets the generic puzzle. Declare yours in
+the manifest:
+
+```json
+{ "icon": "M4 18 8 11l4 3 4-7 4 5" }
+{ "icon": ["M3 10h7c3 0 4-8 6-8s2 8 5 8", "M3 16h18", "M3 21h11"] }
+{ "icon": { "path": "M12 3 3 21h18Z", "fill": true } }
+```
+
+Draw it **in a 24×24 box** (x and y run 0 → 24), the same grid as the built-in
+icons, and keep a 2 px margin: the host draws it with a 2 px round stroke in the
+current text colour, so it sits in the tab bar as one of the family and follows
+the theme with no colour of its own. `"fill": true` fills the paths instead, for
+a glyph that is a solid shape. Up to 4 paths of up to 600 characters each; path
+commands and numbers only (the same allowlist as a tile `shape`). Anything else
+drops the icon, your package still installs, and it shows the puzzle.
+
+It reads at 15 px in a tab and 18 px in the "+" panel, so draw for that size:
+three or four strokes, no detail thinner than the stroke, no text. Test it next
+to the built-in icons before you publish.
+
+This is **not a permission**: it changes your own entries and nothing else. The
+host never parses it as markup; each path is set with `setAttribute('d', …)` on an
+SVG `<path>`. Older Xenon versions ignore the field.
+
 ### 4d. `notice` — host → widget (v4.10)
 
 Whether a Xenon pop-up is on screen right now. Sent immediately after `init`,
@@ -1530,7 +1723,7 @@ the same gate Deck keys go through):
 |----------|---------|
 | `media` | `{ type: 'media', cmd: 'playpause' \| 'next' \| 'previous' }`, `{ type: 'mediaSeek', position }` — seek to an absolute position in seconds. `position` must be finite and non-negative; fractional values are rounded to the nearest whole second and the registry caps them at 24 hours before the active player may clamp them to the track. A live/non-seekable source returns `not_seekable` or `unavailable`. While dragging a timeline, preview locally and send one action on pointer release instead of fighting the bridge's 250 ms action rate limit. |
 | `volume` | `{ type: 'volume', mode: 'mute' \| 'up' \| 'down' \| 'set', value }`, `{ type: 'appVolume', app, mode, value }`, `{ type: 'appMute', app, mode }` — `app` is the `proc` field from the `audio` stream. Note `appVolume` with `mode:'set'` does **not** unmute: raise a muted app and send `appMute` too, or nothing comes out. |
-| `audioDevice` | `{ type: 'audioDevice', device }` — make an output device the default, i.e. move your sound to another set of speakers or headphones. `device` is the `id` of an entry in the `audio` stream's `speakers[]`; nothing else works. A **separate grant from `volume`** on purpose: approving "change the volume" is not approving "choose my speakers", and folding the two together would have widened every existing grant with no prompt. The server resolves the id against the live output enumeration before acting, so an id that is merely well-formed — or that names a microphone — is refused. There is no action to change the *input* device. `{ type: 'audioDeviceToggle', deviceA, deviceB }` (v4.11.10) flips between two of them in one call: see *Moving the sound between two outputs* below. |
+| `audioDevice` | `{ type: 'audioDevice', device }` — make an output device the default, i.e. move your sound to another set of speakers or headphones. `device` is the `id` of an entry in the `audio` stream's `speakers[]`; nothing else works. A **separate grant from `volume`** on purpose: approving "change the volume" is not approving "choose my speakers", and folding the two together would have widened every existing grant with no prompt. The server resolves the id against the live output enumeration before acting, so an id that is merely well-formed — or that names a microphone — is refused. There is no action to change the *input* device. `{ type: 'audioDeviceToggle', deviceA, deviceB }` (v4.11.10) flips between two of them in one call: see *Moving the sound between two outputs* below. `{ type: 'audioDeviceFirst', device1, device2, device3? }` (v4.11.12) moves it to the first of a list that is connected right now: see *The first output that is connected* below. |
 | `mic` | `{ type: 'micMute', mode: 'toggle' \| 'mute' \| 'unmute' }` |
 | `lighting` | `{ type: 'lightPower', state: 'toggle' \| 'on' \| 'off' }`, `{ type: 'lightColor', color: '#rrggbb' }`, `{ type: 'lightAuto' }`, `{ type: 'lightEffect', style, color }`, `{ type: 'lightDevice', device, mode, color }` — the whole RGB system (iCUE + WLED/Hue/Nanoleaf/OpenRGB/Home Assistant lights/Chroma). `style`: `none\|solid\|breathing\|cycle\|wave\|aurora\|candle\|palette`; `mode`: `follow\|color\|animation\|temperature\|album\|off`; `color`: `#rrggbb`. `lightColor` sets a fixed colour across the whole rig, `lightAuto` clears it back to your configured lighting. Requires lighting configured in Settings → Illuminazione. |
 | `chroma` | `{ type: 'chromaColor', device, color }`, `{ type: 'chromaOff', device }` — Razer Chroma per-device lighting (`device`: `all` \| `keyboard` \| `mouse` \| `mousepad` \| `headset` \| `keypad` \| `chromalink`; `color`: `#rrggbb`). Requires the user to enable Razer Chroma in Settings. |
@@ -1540,7 +1733,7 @@ the same gate Deck keys go through):
 | `spotify` | `spotifyPlay`, `spotifyNext`, `spotifyPrev`, `spotifySave`, `spotifyLike`, `spotifyShuffle`, `spotifyRepeat`, `spotifyVolume`, `spotifySeek`, `spotifyPlaylist`, `spotifyDevice` — control Spotify playback (params match the Deck Spotify actions; playback control needs Spotify Premium). Requires the user to connect Spotify in Settings. |
 | `obs` | `obsScene`, `obsSceneNext`, `obsRecord`, `obsStream`, `obsMute`, `obsInputVolume` — OBS scenes, recording/streaming and audio. Requires OBS connected (WebSocket) in Settings. |
 | `discord` | `discordMute`, `discordDeafen`, `discordPtt`, `discordJoin`, `discordLeave`, `discordInputVol`, `discordOutputVol`, `discordUserVol`, `discordUserMute`, `discordAudioToggle`, `discordSoundboard` — Discord voice via the local RPC. Requires Discord running and connected. See [Turning one person up or down](#5d-turning-one-person-up-or-down-discorduservol-v411) for the per-user pair. |
-| `homeassistant` | `haToggle`, `haLight`, `haMedia`, `haCover`, `haClimate`, `haFan`, `haVacuum`, `haLock`, `haAlarm`, `haScene`, `haScript`, `haButton` — control your Home Assistant devices (params/entity ids match the Deck HA actions). `haCallService` (arbitrary service calls) is deliberately **not** exposed to widgets. Requires HA configured. |
+| `homeassistant` | `haToggle`, `haLight`, `haMedia`, `haCover`, `haClimate`, `haFan`, `haVacuum`, `haLock`, `haAlarm`, `haScene`, `haScript`, `haButton` — control your Home Assistant devices (params/entity ids match the Deck HA actions). `haCallService` (arbitrary service calls) is deliberately **not** exposed to widgets. Requires HA configured. Exact values (v4.11.13), each with a `value` number: `haClimate` mode `temperature` (setpoint), `haLight` mode `kelvin`, `haMedia` cmd `volume_set` (0-100), `haCover` cmd `position` (0-100); an empty or non-numeric `value` refuses. |
 | `twitch` | `twitchClip`, `twitchMarker`, `twitchAd`, `twitchTitle`, `twitchGame`, `twitchChat`, `twitchShoutout`, `twitchChatMode` — control your Twitch channel. Requires Twitch connected. |
 | `youtube` | `ytBroadcast` — start/stop your YouTube broadcast. Requires YouTube connected. |
 | `youtubePlayer` | `ytPlayer` — a YouTube player **inside your own widget**, owned by Xenon and driven through validated messages. Not a `/actions/run` action: see [A YouTube player inside your widget](#3g-a-youtube-player-inside-your-widget--youtubeplayer-v4118). Separate from `youtube`, which is about the user's broadcast, and from `watch`, which plays in Xenon's own tile. |
@@ -1734,9 +1927,13 @@ action: { type: 'dashboardPage', page: 'next' }   // 'next' | 'prev' | 'back'
   tap, or to something the user would expect to change the view.
 - **You cannot read the page list**, and there is no event when the page turns.
   Use `visibility` (§4c) to know whether your own tile is the one being looked at.
-- **Not available in manifest Deck macros**, for the same reason as `browserOpen`
-  and `watch`: the Deck action validator does not know the type, so a macro
-  declaring one fails at install instead of shipping a dead key.
+- **Also a Deck action, and allowed in manifest Deck macros** (declare `pages` in
+  the top-level `actions`, like any category a macro step uses). One difference
+  from the bridge action: a macro runs on the server, which has no single "this
+  screen", so it relays the page to **every dashboard watching**, exactly like a
+  global page shortcut. Each dashboard still resolves the id against its own
+  pages and ignores one it does not have. Pressed on a dashboard, a Deck key
+  turns only that screen.
 
 Listed to the user as "Turn the dashboard to another page".
 
@@ -1887,6 +2084,40 @@ action: { type: 'audioDeviceToggle', deviceA: speakersId, deviceB: headsetId }
   switchaudio-osx`), the same as the `audioDevice` action; without it the
   answer names what is missing.
 
+### 5g. The first output that is connected: `audioDeviceFirst` (v4.11.12)
+
+The Deck's *Switch to the first connected output* key, reachable from a widget:
+an ordered list of outputs, and the sound goes to the first one that is
+connected at the moment of the call. Headphones when they are on, the speakers
+otherwise; a dock's DAC when the laptop is docked, its own speakers when it is
+not.
+
+```js
+action: { type: 'audioDeviceFirst', device1: headsetId, device2: speakersId }
+// { ok: true }, or { ok: false, error: 'none_connected' | 'no_device' | 'audio_unavailable' | … }
+```
+
+```json
+{ "actions": ["audioDevice"], "streams": ["audio"] }
+```
+
+- **Two or three ids, in order of preference.** `device1` and `device2` are
+  the usual pair, `device3` is optional. One id is accepted too, and then it
+  behaves like `audioDevice`. Every id is a `speakers[].id` value from the
+  `audio` stream and goes through the same check against the live output
+  list, so nothing that is not an output can ever be chosen.
+- **The host decides, at the moment of the call.** The first id that is
+  connected wins. If it is already the default output, nothing is switched,
+  so the sound does not drop out for a change that changes nothing, and the
+  answer is still `{ ok: true }`.
+- **None connected** is its own answer, `none_connected`, and nothing is
+  switched. An empty or overlong id is `no_device`, as for `audioDevice`.
+- **Same grant as `audioDevice`**: it moves the sound to devices your widget
+  could already choose one at a time, so it asks the user for nothing new.
+- The result does not say which device was chosen. Read `speaker.id` from the
+  next `audio` push (or the entry in `speakers[]` with `isDefault: true`).
+- On macOS, switching needs `SwitchAudioSource`, as for `audioDevice`.
+
 <!-- SDK-REFERENCE:START (auto-generated by tools/gen-sdk-reference.mjs — do not edit by hand) -->
 ### Capability reference (auto-generated)
 
@@ -1894,13 +2125,13 @@ The exact set the SDK exposes today, generated from the code. Request
 these in your manifest `streams` / `actions`; the host only forwards what
 the user granted, and every action is re-validated server-side.
 
-**Data streams** (`streams`): `agenda`, `audio`, `audioLevels`, `battery`, `claude`, `discord`, `discordChannels`, `discordNotifications`, `discordSoundboard`, `diskIo`, `football`, `homeassistant`, `media`, `network`, `news`, `notes`, `obs`, `processes`, `scriptStates`, `spotify`, `status`, `stocks`, `streamerbot`, `system`, `tasks`, `twitchChat`, `twitchWatch`, `voicemeeter`, `wavelink`, `weather`, `youtube`, `youtubeLive`
+**Data streams** (`streams`): `agenda`, `audio`, `audioLevels`, `battery`, `claude`, `codex`, `devStorage`, `discord`, `discordChannels`, `discordNotifications`, `discordSoundboard`, `diskIo`, `football`, `homeassistant`, `media`, `network`, `news`, `notes`, `obs`, `processes`, `scriptStates`, `spotify`, `status`, `stocks`, `streamerbot`, `system`, `tasks`, `twitchChat`, `twitchWatch`, `voicemeeter`, `wavelink`, `weather`, `youtube`, `youtubeLive`
 
 **Action categories** (`actions`) → the action `type`s each unlocks:
 
 | Category | Action types |
 |----------|--------------|
-| `audioDevice` | `audioDevice`, `audioDeviceToggle` |
+| `audioDevice` | `audioDevice`, `audioDeviceToggle`, `audioDeviceFirst` |
 | `browser` | `browserOpen` |
 | `chroma` | `chromaColor`, `chromaOff` |
 | `discord` | `discordMute`, `discordDeafen`, `discordPtt`, `discordJoin`, `discordLeave`, `discordInputVol`, `discordOutputVol`, `discordUserVol`, `discordUserMute`, `discordAudioToggle`, `discordSoundboard` |
@@ -2462,6 +2693,17 @@ never the only place your widget says something.
 a readout the user deliberately parked in their top bar is worth having precisely
 when your tile is not on screen. Without it, your slot is dropped a few seconds
 after your last frame goes away.
+
+## Shipping an update (v4.11.11)
+
+When you publish a new version of your widget to the Store, people who installed it from there receive it on their own. Xenon takes it a day or more after the version goes live, replaces your package folder whole (a file you dropped in the new version is gone, nothing is merged), and keeps the user's saved settings, which live outside the package.
+
+What you should know before you bump the version:
+
+- **A new permission stops it.** If the new `manifest.json` asks for anything the user has not approved for the old version, Xenon does not install it by itself. That means a new stream, action, host, hook, handler, capability (`storage`, `secrets`, `island`, `badge`, `mini`, `clipboard`, `accent`, `expand`), a new `userHosts` slot, or a different `surface`. The user is told an update is waiting, and gets the usual permission window when they update by hand. Everyone who stays on the old version keeps working.
+- **Same id, higher version.** The catalog entry's `pkgId` has to be the `id` inside the package, and the version has to go up, or nobody receives it.
+- **Allow for a day.** The delay is on purpose: a version that turns out wrong can be hidden from the catalog before it reaches anyone.
+- **A package that fails its checks** (it does not validate, or the scan does not see it afterwards) is put back to the old version and is not retried by itself.
 
 ## Persistent storage
 

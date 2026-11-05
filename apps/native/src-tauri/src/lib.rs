@@ -15,6 +15,8 @@ mod monitor;
 mod prefs;
 mod spotlight_window;
 mod tray;
+#[cfg(windows)]
+mod twitch_login;
 #[cfg(target_os = "linux")]
 mod webview_guard;
 
@@ -122,6 +124,9 @@ fn update_prompt_js(version: &str) -> String {
 #[cfg(desktop)]
 fn spawn_update_check(app: tauri::AppHandle) {
     use tauri_plugin_updater::UpdaterExt;
+    if !shell_self_update() {
+        return;
+    }
     tauri::async_runtime::spawn(async move {
         let updater = match app.updater() {
             Ok(u) => u,
@@ -195,7 +200,10 @@ pub(crate) fn sync_autostart(app: &tauri::AppHandle) {
     if want {
         // Idempotent, and it REWRITES the entry — which is what migrates an
         // existing registration onto the new `--autostart` argument.
-        let _ = manager.enable();
+        if manager.enable().is_ok() {
+            #[cfg(windows)]
+            quote_login_entry(app);
+        }
     } else if manager.is_enabled().unwrap_or(false) {
         // Gated on is_enabled: the underlying crate's Windows `disable()` deletes
         // a registry value and returns an error when it is already absent.
@@ -205,6 +213,50 @@ pub(crate) fn sync_autostart(app: &tauri::AppHandle) {
 
 #[cfg(not(desktop))]
 pub(crate) fn sync_autostart(_app: &tauri::AppHandle) {}
+
+/// Rewrite the Windows login entry with the program path in quotes.
+///
+/// The autostart crate writes `C:\Users\John Smith\...\xenon-native.exe --autostart`
+/// with no quotes. Under a user folder with a space in it Windows then has to
+/// guess where the program name ends, and it can drop the `--autostart`
+/// argument (the same bug in another Tauri app: localsend/localsend#1293), so a
+/// login launch would be taken for a deliberate one. Same value name, so the
+/// crate's `is_enabled` and `disable` still find it.
+#[cfg(windows)]
+fn quote_login_entry(app: &tauri::AppHandle) {
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn RegSetKeyValueW(
+            hkey: isize,
+            sub_key: *const u16,
+            value_name: *const u16,
+            kind: u32,
+            data: *const core::ffi::c_void,
+            bytes: u32,
+        ) -> i32;
+    }
+    // HKEY_CURRENT_USER is the sign-extended (LONG)0x80000001.
+    const HKEY_CURRENT_USER: isize = 0x8000_0001_u32 as i32 as isize;
+    const REG_SZ: u32 = 1;
+    let Ok(exe) = std::env::current_exe() else { return };
+    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let sub_key = wide(r"Software\Microsoft\Windows\CurrentVersion\Run");
+    let name = wide(&app.package_info().name);
+    let data = wide(&format!("\"{}\" --autostart", exe.display()));
+    let status = unsafe {
+        RegSetKeyValueW(
+            HKEY_CURRENT_USER,
+            sub_key.as_ptr(),
+            name.as_ptr(),
+            REG_SZ,
+            data.as_ptr().cast(),
+            (data.len() * 2) as u32,
+        )
+    };
+    if status != 0 {
+        crate::crash_log::note("autostart", &format!("could not quote the login entry (error {status})"));
+    }
+}
 
 /// Handle one `xenon-display:` signal. Runs on a spawned thread — never on the
 /// WebView UI thread the navigation hook is called from.
@@ -307,6 +359,10 @@ fn spawn_update_install(app: tauri::AppHandle) {
     use tauri_plugin_updater::UpdaterExt;
     tauri::async_runtime::spawn(async move {
         report_update_event(&app, json!({ "phase": "checking" }));
+        if !shell_self_update() {
+            report_update_event(&app, json!({ "phase": "error", "code": "managed_install" }));
+            return;
+        }
         let updater = match app.updater() {
             Ok(u) => u,
             Err(e) => {
@@ -324,6 +380,7 @@ fn spawn_update_install(app: tauri::AppHandle) {
                 return;
             }
             Err(e) => {
+                crash_log::note("update", &format!("check failed: {}", short_err(&e)));
                 report_update_event(
                     &app,
                     json!({ "phase": "error", "code": "check_failed", "message": short_err(&e) }),
@@ -331,6 +388,10 @@ fn spawn_update_install(app: tauri::AppHandle) {
                 return;
             }
         };
+        // In the crash log too: the app's own update is the one half of an update
+        // that a report from a machine we cannot see would otherwise say nothing
+        // about (the dashboard half has update-result.json).
+        crash_log::note("update", &format!("installing v{}", update.version));
         let progress_app = app.clone();
         let done_app = app.clone();
         let mut received: u64 = 0;
@@ -382,6 +443,7 @@ fn spawn_update_install(app: tauri::AppHandle) {
                 app.restart();
             }
             Err(e) => {
+                crash_log::note("update", &format!("install failed: {}", short_err(&e)));
                 report_update_event(
                     &app,
                     json!({ "phase": "error", "code": "install_failed", "message": short_err(&e) }),
@@ -1380,6 +1442,63 @@ fn prefer_host_graphics_libs() {
 #[cfg(not(target_os = "linux"))]
 fn prefer_host_graphics_libs() {}
 
+/// On a Wayland compositor that offers explicit sync (Hyprland, and so Omarchy,
+/// among others) WebKitGTK's DMABUF renderer can make the compositor drop the
+/// window with protocol error 71, "Missing acquire timeline". Turning the
+/// renderer off avoids it, at the price of copying each frame, so it is done
+/// only where that error can happen: a session GTK will draw through Wayland.
+/// Under X11 (including a forced GDK_BACKEND=x11 on a Wayland desktop) nothing
+/// changes. A value the user already set always wins, so "=0" brings it back.
+#[cfg(target_os = "linux")]
+fn disable_dmabuf_on_wayland() {
+    const VAR: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty());
+    let forced_x11 = std::env::var("GDK_BACKEND").is_ok_and(|b| b.trim_start().starts_with("x11"));
+    if wayland && !forced_x11 && std::env::var_os(VAR).is_none() {
+        std::env::set_var(VAR, "1");
+    }
+}
+
+/// Make Xlib safe to use from more than one thread, before GTK opens the display.
+///
+/// Moving our own screen reads onto the main thread (monitor.rs, `on_main`) was
+/// not enough: the AppImageHub test of v4.11.11 (PR #7417) still aborted with
+/// "[xcb] Unknown sequence number ... XInitThreads has not been called" four
+/// seconds after the tray icon appeared, so some other thread, ours or inside a
+/// library (the tray indicator, GDK), still reaches the same X connection.
+/// XInitThreads is Xlib's own answer and must be the first Xlib call in the
+/// process; after it, concurrent use is locked instead of fatal. libX11 is
+/// already loaded by GTK on every Linux desktop, Wayland ones included, so this
+/// adds no dependency, and under Wayland the call is harmless.
+#[cfg(target_os = "linux")]
+fn init_xlib_threads() {
+    #[link(name = "X11")]
+    extern "C" {
+        fn XInitThreads() -> std::os::raw::c_int;
+    }
+    // SAFETY: takes no arguments, and runs before any thread or display exists.
+    unsafe {
+        XInitThreads();
+    }
+}
+
+/// Whether this shell may replace its own binary. On Linux the bundler stamps an
+/// AppImage, .deb or .rpm binary with its bundle type; an unstamped one (the
+/// pacman package `tools/package-arch.mjs` builds, or a dev build) belongs to
+/// whoever installed it, and the updater would fall back to the AppImage path
+/// and try to overwrite /usr/bin/xenon-native in place. The dashboard reads this
+/// as `shellSelfUpdate` and skips the app phase; the backend still updates.
+fn shell_self_update() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        tauri::utils::platform::bundle_type().is_some()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
+}
+
 /// Entry point shared by the desktop `main.rs` (and a future mobile target).
 ///
 /// The window itself — borderless, full-screen kiosk pointed at the bundled
@@ -1398,19 +1517,28 @@ pub fn run() {
     crash_log::install();
     crash_log::session_start();
 
+    // Before GTK starts and before any thread exists (set_var is not thread-safe).
+    #[cfg(target_os = "linux")]
+    disable_dmabuf_on_wayland();
+
     // Before anything can touch a display: an AppImage whose bundled libraries
     // shadow the host's driver stack renders NOTHING, and never says so.
     prefer_host_graphics_libs();
 
+    #[cfg(target_os = "linux")]
+    init_xlib_threads();
+
     let mut builder = tauri::Builder::default()
-        // Only one kiosk instance may own the Edge. A second launch re-focuses
-        // the existing window instead of opening a duplicate.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
+        // Only one kiosk instance may own the Edge. A second launch shows the
+        // existing window, on its screen, instead of opening a duplicate. A second
+        // LOGIN launch is not the user asking for anything (macOS has two login
+        // entries that both start the app), so it changes nothing: showing the
+        // window there would undo phone mode at every login.
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if args.iter().any(|a| a == "--autostart") {
+                return;
             }
+            monitor::reveal(app);
         }))
         // Open external links (Support, Community Discord, Report a bug, …) in
         // the user's default browser instead of trapping them in the kiosk.
@@ -1491,9 +1619,13 @@ pub fn run() {
             // SAME value (`gpu::applied`) rather than re-deciding. Recomputing per
             // window was a live bug — see the note at the top of gpu.rs. The
             // JS-facing `lowPowerGpu` cap below reads this decision too, instead of
-            // enumerating displays a second time.
+            // enumerating displays a second time. It is aimed at the screen the
+            // window is about to open on, by the same rule that places it.
             #[cfg(windows)]
-            let gpu_flag = gpu::arm(display_prefs.gpu_pin);
+            let gpu_flag = gpu::arm(
+                display_prefs.gpu_pin,
+                monitor::initial_screen_name(app.handle(), &display_prefs).as_deref(),
+            );
             #[cfg(not(windows))]
             let gpu_flag: Option<&'static str> = None;
             // Runtime-only capabilities merged over the shim's literal caps: the
@@ -1536,9 +1668,21 @@ pub fn run() {
                 serde_json::json!({
                     "shellVersion": app.package_info().version.to_string(),
                     "updateEvents": true,
+                    "shellSelfUpdate": shell_self_update(),
                     "lowPowerGpu": matches!(gpu_flag, Some("--force_low_power_gpu")),
                     "displayPicker": true,
                     "crosshairPrimary": cfg!(windows),
+                    // "Sign in to Twitch" in the Twitch tile (xenon-app:twitch-login).
+                    // Windows only: WebKit blocks the third-party cookie the
+                    // player embed would need, so elsewhere it could not work.
+                    "twitchLogin": cfg!(windows),
+                    // The interface scale as WKWebView page zoom (xenon-zoom:set).
+                    // macOS only: there the dashboard's CSS `zoom` reaches into
+                    // the sandboxed widget frames without shrinking their
+                    // viewport, so SDK widgets came out enlarged, blurry and
+                    // cropped (Discord, Oct 2026). WebView2 keeps the CSS path:
+                    // it resets native zoom on every cancelled signal navigation.
+                    "nativePageZoom": cfg!(target_os = "macos"),
                     // The monitor list, injected BEFORE the page loads. It used
                     // to arrive only with the first `push_display_state`, after
                     // the dashboard had loaded — so the first-run screen picker
@@ -1691,6 +1835,15 @@ pub fn run() {
                                 let h = nav_handle.clone();
                                 std::thread::spawn(move || spotlight_window::open(&h));
                             }
+                            // The Twitch tile's "Sign in to Twitch": twitch.tv's own
+                            // sign-in page in this profile, so the player embed
+                            // in the dashboard reads the session (twitch_login.rs).
+                            // A plain thread for the same reason as above.
+                            #[cfg(windows)]
+                            "twitch-login" => {
+                                let h = nav_handle.clone();
+                                std::thread::spawn(move || twitch_login::open(&h));
+                            }
                             _ => {}
                         }
                         return false;
@@ -1813,6 +1966,35 @@ pub fn run() {
                         cursor_guard::restore();
                         return false;
                     }
+                    // The interface scale (never a real page), sent only to shells
+                    // that declare `nativePageZoom`. Clamped to the Settings
+                    // slider's range so a malformed value cannot blow the page up.
+                    // Applied off this thread, like the display signal: this hook
+                    // runs on the event loop the zoom call dispatches to.
+                    #[cfg(target_os = "macos")]
+                    if scheme == "xenon-zoom" {
+                        let z = url
+                            .query_pairs()
+                            .find(|(k, _)| k == "z")
+                            .and_then(|(_, v)| v.parse::<f64>().ok())
+                            .filter(|z| z.is_finite())
+                            .map(|z| z.clamp(0.6, 2.5));
+                        // `nudge=1`: a widget frame loaded at this scale and came
+                        // out unscaled. Setting the same zoom again is a no-op in
+                        // WebKit, so step a hair off it first: that re-zooms every
+                        // frame, the new one included.
+                        let nudge = url.query_pairs().any(|(k, v)| k == "nudge" && v == "1");
+                        if let (Some(z), Some(win)) = (z, nav_handle.get_webview_window("main")) {
+                            std::thread::spawn(move || {
+                                if nudge {
+                                    let off = if z >= 2.5 { -0.001 } else { 0.001 };
+                                    let _ = win.set_zoom(z + off);
+                                }
+                                let _ = win.set_zoom(z);
+                            });
+                        }
+                        return false;
+                    }
                     if scheme == "xenon-fullscreen" {
                         // Route the F11 shortcut through the same canonical toggle the
                         // tray uses: it honours the Edge-kiosk guard (a no-op while the
@@ -1904,6 +2086,7 @@ pub fn run() {
             // watchdog running so it returns there after display reorders, replug
             // or resume from standby.
             monitor::place_now(&window);
+            monitor::note_startup(&window, autostarted);
             crash_log::debug("initial display placement finished");
             // Seed the watchdog's Remote-Desktop-hide flag from the saved pref so a
             // launch that starts inside an RDP session already knows to hide (the
