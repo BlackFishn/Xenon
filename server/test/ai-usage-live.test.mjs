@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import live from '../ai-usage-live.js';
 import usage from '../ai-usage.js';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -133,48 +134,131 @@ test('service prefers live quota but preserves local history and falls back when
   assert.equal(fallback.connection.liveStatus, 'unavailable');
 });
 
-test('OpenCode Go maps three windows without turning missing values into zero', () => {
-  const [out] = live._internal.mapUsage('opencode', { usage: {
-    rolling: { percent: 0, resetsAt: '2027-01-16T12:00:00Z' },
-    weekly: { percent: 35 }, monthly: { percent: 70 },
-  } }, now);
-  assert.deepEqual(out.windows.map(w => w.windowMinutes), [300, 10080, 43200]);
-  assert.equal(out.windows[0].usedPercent, 0);
-  assert.equal(out.windows[0].resetsAt, Date.parse('2027-01-16T12:00:00Z') / 1000);
-  assert.deepEqual(live._internal.mapUsage('opencode', { usage: { rolling: { percent: '0' } } }, now), []);
+// Grok's account allowance, as the Grok CLI shows under /usage. Protocol after
+// OpenUsage's GrokUsageClient / GrokCreditsConfigDecoder.
+const grokConfig = (extra = {}) => ({ config: { currentPeriod: { type: 'USAGE_PERIOD_TYPE_WEEKLY',
+  start: '2027-01-10T06:00:00Z', end: '2027-01-17T06:00:00Z' }, ...extra } });
+
+test('Grok maps its billing period to one window, and an absent percent is a real 0', () => {
+  const [out] = live._internal.mapUsage('grok', grokConfig({ creditUsagePercent: 12.5 }), now);
+  assert.equal(out.id, 'grok');
+  assert.equal(out.windows.length, 1);
+  assert.equal(out.windows[0].usedPercent, 12.5);
+  assert.equal(out.windows[0].windowMinutes, 10080, 'a week, so it lands in the Weekly slot');
+  assert.equal(out.windows[0].resetsAt, Date.parse('2027-01-17T06:00:00Z') / 1000);
+  assert.equal(out.windows[0].source, 'provider_api');
+  // proto-JSON drops zero values: a fresh week arrives with no percent at all.
+  assert.equal(live._internal.mapUsage('grok', grokConfig(), now)[0].windows[0].usedPercent, 0);
+  assert.equal(live._internal.mapUsage('grok', grokConfig({ creditUsagePercent: 140 }), now)[0].windows[0].usedPercent, 100);
 });
 
-test('OpenCode credentials send only the Go key to its fixed endpoint', async t => {
-  const dir = await mkdtemp(join(tmpdir(), 'xenon-opencode-'));
+test('a Grok reply that changed shape maps to nothing, never to 0% used', () => {
+  for (const bad of [
+    grokConfig({ creditUsagePercent: '12' }),
+    grokConfig({ creditUsagePercent: null }),
+    { config: { currentPeriod: { type: 'x', start: 'soon', end: 'later' } } },
+    { config: { currentPeriod: { start: '2027-01-17T06:00:00Z', end: '2027-01-10T06:00:00Z' } } },
+    { config: {} }, {}, null, [],
+  ]) assert.deepEqual(live._internal.mapUsage('grok', bad, now), [], JSON.stringify(bad));
+});
+
+test('Grok sends only the CLI access token, to its fixed endpoint, and never refreshes it', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'xenon-grok-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   await writeFile(join(dir, 'auth.json'), JSON.stringify({
-    'opencode-go': { type: 'api', key: 'GO_PRIVATE' }, openai: { access: 'UNRELATED_PRIVATE' },
+    'https://other.example::client': { key: 'OTHER_PRIVATE' },
+    'https://auth.x.ai::b1a00492': { key: 'GROK_PRIVATE', refresh_token: 'REFRESH_PRIVATE', auth_mode: 'oidc',
+      expires_at: new Date(now + 3600000).toISOString(), email: 'someone@example.com' },
   }));
-  const credentials = live.createCredentialsReader({ opencodeDir: dir });
-  const read = live.createLiveQuotaReader({ credentials: id => id === 'opencode' ? credentials(id) : null,
+  const credentials = live.createCredentialsReader({ grokDir: dir });
+  const read = live.createLiveQuotaReader({ credentials: id => id === 'grok' ? credentials(id) : null,
     clock: () => now, fetchImpl: async (url, init) => {
-      assert.equal(url, 'https://opencode.ai/zen/go/v1/usage');
-      assert.equal(init.headers.Authorization, 'Bearer GO_PRIVATE');
-      assert.equal(init.headers['ChatGPT-Account-Id'], undefined);
-      return new Response(JSON.stringify({ usage: { rolling: { percent: 20 } } }));
+      assert.equal(url, 'https://cli-chat-proxy.grok.com/v1/billing?format=credits');
+      assert.equal(init.method, 'GET');
+      assert.equal(init.redirect, 'error');
+      assert.equal(init.headers.Authorization, 'Bearer GROK_PRIVATE');
+      assert.equal(init.headers['X-XAI-Token-Auth'], 'xai-grok-cli');
+      assert.ok(!JSON.stringify(init).includes('REFRESH_PRIVATE'));
+      return new Response(JSON.stringify(grokConfig({ creditUsagePercent: 20 })));
     } });
   const out = await read();
-  assert.equal(out.opencode.status, 'ready');
-  assert.ok(!JSON.stringify(out).includes('PRIVATE'));
+  assert.equal(out.grok.status, 'ready');
+  assert.equal(out.grok.limits[0].windows[0].usedPercent, 20);
+  assert.ok(!/PRIVATE|someone@/.test(JSON.stringify(out)));
 });
 
-test('service includes OpenCode only with credentials and marks history unavailable', async () => {
-  let status = 'not_signed_in';
+test('an expired Grok token waits for the CLI instead of calling out', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'xenon-grok-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(join(dir, 'auth.json'), JSON.stringify({
+    'https://auth.x.ai::c': { key: 'GROK_PRIVATE', expires_at: new Date(now - 1000).toISOString() } }));
+  const credentials = live.createCredentialsReader({ grokDir: dir });
+  let calls = 0;
+  const read = live.createLiveQuotaReader({ credentials: id => id === 'grok' ? credentials(id) : null,
+    clock: () => now, fetchImpl: async () => { calls++; return new Response('{}'); } });
+  assert.equal((await read()).grok.status, 'sign_in_required');
+  assert.equal(calls, 0);
+});
+
+test('a Grok team account (412) says there is no personal allowance', async () => {
+  const read = live.createLiveQuotaReader({ credentials: async id => id === 'grok' ? { token: 'T', account: '', expiresAt: 0 } : null,
+    clock: () => now, fetchImpl: async () => new Response(JSON.stringify({ error: 'no personal team' }), { status: 412 }) });
+  assert.equal((await read()).grok.status, 'no_personal_quota');
+});
+
+test('the Grok CLI log supplies a reading, with its plan, and no credentials', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'xenon-grok-log-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const line = (ts, pct) => JSON.stringify({ ts, src: 'shell', lvl: 'info', msg: 'billing: fetched credits config',
+    ctx: { config: { creditUsagePercent: pct, currentPeriod: { type: 'USAGE_PERIOD_TYPE_WEEKLY',
+      start: '2027-01-10T06:00:00Z', end: '2027-01-17T06:00:00Z' } }, subscriptionTier: 'SuperGrok' } });
+  const file = join(dir, 'unified.jsonl');
+  await writeFile(file, [
+    line(new Date(now - 7200000).toISOString(), 3),
+    JSON.stringify({ ts: new Date(now - 3600000).toISOString(), msg: 'something else', ctx: { token: 'PRIVATE' } }),
+    line(new Date(now - 60000).toISOString(), 9),
+    '{"truncated', '',
+  ].join('\n'));
+  const reading = await usage.createGrokQuotaReader({ file })(now);
+  assert.equal(reading.limits[0].plan, 'SuperGrok');
+  assert.equal(reading.limits[0].windows[0].usedPercent, 9, 'the newest reading wins');
+  assert.equal(reading.limits[0].windows[0].source, 'local_cache');
+  assert.equal(reading.observedAt, now - 60000);
+  assert.ok(!JSON.stringify(reading).includes('PRIVATE'));
+  assert.equal(await usage.createGrokQuotaReader({ file: join(dir, 'missing.jsonl') })(now), null);
+});
+
+test('service shows Grok only where its CLI left a trace, newest reading first, quota only', async () => {
+  let status = 'not_signed_in', saved = null, remoteLimits = [];
+  const reading = (pct, at, source, plan = '') => ({ id: 'grok', name: 'Grok', plan, observedAt: at,
+    windows: [{ id: 'grok-period', usedPercent: pct, windowMinutes: 10080, resetsAt: now / 1000 + 86400, observedAt: at, source }] });
   const service = usage.createService({
     claudeReader: { getUsage: async () => ({ daily: [], total: { reqs: 0 }, live: {} }) },
     codexReader: { getUsage: async () => ({ daily: [], limits: [], found: false }) },
-    bridge: () => null, liveQuota: async () => ({ opencode: { status, limits: [] } }),
+    bridge: () => null, liveQuota: async () => ({ grok: { status, limits: remoteLimits } }),
+    grokQuota: async () => saved,
   });
-  assert.equal((await service.snapshot(now)).providers.length, 2);
-  status = 'sign_in_required';
-  const p = (await service.snapshot(now + 1)).providers[2];
-  assert.equal(p.id, 'opencode');
+  assert.equal((await service.snapshot(now)).providers.length, 2, 'no Grok CLI on this PC: no card');
+  saved = { limits: [reading(5, now - 600000, 'local_cache', 'SuperGrok')], observedAt: now - 600000 };
+  let p = (await service.snapshot(now + 1)).providers[2];
+  assert.equal(p.id, 'grok');
   assert.equal(p.historyUnavailable, true);
   assert.equal(p.periods.today.tokens, 0);
+  assert.equal(p.limits[0].windows[0].usedPercent, 5);
+  assert.equal(p.connection.source, 'local_cache');
+  status = 'ready'; remoteLimits = [reading(7, now, 'provider_api')];
+  p = (await service.snapshot(now + 2, { force: true })).providers[2];
+  assert.equal(p.limits[0].windows[0].usedPercent, 7, 'the live reading is newer');
+  assert.equal(p.limits[0].plan, 'SuperGrok', 'and the plan name comes from the CLI log');
+  assert.equal(p.connection.source, 'provider_api');
+  saved = null; remoteLimits = []; status = 'sign_in_required';
+  p = (await service.snapshot(now + 3, { force: true })).providers[2];
+  assert.equal(p.id, 'grok', 'signed in but nothing read yet still shows the card');
   assert.equal(p.connection.liveStatus, 'sign_in_required');
+});
+
+test('OpenCode is gone from the live reader and the service', () => {
+  const src = fs.readFileSync(new URL('../ai-usage-live.js', import.meta.url), 'utf8')
+    + fs.readFileSync(new URL('../ai-usage.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /opencode/i);
 });

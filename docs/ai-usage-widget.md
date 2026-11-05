@@ -18,6 +18,7 @@ The widget combines Claude Code and Codex with Today, Yesterday, and 30 Days fil
 
 - **Codex:** use the signed-in Codex app or CLI on the same computer as the Xenon backend. Existing session telemetry is discovered automatically; no API key needs to be pasted into Xenon. Xenon checks the signed-in account API for current quotas and falls back to session telemetry.
 - **Claude Code history:** run Claude Code locally. Xenon reuses its existing transcript reader.
+- **Grok:** sign in to the [Grok CLI](https://x.ai/cli) (`grok`) on the same computer once. Nothing is configured in Xenon: the card appears by itself when the CLI has signed in or left a reading, and shows the SuperGrok weekly allowance.
 - **Claude subscription quotas:** Xenon reads the account quota that Claude Code saves after `/usage` in `~/.claude.json` (`CLAUDE_CONFIG_DIR/.claude.json` with a custom config directory). This also works for Team accounts whose status line omits quotas. The cached account must match the current Claude account. The existing status-line bridge remains another source; Xenon uses the newer reading for each window. Xenon also checks the account API using the existing Claude Code login; open Claude Code to renew an expired login, then Refresh.
 
 Click **Refresh** to rescan local usage immediately, including newly created session files. Manual refresh bypasses the 20-second aggregate cache and the one-minute file-discovery interval; concurrent requests share the same scan. The button shows when a refresh is running, and the last check time remains in the footer. The header no longer has a help button or refresh status strip. Failed requests show a warning and keep the previous reading visible. Automatic reads continue every 60 seconds while a widget is visible and may reuse recent cached history. Countdown text updates every 15 seconds. No telemetry scanning timer runs when this widget is absent.
@@ -93,21 +94,26 @@ The Claude and Codex quota protocol is based on the provider clients in [OpenUsa
 
 Successful API readings are cached for five minutes. Manual Refresh bypasses that cache, with a ten-second duplicate-click guard. Concurrent requests share one fetch. Requests time out after eight seconds and response bodies are limited to 1 MiB. HTTP failures back off for five minutes; 429 responses honor longer Retry-After values, including during manual refresh. Failed refreshes retain the original observation time and display a warning. Claude uses the newest available reading for each window. Codex API responses include reported credits and additional model limits.
 
-The Account API label identifies network-sourced limits. Local spending remains a separate API-equivalent estimate. An expired/rejected login requires opening or signing in through the provider app/CLI, then refreshing Xenon. Xenon deliberately does not rotate shared refresh tokens. File-based Claude Code and Codex logins are supported; macOS Keychain, encrypted Desktop-only logins, multi-account Swap profiles are outside this integration; OpenCode Go support is described below.
+The Account API label identifies network-sourced limits. Local spending remains a separate API-equivalent estimate. An expired/rejected login requires opening or signing in through the provider app/CLI, then refreshing Xenon. Xenon deliberately does not rotate shared refresh tokens. File-based Claude Code and Codex logins are supported; macOS Keychain, encrypted Desktop-only logins, multi-account Swap profiles are outside this integration; Grok support is described below.
 
-## Dynamic layout and OpenCode Go
+## Dynamic layout and Grok
 
 Use **⋯ → Layout** on each AI Usage widget: **Auto**, **Grid · 1/2/3/4 per row**, or **List · horizontal rows**. Grid counts are a maximum: cards drop to fewer columns when the tile is too narrow. List places the provider identity beside its quota meters on wider tiles and stacks them on narrow tiles. Auto fits up to four columns. Layout is saved locally per widget instance, including duplicated widgets, and restored after reload on that browser/device. Other devices keep their own layout.
 
-The widget accepts Claude, Codex and OpenCode cards and calculates the ring from each provider's actual cost share. No placeholder provider or quota is added.
+The widget accepts Claude, Codex and Grok cards and calculates the ring from each provider's actual cost share. No placeholder provider or quota is added. OpenCode Go was removed on the owner's request (Nov 2026).
 
-OpenCode Go follows OpenUsage's `OpenCodeAuthStore`, `OpenCodeUsageClient` and `OpenCodeUsageMapper`: read only the `opencode-go.key` entry in the local `auth.json` and request `https://opencode.ai/zen/go/v1/usage`. Data directory precedence is `OPENCODE_DATA_DIR`, `XDG_DATA_HOME/opencode`, then `~/.local/share/opencode`. The card appears when a Go credential is found, including when its API request fails, so the warning remains visible. Other OpenCode provider credentials are never sent to this endpoint.
+Grok follows OpenUsage's `GrokUsageClient`, `GrokCreditsConfigDecoder` and `GrokUsageMapper`. Two sources, the newer reading wins:
 
-Session, Weekly and Monthly use reported percentages and reset times. The same cache, request sharing, timeout, redirect protection and backoff apply to all three providers. This integration does not yet import OpenCode SQLite history or Zen spending: its cost displays an em dash, no token chart is fabricated, and the combined estimate is marked partial. It does not double-count OpenCode traffic using an existing Claude/Codex account.
+- **Account API:** the Grok CLI's OAuth access token from `GROK_HOME/auth.json` (default `~/.grok/auth.json`), the entry whose key starts with `https://auth.x.ai::`, sent with `X-XAI-Token-Auth: xai-grok-cli` to `https://cli-chat-proxy.grok.com/v1/billing?format=credits`. Only the access token is read; the refresh token, e-mail and other entries are never used or sent, and the token is never renewed by Xenon. The CLI renews it while it runs; once it expires the card says so and keeps the last reading. A 412 (team account) reports that there is no personal allowance.
+- **Grok CLI reading:** the newest `billing: fetched credits config` line in `GROK_HOME/logs/unified.jsonl` (last 1 MiB only), which the CLI writes when it starts or opens `/usage`. It carries the plan name (SuperGrok) and needs no credentials or network.
+
+The allowance is the current billing period: `creditUsagePercent` used, reset at the period end. A week lands in the Weekly slot; an absent percent is a real 0% (proto-JSON omits zeros), a non-numeric one maps to nothing.
+
+Session, Weekly and Monthly use reported percentages and reset times. The same cache, request sharing, timeout, redirect protection and backoff apply to all three providers. Grok token and spending history is not imported yet (the CLI keeps per-turn totals behind `grok usage <session>`; no recorded session was available to build against): its cost displays an em dash, no token chart is fabricated, and the combined estimate is marked partial.
 
 ![Dynamic two-column grid, sample data](images/ai-usage-dynamic-grid.png)
 
-Regression coverage verifies three-provider rendering, per-instance layout persistence, storage failures, Go credential isolation and all three quota windows. Browser checks cover six layouts at 300×800, 440×1100, 733×673, 1920×1080 and 2560×720, plus reload persistence.
+Regression coverage verifies three-provider rendering, per-instance layout persistence, storage failures, Grok credential isolation (access token only, fixed endpoint, no refresh), expiry, the team-account answer, the CLI-log reading and the newest-reading merge. Browser checks cover six layouts at 300×800, 440×1100, 733×673, 1920×1080 and 2560×720, plus reload persistence.
 
 ### Compact List
 

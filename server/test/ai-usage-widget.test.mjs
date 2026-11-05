@@ -293,17 +293,19 @@ test('invalid saved layouts fall back to auto; unavailable storage keeps change 
   assert.match(h.mounts[0].textContent, /aiu_layout_save_failed/);
 });
 
-test('three providers render with quota-only OpenCode and no fabricated history', async () => {
+test('three providers render with quota-only Grok and no fabricated history', async () => {
   const h = await setup(1, { fetch: async (url, init, payload) => {
     if (payload.providers.length === 2) payload.providers.push({
-      ...payload.providers[1], id: 'opencode', historyUnavailable: true,
-      limits: [{ id: 'opencode', windows: [{ usedPercent: 25, windowMinutes: 300 }] }],
+      ...payload.providers[1], id: 'grok', historyUnavailable: true,
+      limits: [{ id: 'grok', plan: 'SuperGrok', windows: [{ usedPercent: 25, windowMinutes: 10080, observedAt: Date.now() }] }],
     });
     return { ok: true, json: async () => payload };
   } });
   assert.equal(h.mounts[0].querySelectorAll('.aiu-provider').length, 3);
-  assert.equal(h.mounts[0].querySelector('.aiu-opencode .aiu-trend'), null);
-  assert.match(h.mounts[0].textContent, /OpenCode/);
+  assert.equal(h.mounts[0].querySelector('.aiu-grok .aiu-trend'), null);
+  assert.match(h.mounts[0].textContent, /Grok/);
+  assert.match(h.mounts[0].textContent, /SuperGrok/);
+  assert.match(h.mounts[0].textContent, /75% aiu_left/, 'the weekly allowance shows what is left');
   assert.match(h.mounts[0].textContent, /aiu_history_unavailable/);
 });
 

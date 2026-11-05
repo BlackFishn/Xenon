@@ -1,7 +1,7 @@
 .aiusage-panel {
   --aiu-claude: #ed9476;
   --aiu-codex: #76dcc0;
-  --aiu-opencode: #b4a0f2;
+  --aiu-grok: #b9c3cf;
   --aiu-text: var(--text, #eef1f3);
   --aiu-muted: var(--text-muted, #a1abb6);
   container: ai-usage / inline-size;
@@ -140,7 +140,7 @@
   .aiu-refresh-label, .aiu-local { display: none; }
 }
 
-.aiu-opencode { --aiu-accent: var(--aiu-opencode); }
+.aiu-grok { --aiu-accent: var(--aiu-grok); }
 .aiu-providers { display: grid; gap: 12px; min-width: 0; grid-column: 1 / -1;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, max(260px, calc((100% - (var(--aiu-columns, 4) - 1) * 12px) / var(--aiu-columns, 4)))), 1fr)); align-items: start; }
 .aiu-layout { position: relative; }

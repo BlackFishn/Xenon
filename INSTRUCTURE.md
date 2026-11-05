@@ -197,8 +197,9 @@ on 3030, so launching it from a test checkout is not an isolated preview.
   local credentials on the backend; do not expose, rotate or log shared auth tokens.
 - Cache/coalescing, timeout, response-size limits, rate-limit backoff and local fallback
   are intentional. Failure must not look like a fresh successful zero reading.
-- OpenCode Go supports session, weekly and monthly quotas when credentials exist.
-  Its SQLite history/Zen spending are not imported: missing cost/history stays explicit.
+- Grok (owner request, Nov 2026; OpenCode Go was removed) shows the SuperGrok weekly
+  allowance from the Grok CLI's login and its own log. Token history is not imported:
+  missing cost/history stays explicit.
 - Auto, Grid (1–4 maximum columns), and compact expandable List layouts are supported.
   **Keep the full overview ring, provider legend, token total and cache-hit summary
   in List mode**; this was an explicit owner requirement.
