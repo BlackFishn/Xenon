@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — AI Usage providers: show, hide, reorder, real marks
+
+- Add **Providers** to the AI Usage ⋯ menu: switch each provider (Claude, Codex, Grok) on or off and move it up or down. Hidden providers also leave the ring, legend and totals. Saved per widget and device, like the layout; the last provider on stays on.
+- Replace the provider glyphs with each provider's own mark (Claude, OpenAI, Grok), drawn in its colour and kept in copied images.
+
 ## Unreleased — Grok in AI Usage
 
 - Add a Grok card to AI Usage: the SuperGrok weekly allowance (used, left and reset), read from the signed-in Grok CLI with nothing to configure. The newer of the account API reading and the CLI's own logged reading is shown, with the plan name.
