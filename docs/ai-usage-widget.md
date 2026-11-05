@@ -100,6 +100,10 @@ The Account API label identifies network-sourced limits. Local spending remains 
 
 Use **⋯ → Layout** on each AI Usage widget: **Auto**, **Grid · 1/2/3/4 per row**, or **List · horizontal rows**. Grid counts are a maximum: cards drop to fewer columns when the tile is too narrow. List places the provider identity beside its quota meters on wider tiles and stacks them on narrow tiles. Auto fits up to four columns. Layout is saved locally per widget instance, including duplicated widgets, and restored after reload on that browser/device. Other devices keep their own layout.
 
+The same menu lists the providers under **Providers**: a switch shows or hides each one and ↑/↓ change their order. A hidden provider leaves the ring, the legend and the totals as well as the card list; the last one switched on cannot be switched off. Order and visibility are saved per widget instance on this device, beside the layout (`xenon.aiusage.providers.<instance>` in local storage); only known provider ids are read back, a provider the saved order does not name (one that appeared later) goes last, and a saved state that would hide everything is ignored. The backend still reads every provider: the choice changes what a tile draws, not what is fetched.
+
+Each card carries its provider's own mark (Claude, OpenAI for Codex, Grok), drawn inline in the provider colour so it also appears in **Copy widget as image**. The shapes come from OpenUsage's `ProviderIcons` (MIT, `docs/licenses/openusage.txt`); the marks are trademarks of Anthropic, OpenAI and xAI.
+
 The widget accepts Claude, Codex and Grok cards and calculates the ring from each provider's actual cost share. No placeholder provider or quota is added. OpenCode Go was removed on the owner's request (Nov 2026).
 
 Grok follows OpenUsage's `GrokUsageClient`, `GrokCreditsConfigDecoder` and `GrokUsageMapper`. Two sources, the newer reading wins:

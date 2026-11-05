@@ -185,7 +185,9 @@ test('cached usage renders without help controls or a refresh status strip', asy
   assert.equal(h.mounts[0].querySelector('[data-aiu-focus="help"]'), null);
   assert.equal(h.mounts[0].querySelector('.aiu-help'), null);
   assert.equal(h.mounts[0].querySelector('.aiu-refresh-result'), null);
-  assert.equal(h.mounts[0].querySelector('.aiu-controls').querySelectorAll('button').length, 2);
+  // Copy and Refresh; the provider buttons live inside the ⋯ menu, not the header.
+  const menu = h.mounts[0].querySelector('.aiu-layout');
+  assert.equal(h.mounts[0].querySelector('.aiu-controls').querySelectorAll('button').filter(b => !menu.contains(b)).length, 2);
   assert.ok(h.mounts[0].querySelector('.aiu-grid'));
 });
 
@@ -323,4 +325,82 @@ test('compact list folds history, preserves expansion on refresh, and leaves gri
   selector.value = '2'; selector._handlers.change[0]();
   assert.equal(h.mounts[0].querySelector('.aiu-compact'), null);
   assert.ok(h.mounts[0].querySelector('.aiu-provider .aiu-trend'));
+});
+
+// ── Which providers a tile shows, and in what order (⋯ menu) ─────────────────
+function memoryStorage(seed = {}) {
+  const data = { ...seed };
+  return { data, getItem: k => (Object.hasOwn(data, k) ? data[k] : null), setItem: (k, v) => { data[k] = String(v); } };
+}
+const withGrok = async (url, init, payload) => {
+  if (payload.providers.length === 2) payload.providers.push({ ...payload.providers[1], id: 'grok', historyUnavailable: true, limits: [] });
+  return { ok: true, json: async () => payload };
+};
+const cardIds = mount => mount.querySelector('.aiu-providers').querySelectorAll('.aiu-provider').map(n => n.className.match(/aiu-(claude|codex|grok)/)[1]);
+const legendIds = mount => mount.querySelectorAll('.aiu-legend-row').map(n => n.className.match(/aiu-(claude|codex|grok)/)[1]);
+const prefRow = (mount, id) => mount.querySelectorAll('.aiu-pref-row').find(n => n.className.includes('aiu-' + id));
+
+test('the menu lists every provider with a switch and up/down, in the tile order', async () => {
+  const h = await setup(1, { storage: memoryStorage(), fetch: withGrok });
+  const rows = h.mounts[0].querySelectorAll('.aiu-pref-row');
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows.map(r => r.textContent.trim().replace(/[↑↓]/g, '')), ['Claude', 'Codex', 'Grok']);
+  assert.ok(rows.every(r => r.querySelector('.aiu-pref-check').checked));
+  assert.equal(rows[0].querySelectorAll('.aiu-pref-move')[0].disabled, true, 'the first cannot move up');
+  assert.equal(rows[2].querySelectorAll('.aiu-pref-move')[1].disabled, true, 'the last cannot move down');
+  assert.match(rows[1].querySelectorAll('.aiu-pref-move')[0].getAttribute('aria-label'), /Codex · aiu_move_up/);
+});
+
+test('moving a provider reorders its card and its legend row, and is saved for this tile', async () => {
+  const storage = memoryStorage();
+  const h = await setup(1, { storage, fetch: withGrok });
+  prefRow(h.mounts[0], 'grok').querySelectorAll('.aiu-pref-move')[0].click();
+  prefRow(h.mounts[0], 'grok').querySelectorAll('.aiu-pref-move')[0].click();
+  assert.deepEqual(cardIds(h.mounts[0]), ['grok', 'claude', 'codex']);
+  assert.deepEqual(legendIds(h.mounts[0]), ['grok', 'claude', 'codex']);
+  assert.deepEqual(JSON.parse(storage.data['xenon.aiusage.providers.aiusage']).order, ['grok', 'claude', 'codex']);
+});
+
+test('hiding a provider removes its card and takes it out of the ring and totals', async () => {
+  const storage = memoryStorage();
+  const h = await setup(1, { storage, fetch: withGrok });
+  const before = h.mounts[0].querySelector('.aiu-total').textContent;
+  const check = prefRow(h.mounts[0], 'codex').querySelector('.aiu-pref-check');
+  check.checked = false; check._handlers.change[0]();
+  assert.deepEqual(cardIds(h.mounts[0]), ['claude', 'grok']);
+  assert.deepEqual(legendIds(h.mounts[0]), ['claude', 'grok']);
+  assert.notEqual(h.mounts[0].querySelector('.aiu-total').textContent, before, 'the total no longer counts Codex');
+  assert.equal(prefRow(h.mounts[0], 'codex').querySelector('.aiu-pref-check').checked, false, 'still listed, so it can come back');
+  assert.deepEqual(JSON.parse(storage.data['xenon.aiusage.providers.aiusage']).hidden, ['codex']);
+});
+
+test('the last provider on cannot be switched off', async () => {
+  const h = await setup(1, { storage: memoryStorage({ 'xenon.aiusage.providers.aiusage': JSON.stringify({ hidden: ['codex'] }) }) });
+  const claude = prefRow(h.mounts[0], 'claude').querySelector('.aiu-pref-check');
+  assert.equal(claude.disabled, true);
+  assert.deepEqual(cardIds(h.mounts[0]), ['claude']);
+});
+
+test('saved preferences are per tile, and junk in them is ignored', async () => {
+  const storage = memoryStorage({
+    'xenon.aiusage.providers.aiusage': JSON.stringify({ order: ['codex', 'nope', 'codex'], hidden: ['claude', 'evil'] }),
+    'xenon.aiusage.providers.aiusage~test1': '{not json',
+  });
+  const h = await setup(2, { storage, fetch: withGrok });
+  assert.deepEqual(cardIds(h.mounts[0]), ['codex', 'grok'], 'saved order, unknown ids dropped, a provider it never named at the end');
+  assert.deepEqual(cardIds(h.mounts[1]), ['claude', 'codex', 'grok'], 'the second tile keeps its own (defaults on a bad entry)');
+});
+
+test('a saved state that hides everything shows everything rather than an empty tile', async () => {
+  const h = await setup(1, { storage: memoryStorage({ 'xenon.aiusage.providers.aiusage': JSON.stringify({ hidden: ['claude', 'codex'] }) }) });
+  assert.deepEqual(cardIds(h.mounts[0]), ['claude', 'codex']);
+});
+
+test('each card wears its provider\'s own mark', async () => {
+  const h = await setup(1, { storage: memoryStorage(), fetch: withGrok });
+  for (const id of ['claude', 'codex', 'grok']) {
+    const mark = h.mounts[0].querySelector('.aiu-' + id + ' .aiu-mark');
+    assert.match(mark.innerHTML, /^<svg viewBox="[0-9. ]+" aria-hidden="true" focusable="false"><path fill="currentColor" d="M/, id);
+  }
+  assert.match(source, /Shapes from OpenUsage's ProviderIcons \(MIT, docs\/licenses\/openusage\.txt\)/);
 });
