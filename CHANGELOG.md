@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Grok in AI Usage
+
+- Add a Grok card to AI Usage: the SuperGrok weekly allowance (used, left and reset), read from the signed-in Grok CLI with nothing to configure. The newer of the account API reading and the CLI's own logged reading is shown, with the plan name.
+- Only the Grok CLI's access token is used, sent to its fixed endpoint; it is never renewed or exposed to the dashboard. Team accounts are told they have no personal allowance.
+- Grok token and spending history is not imported yet: the card says so and shows no chart.
+- Remove OpenCode Go from AI Usage.
+
 ## Unreleased — upstream v4.11.13 sync
 
 - Bring upstream v4.11.11 to v4.11.13 into the fork (see their sections below): lyrics, Codex and Ask ChatGPT tiles, the redesigned Claude tile and Claude Code mod, Developer cleanup, Home Assistant history and cameras, automatic updates, and their fixes.

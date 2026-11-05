@@ -7,11 +7,12 @@ const fs = require('fs').promises;
 const os = require('os');
 const path = require('path');
 const { createHash } = require('crypto');
-const { normalizeLimits, normalizeClaudeQuotaCache } = require('./ai-usage')._internal;
+const { normalizeLimits, normalizeClaudeQuotaCache, grokLimits } = require('./ai-usage')._internal;
 const URLS = Object.freeze({
   claude: 'https://api.anthropic.com/api/oauth/usage',
   codex: 'https://chatgpt.com/backend-api/wham/usage',
-  opencode: 'https://opencode.ai/zen/go/v1/usage',
+  // The Grok CLI's own allowance read (OpenUsage GrokUsageClient.creditsConfigURL).
+  grok: 'https://cli-chat-proxy.grok.com/v1/billing?format=credits',
 });
 const clean = value => typeof value === 'string' && value.length <= 16384 && !/[\x00-\x20\x7f]/.test(value) ? value : '';
 const positive = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
@@ -26,14 +27,21 @@ async function readJson(file) {
 
 function createCredentialsReader({
   codexDir = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'),
-  opencodeDir = process.env.OPENCODE_DATA_DIR || path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), 'opencode'),
+  grokDir = process.env.GROK_HOME || path.join(os.homedir(), '.grok'),
   claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'),
 } = {}) {
   return async id => {
-    if (id === 'opencode') {
-      const data = await readJson(path.join(opencodeDir, 'auth.json'));
-      const token = clean(data?.['opencode-go']?.key);
-      return token ? { token, account: '', expiresAt: 0 } : null;
+    if (id === 'grok') {
+      // One entry per OAuth issuer::client. Only xAI's own sign-in is used, and
+      // only its access token: renewing it is the Grok CLI's job (see top).
+      const data = await readJson(path.join(grokDir, 'auth.json'));
+      const entry = data && typeof data === 'object' && !Array.isArray(data)
+        ? Object.entries(data).find(([key, value]) => key.startsWith('https://auth.x.ai::') && value && typeof value === 'object')?.[1]
+        : null;
+      const token = clean(entry?.key);
+      if (!token) return null;
+      const expires = typeof entry.expires_at === 'string' ? Date.parse(entry.expires_at) : NaN;
+      return { token, account: '', expiresAt: Number.isFinite(expires) ? expires : 0 };
     }
     const data = await readJson(path.join(id === 'claude' ? claudeDir : codexDir,
       id === 'claude' ? '.credentials.json' : 'auth.json'));
@@ -47,16 +55,7 @@ function createCredentialsReader({
 
 function mapUsage(id, body, now) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return [];
-  if (id === 'opencode') {
-    const windows = [['rolling', 300], ['weekly', 10080], ['monthly', 43200]].flatMap(([key, minutes]) => {
-      const raw = body.usage?.[key];
-      if (!raw || typeof raw.percent !== 'number' || !Number.isFinite(raw.percent) || raw.percent < 0) return [];
-      return [{ id: 'opencode-' + key, usedPercent: Math.min(100, raw.percent), windowMinutes: minutes,
-        resetsAt: typeof raw.resetsAt === 'string' ? positive(Date.parse(raw.resetsAt) / 1000) : 0,
-        observedAt: now, source: 'provider_api' }];
-    });
-    return windows.length ? [{ id: 'opencode', name: 'OpenCode Go', plan: 'Go', windows, observedAt: now }] : [];
-  }
+  if (id === 'grok') return grokLimits(body, now, 'provider_api');
   if (id === 'claude') {
     const quota = normalizeClaudeQuotaCache({ oauthAccount: { accountUuid: 'current' },
       cachedUsageUtilization: { accountUuid: 'current', fetchedAtMs: now, utilization: body } }, now);
@@ -111,11 +110,14 @@ function createLiveQuotaReader({ credentials = createCredentialsReader(), fetchI
         const headers = { Authorization: 'Bearer ' + auth.token, Accept: 'application/json' };
         if (id === 'claude') headers['anthropic-beta'] = 'oauth-2025-04-20';
         if (id === 'codex' && auth.account) headers['ChatGPT-Account-Id'] = auth.account;
+        if (id === 'grok') headers['X-XAI-Token-Auth'] = 'xai-grok-cli';
         const response = await fetchImpl(URLS[id], { method: 'GET', headers,
           redirect: 'error', signal: controller.signal });
         if (!response.ok) {
           state.status = response.status === 401 || response.status === 403 ? 'sign_in_required'
-            : response.status === 429 ? 'rate_limited' : 'unavailable';
+            : response.status === 429 ? 'rate_limited'
+            // Grok answers 412 for a team account: there is no personal allowance.
+            : id === 'grok' && response.status === 412 ? 'no_personal_quota' : 'unavailable';
           if (response.status === 429) {
             const retry = response.headers.get('retry-after');
             const duration = retry && /^\d+$/.test(retry) ? Number(retry) * 1000 : Date.parse(retry) - now;

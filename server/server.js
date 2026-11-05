@@ -12725,7 +12725,7 @@ const _claudeInbox = claudeInbox.createInbox({
     _claudeBridgeChanged();
   },
 });
-const _aiUsage = aiUsage.createService({ claudeReader: _claudeReader, bridge: () => _claudeBridge.snapshot(), connection: () => claudeLink.status(DATA_DIR, PORT), quotaCache: aiUsage.createClaudeQuotaReader(), liveQuota: require('./ai-usage-live').createLiveQuotaReader() });
+const _aiUsage = aiUsage.createService({ claudeReader: _claudeReader, bridge: () => _claudeBridge.snapshot(), connection: () => claudeLink.status(DATA_DIR, PORT), quotaCache: aiUsage.createClaudeQuotaReader(), grokQuota: aiUsage.createGrokQuotaReader(), liveQuota: require('./ai-usage-live').createLiveQuotaReader() });
 let _claudeBridgeToken = '';        // resolved once at boot from DATA_DIR
 let _claudeBridgePushTimer = null;
 

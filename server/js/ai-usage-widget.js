@@ -2,7 +2,7 @@
 (function () {
   const el = makeEl;
   const t = key => window.t(key);
-  const names = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode' };
+  const names = { claude: 'Claude', codex: 'Codex', grok: 'Grok' };
   const states = new WeakMap();
   const layouts = ['auto', '1', '2', '3', '4', 'list'];
   function layoutKey(mount) {
@@ -194,7 +194,7 @@
     card.setAttribute('aria-label', names[provider.id] + ' usage');
     const data = provider.periods[state.period];
     const head = el('div', 'aiu-provider-head');
-    const mark = el('span', 'aiu-mark', provider.id === 'claude' ? '✳' : provider.id === 'codex' ? '⌘' : '›_');
+    const mark = el('span', 'aiu-mark', provider.id === 'claude' ? '✳' : provider.id === 'codex' ? '⌘' : '⧸');
     mark.setAttribute('aria-hidden', 'true');
     const title = el('div', 'aiu-provider-title');
     const name = el('div', 'aiu-line');
@@ -203,7 +203,7 @@
     if (plan) name.append(el('span', 'aiu-plan', plan));
     const observed = Math.max(0, ...provider.limits.map(l => l.observedAt || 0));
     const source = el('span', 'aiu-source aiu-muted', observed ? t('aiu_observed') + ' ' + age(Date.now() - observed) + ' ' + t('aiu_ago') : t('aiu_local_history'));
-    if (provider.connection?.source === 'local_cache') source.textContent = t('aiu_claude_cache') + ' · ' + source.textContent;
+    if (provider.connection?.source === 'local_cache') source.textContent = t(provider.id === 'grok' ? 'aiu_grok_cache' : 'aiu_claude_cache') + ' · ' + source.textContent;
     if (provider.connection?.source === 'provider_api') source.textContent = t('aiu_provider_api') + ' · ' + source.textContent;
     if (observed) source.title = new Date(observed).toLocaleString();
     title.append(name, source);
@@ -221,9 +221,9 @@
       quotas.append(quota(w, w.windowMinutes ? age(w.windowMinutes * 60000) + ' ' + t('aiu_window') : t('aiu_other_window')));
     }
     card.append(quotas);
-    if (!main.length) card.append(provider.id === 'claude' ? claudeConnection(provider) : el('p', 'aiu-hint', t(provider.id === 'opencode' ? 'aiu_opencode_hint' : 'aiu_codex_hint')));
+    if (!main.length) card.append(provider.id === 'claude' ? claudeConnection(provider) : el('p', 'aiu-hint', t(provider.id === 'grok' ? 'aiu_grok_hint' : 'aiu_codex_hint')));
     const liveStatus = provider.connection?.liveStatus;
-    if (['sign_in_required', 'rate_limited', 'unavailable'].includes(liveStatus)) card.append(el('p', 'aiu-warning', t('aiu_live_' + liveStatus)));
+    if (['sign_in_required', 'rate_limited', 'unavailable', 'no_personal_quota'].includes(liveStatus)) card.append(el('p', 'aiu-warning', t('aiu_live_' + liveStatus)));
     if (provider.incomplete) card.append(el('p', 'aiu-warning', t('aiu_incomplete')));
     if (!provider.found) card.append(el('p', 'aiu-hint', t('aiu_not_found')));
     if (provider.historyUnavailable) {

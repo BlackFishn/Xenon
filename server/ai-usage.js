@@ -227,6 +227,68 @@ function createClaudeQuotaReader({ file = process.env.CLAUDE_CONFIG_DIR
   };
 }
 
+// Grok's credits config, the account allowance the Grok CLI shows under /usage
+// (protocol reference: OpenUsage's GrokCreditsConfigDecoder). One window: the
+// current billing period, a week on SuperGrok. proto-JSON leaves zero values
+// out, so an absent percent is a real 0% — but a present one that is not a
+// finite number is a schema change, and maps to nothing rather than to 0.
+function grokLimits(body, at, source, plan = '') {
+  const config = body && typeof body === 'object' ? body.config : null;
+  const period = config && typeof config === 'object' ? config.currentPeriod : null;
+  if (!period || typeof period !== 'object') return [];
+  const start = Date.parse(period.start), end = Date.parse(period.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return [];
+  const raw = config.creditUsagePercent;
+  if (raw !== undefined && (typeof raw !== 'number' || !Number.isFinite(raw))) return [];
+  return [{ id: 'grok', name: 'Grok', plan: label(plan), observedAt: at, windows: [{
+    id: 'grok-period', usedPercent: Math.max(0, Math.min(100, raw || 0)),
+    windowMinutes: Math.round((end - start) / 60000), resetsAt: end / 1000, observedAt: at, source }] }];
+}
+
+// The Grok CLI logs the allowance it fetched each time it starts or opens
+// /usage ("billing: fetched credits config"). Reading the newest such line gives
+// a reading with no credentials and no network — the same role ~/.claude.json
+// plays for Claude. Only the tail of the log is read, and only that one message.
+const GROK_BILLING_MSG = '"billing: fetched credits config"';
+function parseGrokLog(text) {
+  const lines = text.split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].includes(GROK_BILLING_MSG)) continue;
+    let entry;
+    try { entry = JSON.parse(lines[i]); } catch { continue; }
+    const at = Date.parse(entry && entry.ts);
+    const ctx = entry && entry.ctx;
+    if (!Number.isFinite(at) || !ctx || typeof ctx !== 'object') continue;
+    const limits = grokLimits({ config: ctx.config }, at, 'local_cache', typeof ctx.subscriptionTier === 'string' ? ctx.subscriptionTier : '');
+    if (limits.length) return { limits, observedAt: at };
+  }
+  return null;
+}
+
+function createGrokQuotaReader({ file = path.join(process.env.GROK_HOME || path.join(os.homedir(), '.grok'), 'logs', 'unified.jsonl'),
+  maxBytes = 1024 * 1024 } = {}) {
+  let last = null; // { size, mtime, reading }
+  return async function readQuota(now) {
+    try {
+      const stat = await fs.promises.lstat(file);
+      if (!stat.isFile()) return null;
+      if (last && last.size === stat.size && last.mtime === stat.mtimeMs) return last.reading;
+      const length = Math.min(stat.size, maxBytes);
+      const handle = await fs.promises.open(file, 'r');
+      let text;
+      try {
+        const buffer = Buffer.alloc(length);
+        await handle.read(buffer, 0, length, stat.size - length);
+        text = buffer.toString('utf8');
+      } finally { await handle.close(); }
+      const reading = parseGrokLog(text);
+      // A reading stamped in the future is a clock problem, not a reading.
+      last = { size: stat.size, mtime: stat.mtimeMs, reading: reading && reading.observedAt <= now + 60000 ? reading : null };
+      return last.reading;
+    } catch { return null; }
+  };
+}
+
 function summarize(series, dayKeys) {
   const result = { ...empty(), models: [] };
   const models = new Map();
@@ -250,7 +312,7 @@ function provider(id, daily, limits, now, extra = {}) {
   } };
 }
 
-function createService({ claudeReader, bridge, connection = async () => ({}), quotaCache = async () => null, liveQuota = async () => ({}), codexReader = createCodexReader() }) {
+function createService({ claudeReader, bridge, connection = async () => ({}), quotaCache = async () => null, liveQuota = async () => ({}), codexReader = createCodexReader(), grokQuota = async () => null }) {
   let cached = null, inflight = null, inflightForced = false;
   return { async snapshot(now, { force = false } = {}) {
     if (force && inflight && !inflightForced) await inflight;
@@ -264,10 +326,11 @@ function createService({ claudeReader, bridge, connection = async () => ({}), qu
       }
       await inflight;
     }
-    const [link, savedQuota, remote] = await Promise.all([
+    const [link, savedQuota, remote, grokSaved] = await Promise.all([
       connection().catch(() => ({ unavailable: true })),
       quotaCache(now).catch(() => null),
       liveQuota({ force }).catch(() => ({})),
+      grokQuota(now).catch(() => null),
     ]);
     const live = bridge();
     const limit = live && live.limits;
@@ -282,19 +345,28 @@ function createService({ claudeReader, bridge, connection = async () => ({}), qu
     const observedAt = Math.max(0, ...windows.map(w => w.observedAt));
     const quotaSource = windows.some(w => w.source === 'provider_api') ? 'provider_api' : windows.some(w => w.source === 'local_cache') ? 'local_cache' : 'statusline';
     const c = cached.claude, x = cached.codex;
+    // Grok: the newer of the live account reading and the CLI's own logged one.
+    // The plan name (SuperGrok) is only in the log, so it is kept from there.
+    const grokRemote = remote.grok;
+    const grokAll = [...(grokRemote?.limits || []), ...(grokSaved?.limits || [])];
+    const grokNewest = grokAll.slice().sort((a, b) => b.observedAt - a.observedAt)[0];
+    const grokPlan = grokAll.find(l => l.plan)?.plan || '';
+    const grokShown = !!grokNewest || (grokRemote && grokRemote.status !== 'not_signed_in');
     return { generatedAt: cached.generatedAt, checkedAt: now, refresh: { cached: !scanned, forced: force }, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       providers: [provider('claude', c.daily || [], windows.length ? [{ id: 'claude', windows, observedAt }] : [], now,
         { found: c.total.reqs > 0, lastAt: c.live.at, incomplete: false,
           connection: { status: windows.length ? 'ready' : link.unavailable ? 'unavailable' : link.usageLinked ? 'waiting' : 'not_linked', source: windows.length ? quotaSource : null, liveStatus: remote.claude?.status } }),
       provider('codex', x.daily, remote.codex?.limits?.length ? remote.codex.limits : x.limits, now, { found: x.found, lastAt: x.lastAt, incomplete: x.incomplete,
         connection: { source: remote.codex?.limits?.length ? 'provider_api' : 'local_history', liveStatus: remote.codex?.status } }),
-      ...(remote.opencode && remote.opencode.status !== 'not_signed_in' ? [
-        provider('opencode', [], remote.opencode.limits || [], now, {
+      // Shown only on a PC where the Grok CLI has signed in or left a reading.
+      // Its token history is not imported (yet): quota only, said so on the card.
+      ...(grokShown ? [
+        provider('grok', [], grokNewest ? [{ ...grokNewest, plan: grokNewest.plan || grokPlan }] : [], now, {
           found: true, historyUnavailable: true, incomplete: false,
-          connection: { source: remote.opencode.limits?.length ? 'provider_api' : null, liveStatus: remote.opencode.status },
+          connection: { source: grokNewest ? grokNewest.windows[0].source : null, liveStatus: grokRemote?.status },
         }),
       ] : [])] };
   } };
 }
 
-module.exports = { createService, createCodexReader, createClaudeQuotaReader, _internal: { parseLine, newSession, normalizeLimits, normalizeClaudeQuotaCache, summarize, days } };
+module.exports = { createService, createCodexReader, createClaudeQuotaReader, createGrokQuotaReader, _internal: { parseLine, newSession, normalizeLimits, normalizeClaudeQuotaCache, grokLimits, parseGrokLog, summarize, days } };

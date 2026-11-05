@@ -32462,8 +32462,10 @@ Object.assign(i18n.en, {
   aiu_layout_4: 'Grid · 4 per row',
   aiu_layout_list: 'List · horizontal rows',
   aiu_layout_save_failed: 'Layout changed, but could not be saved on this device.',
-  aiu_opencode_hint: 'Sign in to OpenCode Go on this computer to read plan limits.',
-  aiu_history_unavailable: 'Plan quotas only. OpenCode spending and token history are not imported.',
+  aiu_grok_hint: 'Sign in to the Grok CLI on this computer (run grok once) to read your SuperGrok allowance.',
+  aiu_grok_cache: 'Grok CLI reading',
+  aiu_live_no_personal_quota: 'Grok team accounts have no personal allowance.',
+  aiu_history_unavailable: 'Plan allowance only. Grok token and spending history is not imported yet.',
 
   aiu_live_sign_in_required: 'Live quota needs a renewed login. Open the provider app or CLI, then Refresh.',
   aiu_live_rate_limited: 'Live quota is rate limited. Keeping the last reading; retrying later.',
