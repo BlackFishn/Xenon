@@ -155,6 +155,10 @@
   function _syncSystemButtons(p) {
     const on = !!p.active;
     document.querySelectorAll('.sys-optimize-btn').forEach((btn) => {
+      // This fork's System button opens the power-plan picker instead (see
+      // showPowerPlanPicker in settings.js); relabelling it "Optimize/Restore"
+      // would name an action it does not perform.
+      if (btn.dataset.powerplan) return;
       if (btn.classList.contains('is-active') === on && btn.dataset.perfSynced) return;
       btn.dataset.perfSynced = '1';
       btn.classList.toggle('is-active', on);
