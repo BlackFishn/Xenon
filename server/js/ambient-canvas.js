@@ -14,8 +14,9 @@
 // CustomWidget.registerCanvasFrame; an ungranted package (or the SDK master off)
 // renders a quiet placeholder — never an un-vetted frame.
 //
-// Dynamic readings refresh once a second; unchanged values keep their DOM.
-// The timer stops entirely on document.hidden and on unmount.
+// Performance: one self-pausing 1 s timer drives the dynamic components, updating a
+// node's DOM only when its data signature actually changes (per reference/
+// ambient.md), and the loop stops entirely on document.hidden and on unmount.
 
 (function () {
   if (typeof window === 'undefined') return;
@@ -72,7 +73,7 @@
   }
 
   // ── component renderers ─────────────────────────────────────────────────
-  // Each entry: build(body, comp) once; update(item) on the timer returns a
+  // Each entry: build(body, comp) once; update(item) on the update loop returns a
   // signature string — the loop rewrites the DOM only when it changes. Static
   // types (text/image/shape/sdk) declare no update.
   const R = {
@@ -382,7 +383,13 @@
     return { comp, el: wrap, body, sig: '', dynamic: !!def.dynamic };
   }
 
-  // ── self-pausing update loop ───────────────────────────────────────────────
+  // ── self-pausing update loop ────────────────────────────────────────────
+  // Nothing here moves per frame: the finest-grained value is the clock's
+  // seconds, and the data globals change at SSE pace. So one timer aimed just
+  // past the next second boundary replaces a rAF loop that rebuilt every
+  // signature (an Intl formatter, the agenda sort) 60-240 times a second for a
+  // screensaver whose whole job is to sit there for hours.
+  const TICK_SLACK_MS = 5;
   function tick() {
     timer = null;
     if (!current) return;
@@ -391,7 +398,7 @@
       const def = R[item.comp.type];
       if (def && def.update) { try { item.sig = def.update(item); } catch { /* keep going */ } }
     }
-    if (!document.hidden) timer = setTimeout(tick, 1000 - Date.now() % 1000);
+    if (!document.hidden) timer = setTimeout(tick, 1000 - (Date.now() % 1000) + TICK_SLACK_MS);
   }
   function startLoop() { if (!timer && !document.hidden) tick(); }
   function stopLoop() { if (timer) { clearTimeout(timer); timer = null; } }
@@ -490,7 +497,7 @@
   // Preview reuse (js/preset-share.js import thumbnail): build a single item / the
   // bg layer with the EXACT same DOM + style pipeline as a live scene, and run one
   // update pass for a dynamic component — so the import preview can never drift from
-  // what the screensaver renders. The caller owns the lifecycle (no update timer here).
+  // what the screensaver renders. The caller owns the lifecycle (no loop here).
   function previewUpdate(item) {
     const def = item && R[item.comp.type];
     if (def && def.update) { try { item.sig = def.update(item); } catch { /* keep going */ } }

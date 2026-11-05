@@ -99,10 +99,19 @@
   // a group tile built fresh around a member that was MOVED into it rather than
   // re-rendered.
   function stampDeckMount(tile) {
-    const mount = (tile && tile.closest) ? tile.closest('.panel.tabgroup') : null;
-    if (!mount) return;
+    if (!tile || !tile.querySelector) return;
     const root = tile.querySelector('.deck-root');
+    // A Deck with no faceplate draws no body, so the dashboard tile around it must
+    // not draw its drop shadow either: under bare keys it is a dark strip along an
+    // empty edge (DeckPanel.css, [data-deck-bare]). Set on the Deck's own tile, or
+    // on the group tile that mounts it, whichever is the direct child of the grid
+    // item, so the stylesheet needs no deep :has() walk.
+    const bare = !!(root && root.dataset.plate === 'none');
+    tile.toggleAttribute('data-deck-bare', bare);
+    const mount = tile.closest ? tile.closest('.panel.tabgroup') : null;
+    if (!mount) return;
     mount.style.setProperty('--deck-mount-alpha', (root && root.style.getPropertyValue('--deck-mount-alpha')) || '1');
+    mount.toggleAttribute('data-deck-bare', bare);
   }
   // True while the dashboard Layout editor is open. The deck must NOT auto-fit its
   // key grid then: the tile is mid-resize (GridStack hasn't applied its final cell
@@ -844,6 +853,14 @@
     if (!action) return true;
     if (action.type === 'playSound') return playDeckSound(action);   // browser-played soundboard
     if (action.type === 'soundStopAll') return stopAllDeckSounds();  // stop every playing clip
+    // Turn THIS screen's dashboard. Without a pager (the Virtual Deck window) it
+    // is not handled here and goes to the server, which relays it to the
+    // dashboards. A page this layout lacks is a real failure, so the key flashes.
+    if (action.type === 'dashboardPage' && window.DashboardPager) {
+      const res = window.DashboardPager.navigate(action.page);
+      if (!res.ok) reportActionError('bad_page');
+      return res.ok;
+    }
     if (runClientAction(action)) return true;
     try {
       const res = await fetch('/actions/run', {
@@ -859,7 +876,7 @@
       if (!(data && data.ok)) reportActionError(data && data.error);
       // The output just changed: ask now rather than wait for the next audio
       // tick, so the key's face follows the press instead of trailing it.
-      if (data && data.ok && (action.type === 'audioDevice' || action.type === 'audioDeviceToggle')) pollOutputDevice();
+      if (data && data.ok && (action.type === 'audioDevice' || action.type === 'audioDeviceToggle' || action.type === 'audioDeviceFirst')) pollOutputDevice();
       return !!(data && data.ok);
     } catch (e) { return false; }
   }
@@ -873,7 +890,9 @@
     launch_failed: ['deck_err_launch_failed', 'the app would not start'],
     blocked_ext: ['deck_err_blocked_ext', 'that kind of file cannot be opened this way'],
     unavailable: ['deck_err_unavailable', 'that action is not available on this system'],
+    bad_page: ['deck_err_bad_page', 'this screen has no such page, pick another for this key'],
     unknown_device: ['deck_err_unknown_device', 'that output device is not connected right now'],
+    none_connected: ['deck_err_none_connected', 'none of these outputs is connected right now'],
     // Voicemeeter. Every one of these is something the person holding the
     // machine can fix — install it, start it, pick a strip their edition has —
     // which is the bar this map sets. The opaque ones (read/write refused by
@@ -2292,10 +2311,10 @@
     tile.replaceChildren(...keepControls);
     const root = el('div', 'deck-root');
     root.classList.toggle('is-editing', state.editing);
-    // The "Nessuna" faceplate takes the chassis away and the header goes with it
-    // (DeckPanel.css [data-plate="none"] .deck-bar). It has to come BACK while
-    // it is being used, or the profile menu would float over a bar that had
-    // collapsed underneath it and Done would be unreachable in edit mode.
+    // The "Nessuna" faceplate takes the chassis away and the header is drawn as a
+    // quiet ghost (DeckPanel.css [data-plate="none"] .deck-bar). It comes to full
+    // strength while it is being used: the profile menu is portaled to <body> and
+    // must not float over a bar that is still faded, and Done lives in edit mode.
     root.classList.toggle('bar-open', !!(state.editing || state.profileMenu));
     root.dataset.keysize = cfg.keySize;
     // Whole-device look: cap material, cap shape and faceplate finish (see
@@ -2355,9 +2374,9 @@
     edit.addEventListener('click', () => { state.editing = !state.editing; render(tile, instanceId); });
     bar.appendChild(edit);
 
-    // A touchscreen has no hover, and the Xeneon Edge is one. Tapping the
-    // collapsed strip peeks the bar for a few seconds — long enough to reach the
-    // profile menu or the pencil, short enough that it goes away on its own if
+    // A touchscreen has no hover, and the Xeneon Edge is one. Tapping the faded
+    // bar brings it to full strength for a few seconds — long enough to reach the
+    // profile menu or the pencil, short enough that it settles back on its own if
     // the tap was a miss. The class goes straight on the node rather than
     // through state + re-render: a re-render would rebuild the keys under the
     // finger that is on its way to the pencil.

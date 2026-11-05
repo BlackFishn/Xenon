@@ -33,6 +33,18 @@ const STATUSLINE_SCRIPT = path.join(__dirname, 'claude-statusline.js');
 const STATE_FILE = 'claude-bridge.json';   // inside DATA_DIR
 const BACKUP_SUFFIX = '.xenon-backup';
 
+// The Xenon mod for Claude Code (integrations/claude-code/). Installing it is a
+// settings entry, not a spawned `claude`: Claude Code reads extraKnownMarketplaces
+// and enabledPlugins in the user's settings, clones the marketplace on its next
+// start and enables the plugin. The marketplace name must equal the one in the
+// repo's .claude-plugin/marketplace.json.
+const MOD_MARKETPLACE = 'xenon';
+const MOD_REPO = 'marcimastro98/Xenon';
+const MOD_PLUGIN_ID = 'xenon@xenon';
+// The mod's own manifest defaults, written once so the first run does not depend
+// on how Claude Code treats an option with no stored value.
+const MOD_DEFAULT_OPTIONS = { band: true, approvals: false, approvalWaitSec: 30 };
+
 // Non-blocking lifecycle events. Kept to a short timeout: these must never slow
 // a tool call down, and Claude Code treats a timeout as a non-blocking error and
 // carries on regardless.
@@ -95,6 +107,14 @@ async function readJson(file) {
   } catch { return null; }
 }
 
+// The user's permissions.defaultMode in Claude Code's own settings. Read-only:
+// the plan card uses it to decide whether auto mode is one of its choices.
+async function defaultMode() {
+  const cfg = await readJson(settingsPath());
+  const m = cfg && cfg.permissions && cfg.permissions.defaultMode;
+  return typeof m === 'string' ? m : '';
+}
+
 // ── hub-side state (token + what we replaced) ────────────────────────────────
 async function readState(dataDir) {
   const s = await readJson(path.join(dataDir, STATE_FILE));
@@ -155,27 +175,108 @@ function ourHandler(url, timeoutSec, token) {
 }
 
 // ── status ───────────────────────────────────────────────────────────────────
+// One entry per handler link() installs. A link is COMPLETE only when every one
+// of these is present with the current port and token, and nothing of ours is
+// left over from an older set. Counting our handlers was not enough: a link made
+// by an older Xenon (no AskUserQuestion interceptor, Stop still on /event) had 8
+// of the 15 and was reported as linked, so questions never reached the tile and
+// follow-ups were never delivered, with nothing on screen to say why.
+function expectedHandlers() {
+  const list = EVENT_HOOKS.map((event) => ({ event, path: '/event', matcher: '' }));
+  list.push({ event: PERMISSION_EVENT, path: '/permission', matcher: '' });
+  list.push({ event: TURN_END_EVENT, path: '/turn-end', matcher: '' });
+  list.push({ event: QUESTION_EVENT, path: '/question', matcher: QUESTION_MATCHER });
+  return list;
+}
+
+// Our handlers as installed: which event, which endpoint, which port, which token.
+function installedHandlers(hooks) {
+  const out = [];
+  for (const event of Object.keys(hooks || {})) {
+    const groups = Array.isArray(hooks[event]) ? hooks[event] : [];
+    for (const g of groups) {
+      const handlers = (g && Array.isArray(g.hooks)) ? g.hooks : [];
+      for (const h of handlers) {
+        if (!isOurHandler(h, 0)) continue;
+        const m = /^http:\/\/127\.0\.0\.1:(\d+)\/api\/claude(\/[a-z-]+)/.exec(String(h.url || ''));
+        out.push({
+          event,
+          matcher: String((g && g.matcher) || ''),
+          path: m ? m[2] : '',
+          port: m ? Number(m[1]) : 0,
+          token: String((h.headers && h.headers['X-Xenon-Bridge']) || ''),
+        });
+      }
+    }
+  }
+  return out;
+}
+
+function isPlainObject(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
+
+// Adds the mod to a settings object. Anything the user already decided stays:
+// a "xenon" marketplace of another source, a plugin they switched off, options
+// they set. Returns the same object it was given.
+function addMod(settings) {
+  const markets = isPlainObject(settings.extraKnownMarketplaces) ? { ...settings.extraKnownMarketplaces } : {};
+  if (markets[MOD_MARKETPLACE] && !(markets[MOD_MARKETPLACE].source && markets[MOD_MARKETPLACE].source.repo === MOD_REPO)) {
+    return settings;                                // the name is theirs: not ours to reuse
+  }
+  markets[MOD_MARKETPLACE] = { source: { source: 'github', repo: MOD_REPO } };
+  settings.extraKnownMarketplaces = markets;
+
+  const enabled = isPlainObject(settings.enabledPlugins) ? { ...settings.enabledPlugins } : {};
+  if (enabled[MOD_PLUGIN_ID] === undefined) enabled[MOD_PLUGIN_ID] = true;
+  settings.enabledPlugins = enabled;
+
+  const configs = isPlainObject(settings.pluginConfigs) ? { ...settings.pluginConfigs } : {};
+  if (!configs[MOD_PLUGIN_ID]) configs[MOD_PLUGIN_ID] = { options: { ...MOD_DEFAULT_OPTIONS } };
+  settings.pluginConfigs = configs;
+  return settings;
+}
+
+// Removes what addMod added, and only the marketplace if it is still ours.
+function removeMod(settings) {
+  for (const key of ['enabledPlugins', 'pluginConfigs']) {
+    if (!isPlainObject(settings[key])) continue;
+    const next = { ...settings[key] };
+    delete next[MOD_PLUGIN_ID];
+    if (Object.keys(next).length) settings[key] = next; else delete settings[key];
+  }
+  if (isPlainObject(settings.extraKnownMarketplaces)) {
+    const next = { ...settings.extraKnownMarketplaces };
+    const m = next[MOD_MARKETPLACE];
+    if (m && m.source && m.source.repo === MOD_REPO) delete next[MOD_MARKETPLACE];
+    if (Object.keys(next).length) settings.extraKnownMarketplaces = next; else delete settings.extraKnownMarketplaces;
+  }
+  return settings;
+}
+
 async function status(dataDir, port) {
   const file = settingsPath();
   const settings = await readJson(file);
   const state = await readState(dataDir);
   const hooks = (settings && settings.hooks) || {};
 
-  let ourHookCount = 0;
-  for (const event of Object.keys(hooks)) {
-    const groups = Array.isArray(hooks[event]) ? hooks[event] : [];
-    for (const g of groups) {
-      const handlers = (g && Array.isArray(g.hooks)) ? g.hooks : [];
-      ourHookCount += handlers.filter(h => isOurHandler(h, port)).length;
-    }
-  }
+  const installed = installedHandlers(hooks);
+  const ourHookCount = installed.length;
+  const same = (a, b) => a.event === b.event && a.path === b.path && a.matcher === b.matcher;
+  const current = (h) => h.port === Number(port) && !!state.token && h.token === state.token;
+  const expected = expectedHandlers();
+  const missing = expected.filter((e) => !installed.some((h) => same(h, e) && current(h)));
+  const outdated = installed.filter((h) => !expected.some((e) => same(h, e)) || !current(h));
   const sl = settings && settings.statusLine;
   const ours = isOurStatusLine(sl);
 
   return {
-    // "linked" means the pieces that make the widget work are actually present.
+    // "linked" means the user connected Claude Code: our entries are there.
     linked: ourHookCount > 0 && ours,
     usageLinked: ours && String(sl.command).includes(STATUSLINE_SCRIPT) && state.port === port && typeof state.token === 'string' && state.token.length >= 32,
+    // "complete" means every piece the widget relies on is there and current.
+    // A linked-but-incomplete config is repaired by the server (repairLink).
+    complete: ourHookCount > 0 && ours && missing.length === 0 && outdated.length === 0,
+    missing: missing.map((e) => e.event + (e.matcher ? '(' + e.matcher + ')' : '') + ' ' + e.path),
+    outdated: outdated.length,
     settingsPath: file,
     settingsExists: !!settings,
     hookCount: ourHookCount,
@@ -188,11 +289,20 @@ async function status(dataDir, port) {
     chained: state.chained ? String(state.chained.command || '') : (sl && !ours ? String(sl.command || '') : ''),
     backupExists: fs.existsSync(file + BACKUP_SUFFIX),
     linkedAt: state.linkedAt || 0,
+    // Whether the settings ask Claude Code for the mod (not whether it is
+    // running: the bridge's `mod` field says that).
+    modEnabled: !!(settings && isPlainObject(settings.enabledPlugins) && settings.enabledPlugins[MOD_PLUGIN_ID] === true),
   };
 }
 
 // ── link ─────────────────────────────────────────────────────────────────────
-async function link(dataDir, port, { usageOnly = false } = {}) {
+// `opts.mod === false` leaves the mod alone (a repair must not add anything the
+// user did not click); otherwise connecting also asks Claude Code for the mod.
+// `opts.usageOnly` (this fork's AI Usage "Connect Claude quotas") installs only
+// the status line that reports quotas: no hooks, and so no mod either.
+async function link(dataDir, port, opts) {
+  const usageOnly = !!(opts && opts.usageOnly);
+  const withMod = !usageOnly && !(opts && opts.mod === false);
   const file = settingsPath();
   await fs.promises.mkdir(configDir(), { recursive: true });
 
@@ -248,6 +358,8 @@ async function link(dataDir, port, { usageOnly = false } = {}) {
     ...(prev && typeof prev.padding === 'number' ? { padding: prev.padding } : {}),
   };
 
+  if (withMod) addMod(settings);
+
   await writeFileAtomic(file, JSON.stringify(settings, null, 2) + '\n');
   await writeState(dataDir, { ...state, token, chained, port, linkedAt: Date.now() });
 
@@ -255,6 +367,21 @@ async function link(dataDir, port, { usageOnly = false } = {}) {
 }
 
 // ── unlink ───────────────────────────────────────────────────────────────────
+// ── repair ───────────────────────────────────────────────────────────────────
+// A link the user made that is now incomplete (written by an older Xenon, or
+// rewritten since by something else) is brought back to the current set, once,
+// through the same link() that made it: same backup rule, same statusline
+// chaining, same precise entries. Only a link that EXISTS is repaired; this can
+// never connect Claude Code on its own. Hooks are read by Claude Code when a
+// session starts, so a repair reaches sessions opened after it, and the widget
+// says so.
+async function repairLink(dataDir, port) {
+  const st = await status(dataDir, port);
+  if (!st.linked || st.complete) return { ...st, repaired: false };
+  const next = await link(dataDir, port, { mod: false });
+  return { ...next, repaired: true, repairedMissing: st.missing, repairedOutdated: st.outdated };
+}
+
 async function unlink(dataDir, port) {
   const file = settingsPath();
   const settings = await readJson(file);
@@ -269,6 +396,7 @@ async function unlink(dataDir, port) {
       if (state.chained) next.statusLine = state.chained;
       else delete next.statusLine;
     }
+    removeMod(next);
     await writeFileAtomic(file, JSON.stringify(next, null, 2) + '\n');
   }
 
@@ -282,8 +410,10 @@ module.exports = {
   link,
   unlink,
   status,
+  repairLink,
   ensureToken,
   readState,
+  defaultMode,
   settingsPath,
   configDir,
   // exported for tests
@@ -292,6 +422,8 @@ module.exports = {
   isOurStatusLine,
   EVENT_HOOKS,
   PERMISSION_EVENT,
+  expectedHandlers,
+  installedHandlers,
 };
 
 // ── CLI: `node server/claude-link.js unlink` ─────────────────────────────────

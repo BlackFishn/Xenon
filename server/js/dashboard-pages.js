@@ -139,7 +139,7 @@ function ensureWidgetPool() {
       content.appendChild(tile);
       item.appendChild(content);
     }
-    if (item.parentElement !== pool) pool.appendChild(item);
+    if (item.parentElement !== pool) moveNode(pool, item);   // keeps a playing iframe alive
   });
   return pool;
 }
@@ -360,6 +360,7 @@ if (typeof window !== 'undefined') {
     init: initDashboardPages,
     rebuild: rebuildDashboardPages,
     pageDisplayName,
+    list: () => dashboardPagesList().map(page => ({ id: page.id, label: pageDisplayName(page) })),
     add: addDashboardPage,
     rename: renameDashboardPage,
     storedName: storedPageName,

@@ -442,6 +442,22 @@ if (need.audio) startVisibleAudioRefresh();
       // Local Claude Code usage aggregate → the Xenon Pulse reactor widget.
       try { const d = JSON.parse(e.data); if (window.ClaudeWidget) window.ClaudeWidget.onSSE(d); if (window.CustomWidget) window.CustomWidget.onData('claude', d); } catch {}
     });
+    es.addEventListener('chatgpt', e => {
+      // Ask ChatGPT: the conversation list, what is answering, and the one
+      // conversation that changed.
+      try { const d = JSON.parse(e.data); if (window.ChatGPTWidget) window.ChatGPTWidget.onSSE(d); } catch {}
+    });
+    es.addEventListener('codex', e => {
+      // OpenAI Codex: plan windows, usage, live sessions and approval cards. SDK
+      // widgets get ONLY `sdk`, the server-built allowlist of numbers
+      // (codex-bridge.js sdkProjection), never the tile payload.
+      try {
+        const d = JSON.parse(e.data);
+        if (window.CodexWidget) window.CodexWidget.onSSE(d);
+        if (window.ChatGPTWidget) window.ChatGPTWidget.onCodex(d);
+        if (window.CustomWidget && d && d.sdk) window.CustomWidget.onData('codex', d.sdk);
+      } catch {}
+    });
     es.addEventListener('football_alert', e => {
       // A followed team scored or the match ended → a toast (gated by the master
       // Notifiche switch). The server handles the LED reaction.
@@ -493,6 +509,15 @@ if (need.audio) startVisibleAudioRefresh();
       // page reloaded mid-cleanup re-attaches to it (the widget also re-reads
       // status.clean on its own poll).
       try { if (window.DiskWidget && window.DiskWidget.onCleanProgress) window.DiskWidget.onCleanProgress(JSON.parse(e.data)); } catch {}
+    });
+    es.addEventListener('devclean', e => {
+      // Dev cleanup job progress (prune / model removal / .vhdx compaction).
+      try { if (window.DevCleanWidget && window.DevCleanWidget.onProgress) window.DevCleanWidget.onProgress(JSON.parse(e.data)); } catch {}
+    });
+    es.addEventListener('disk_update', e => {
+      // A disk overview learned something after it was drawn (the background
+      // duplicate check finished): the widget refetches that drive.
+      try { if (window.DiskWidget && window.DiskWidget.onDiskUpdate) window.DiskWidget.onDiskUpdate(JSON.parse(e.data)); } catch {}
     });
     es.addEventListener('guardian_alert', e => {
       // Guardian (opt-in): server-side threshold alert → friendly toast.
@@ -574,6 +599,11 @@ if (need.audio) startVisibleAudioRefresh();
       // surface's frames of that package so they re-read it (GitHub #109).
       try { if (window.CustomWidget && typeof window.CustomWidget.onStoreChanged === 'function') window.CustomWidget.onStoreChanged(JSON.parse(e.data)); } catch {}
     });
+    es.addEventListener('widget_auto_updated', e => {
+      // The server updated Store widgets by itself, or found one that needs the
+      // user's approval (server/widget-auto-update.js).
+      try { if (window.CustomWidget && typeof window.CustomWidget.onAutoUpdated === 'function') window.CustomWidget.onAutoUpdated(JSON.parse(e.data)); } catch {}
+    });
     es.addEventListener('calls', e => {
       // Incoming calls: the whole ringing list, replaced wholesale, so a call
       // answered on another surface closes the card here too.
@@ -625,11 +655,7 @@ if (need.audio) startVisibleAudioRefresh();
       try {
         const pager = window.DashboardPager;
         if (!pager) return;
-        const target = String(JSON.parse(e.data).target || '');
-        if (target === 'next') pager.goByDelta(1);
-        else if (target === 'prev') pager.goByDelta(-1);
-        else if (target === 'back') pager.goBack();
-        else if (target) pager.goToPage(target);
+        pager.navigate(JSON.parse(e.data).target);
       } catch {}
     });
     es.addEventListener('spotlight_hotkey', () => {
@@ -760,6 +786,13 @@ if (window.DashboardPages) window.DashboardPages.init();
 // ── Keyboard listener (Escape) ────────────────────────────────
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
+    // A search typed in the "+" palette is cleared first; the palette (and
+    // then edit mode) close on the following presses.
+    if (window.DashboardPalette && DashboardPalette.handleEscape()) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (document.body.classList.contains('layout-editing') && typeof setDashboardLayoutEditMode === 'function') {
       e.preventDefault();
       setDashboardLayoutEditMode(false);
@@ -779,6 +812,8 @@ document.addEventListener('keydown', e => {
     const settingsOverlay = document.getElementById('settings-overlay');
     if (settingsOverlay && !settingsOverlay.hidden) {
       e.preventDefault();
+      // A search in progress is cleared first; the next Esc closes Settings.
+      if (window.SettingsSearch && SettingsSearch.handleEscape()) return;
       closeSettings();
       return;
     }

@@ -34,13 +34,23 @@
 //   1. PreToolUse → hookSpecificOutput.updatedInput REWRITES the tool input
 //      before it runs. Verified: a Bash call for `echo HELLO_ORIGINAL` executed
 //      as the rewritten command instead.
-//   2. PreToolUse → permissionDecision:'deny' + permissionDecisionReason puts
-//      the reason IN FRONT OF THE MODEL, and it acts on it. Verified: a denied
-//      Bash call whose reason carried a chosen option made Claude reply with
-//      that option. This is what answers a question from the tile (see
-//      askQuestion) — it is proven, whereas (1) on AskUserQuestion specifically
-//      could not be tested headlessly, since that tool exists only in an
-//      interactive session.
+//   2. AskUserQuestion and ExitPlanMode are the two tools whose card IS the
+//      interaction (Claude Code: requiresUserInteraction()), and for them an
+//      'allow' ALONE IS IGNORED — read in the 2.1.283 binary, where the
+//      interactive PermissionRequest path returns "no decision" when a hook
+//      allows one of them without updatedInput, and documented for PreToolUse
+//      ("Returning 'allow' alone is not sufficient for these tools"). That was
+//      the "I tap Allow on the plan and the terminal keeps waiting" bug. So:
+//        • a question is answered with PreToolUse allow + updatedInput carrying
+//          the tool's own input plus `answers` { question text → label }, which
+//          the tool then returns as its result, exactly as if it were typed
+//          in the terminal (see askQuestion / buildAnswers);
+//        • a plan is approved with PermissionRequest allow + updatedInput (the
+//          input Claude Code sent, echoed) + updatedPermissions setMode, which
+//          is the same update the terminal's own "Yes, …" rows apply.
+//      An earlier version answered questions with a DENY whose reason carried
+//      the choice. Claude did act on it, but the terminal drew the question as
+//      a refused tool call, which is not what happened.
 //   3. Stop → { decision:'block', reason } does NOT end the turn: the reason
 //      arrives as a new instruction in the SAME session and Claude carries on.
 //      Verified end to end. This is how a follow-up typed on the dashboard
@@ -80,6 +90,13 @@ const QUESTION_TTL_MS = 4 * 60 * 1000;
 // If that turn never ends (the session was killed, or it went quiet without a
 // Stop) the text must not sit in a queue forever pretending to be on its way.
 const FOLLOWUP_TTL_MS = 15 * 60 * 1000;
+// A message handed to the mod for an idle session (takeForTerminal) is on its
+// way until Claude Code starts the turn. Past this with no sign of it, the tile
+// stops saying so. It is not offered back either: it may well have arrived, and
+// offering it back invites sending it twice.
+const HANDED_TTL_MS = 60 * 1000;
+// How long a message that did not get into the session is offered back.
+const UNDELIVERED_TTL_MS = 2 * 60 * 1000;
 
 const MAX_SESSIONS = 20;      // bounds the live list (and therefore the payload)
 const MAX_PENDING = 8;        // bounds concurrent approvals
@@ -88,14 +105,27 @@ const MAX_INPUT_CHARS = 800;  // tool-input preview clamp
 const MAX_TODOS = 12;         // the plan lane; a longer list is scrolled, not stored
 const MAX_ACTIVITY = 30;      // per-session ring of finished tool calls
 const MAX_SUBAGENTS = 8;
-const MAX_FOLLOWUP_CHARS = 4000;
+// The tile's box takes 4000 characters; the paths of up to six attached files
+// ride along after them.
+const MAX_FOLLOWUP_CHARS = 6000;
 
 // Tool calls whose blast radius is wide enough that the tile alone is not
 // enough of a prompt — these escalate to the fullscreen overlay immediately
 // rather than after URGENT_AFTER_MS. Deliberately conservative: this only
 // changes how loudly we ASK, never whether we ask.
 const MAX_QUESTIONS = 4;    // matches AskUserQuestion's own cap
-const MAX_OPTIONS = 5;      // 4 authored + the implicit "Other"
+const MAX_OPTIONS = 5;      // 4 authored, plus one spare
+const MAX_TYPED = 2000;     // an "Other" answer typed on the tile
+const MAX_PLAN_CHARS = 20000;
+// The kinds AskUserQuestion can ask. "text" and "number" have no options and
+// are answered by typing; only some hosts enable them, but a card that drew one
+// with nothing to tap would be the dead control this module exists to avoid.
+const QUESTION_KINDS = new Set(['choice', 'text', 'number']);
+// The permission modes a plan can be approved into from the tile, in the words
+// of Claude Code's own plan dialog. bypassPermissions is deliberately not one of
+// them: the terminal offers it only to a session launched with it, and switching
+// every safeguard off is not a choice to make from across the room.
+const PLAN_MODES = new Set(['auto', 'acceptEdits', 'default']);
 const DESTRUCTIVE_TOOLS = new Set(['Bash', 'Write', 'Edit', 'NotebookEdit', 'KillShell']);
 const DESTRUCTIVE_RE = /\b(rm\s+-[rf]|rmdir|del\s+\/|format\s|mkfs|dd\s+if=|git\s+(reset\s+--hard|clean\s+-[a-z]*f|push\s+.*--force)|drop\s+(table|database)|truncate\s+table|shutdown|Remove-Item)/i;
 
@@ -153,27 +183,40 @@ function describeTool(toolName, input) {
 // not read. Project the questions so the card can show what is being asked.
 //
 // These are answerable from the tile: see askQuestion, and note 2 in the header
-// for how. What is NOT possible is substituting a tool RESULT, so the answer
-// travels as a decision reason rather than as the tool's return value — which
-// is why the reason text below is written as carefully as it is.
-function describeQuestions(input) {
+// for how. `keys` is the question text EXACTLY as Claude wrote it, unclamped:
+// it is the key of the `answers` map the tool reads, so the shortened copy the
+// card shows cannot stand in for it. It stays on the server.
+function projectQuestions(input) {
   const qs = input && Array.isArray(input.questions) ? input.questions : null;
   if (!qs || !qs.length) return null;
-  const out = [];
+  const shown = [];
+  const keys = [];
   for (const q of qs.slice(0, MAX_QUESTIONS)) {
-    if (!q || typeof q !== 'object') continue;
+    if (!q || typeof q !== 'object' || typeof q.question !== 'string' || !q.question.trim()) continue;
     const opts = Array.isArray(q.options) ? q.options : [];
-    out.push({
+    const kind = QUESTION_KINDS.has(q.kind) ? q.kind : 'choice';
+    const p = {
       question: str(q.question, MAX_INPUT_CHARS),
       header: str(q.header, 40),
-      multiSelect: q.multiSelect === true,
-      options: opts.slice(0, MAX_OPTIONS).map((o) => ({
+      kind,
+      multiSelect: kind === 'choice' && q.multiSelect === true,
+      options: kind !== 'choice' ? [] : opts.slice(0, MAX_OPTIONS).map((o) => ({
         label: str(o && o.label, 120),
         description: str(o && o.description, 240),
       })).filter((o) => o.label),
-    });
+    };
+    if (kind === 'text') p.placeholder = str(q.placeholder, 120);
+    if (kind === 'number') {
+      p.min = num(q.min); p.max = num(q.max); p.step = num(q.step); p.unit = str(q.unit, 20);
+    }
+    shown.push(p);
+    keys.push(q.question);
   }
-  return out.length ? out : null;
+  return shown.length ? { shown, keys } : null;
+}
+function describeQuestions(input) {
+  const p = projectQuestions(input);
+  return p ? p.shown : null;
 }
 
 // Is this "user" text actually the harness talking? Claude Code delivers task
@@ -197,6 +240,40 @@ function isDestructive(toolName, detail) {
   return DESTRUCTIVE_RE.test(String(detail || ''));
 }
 
+// What a pending request would reach, in the few words the card can show next
+// to the command. With auto mode on (the default since August 2026) routine
+// calls never reach a person, so the ones that do are the unusual ones, and the
+// raw command alone does not say what makes them unusual. Every code here is
+// derived from the tool and its argument only, and errs toward saying MORE:
+//   irreversible  deletes, force-pushes, resets, drops (the same test that
+//                 escalates the card to full screen)
+//   publish       sends work somewhere others see it (git push, npm publish…)
+//   network       reaches another machine
+//   outside       a file path that is not inside the session's folder
+//   readonly      reads only (Read, Glob, Grep): said, so calm is visible too
+const PUBLISH_RE = /\b(git\s+push|npm\s+publish|pnpm\s+publish|yarn\s+publish|gh\s+(release|pr\s+(create|merge))|docker\s+push|cargo\s+publish|twine\s+upload)\b/i;
+const NETWORK_RE = /\b(curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|ssh|scp|rsync|ftp|sftp|nc|telnet)\b|https?:\/\//i;
+const FILE_TOOLS = new Set(['Read', 'Write', 'Edit', 'NotebookEdit']);
+function isInside(file, cwd) {
+  if (!file || !cwd) return true;                     // nothing to compare: say nothing
+  const norm = (p) => path.resolve(p).replace(/[\\/]+$/, '');
+  const win = process.platform === 'win32';
+  const f = win ? norm(file).toLowerCase() : norm(file);
+  const c = win ? norm(cwd).toLowerCase() : norm(cwd);
+  return f === c || f.startsWith(c + path.sep);
+}
+function describeRisk(toolName, detail, cwd) {
+  const tool = str(toolName, 60);
+  const d = String(detail || '');
+  const out = [];
+  if (isDestructive(tool, d)) out.push('irreversible');
+  if (tool === 'Bash' && PUBLISH_RE.test(d)) out.push('publish');
+  if (tool === 'WebFetch' || tool === 'WebSearch' || (tool === 'Bash' && NETWORK_RE.test(d) && out.indexOf('publish') === -1)) out.push('network');
+  if (FILE_TOOLS.has(tool) && path.isAbsolute(d) && !isInside(d, cwd)) out.push('outside');
+  if (!out.length && (tool === 'Read' || tool === 'Glob' || tool === 'Grep')) out.push('readonly');
+  return out;
+}
+
 // TodoWrite's input is Claude's own plan for the work in front of it, and it is
 // the single most useful thing a dashboard can show: not "it is busy" but where
 // it has got to. Read it off the tool call rather than out of the transcript.
@@ -217,28 +294,68 @@ function describeTodos(input) {
   return out.length ? out : null;
 }
 
-// The text handed to Claude when the user answers a question from the tile.
-//
-// This is the load-bearing string of the whole feature, because the mechanism
-// available to us is a DENIED tool call with a reason (header note 2): Claude
-// has to read this and understand that it received an answer, not a refusal. So
-// it states the answer plainly, quotes the option labels verbatim so there is
-// nothing to infer, and closes the loop explicitly — without the last line the
-// obvious next move for a model whose tool just failed is to ask again.
-function answerReason(questions, selections) {
-  const lines = [];
-  const qs = Array.isArray(questions) ? questions : [];
-  for (let i = 0; i < qs.length; i++) {
-    const picked = Array.isArray(selections[i]) ? selections[i].filter(Boolean) : [];
-    if (!picked.length) continue;
-    lines.push(`- ${qs[i].question || qs[i].header || 'Question ' + (i + 1)}\n  Answer: ${picked.join(', ')}`);
+// One answer for a multi-select question, in the form AskUserQuestion itself
+// uses: labels joined with ", ", and a label that contains ", " or a quote
+// JSON-quoted so the join stays reversible (Claude Code's own joiner does the
+// same, which is what lets it split the string back into picks).
+function joinAnswer(labels) {
+  return labels.map((l) => (l.includes(', ') || l.includes('"') ? JSON.stringify(l) : l)).join(', ');
+}
+
+// A typed answer: trimmed, bounded, and with control characters removed so
+// a stray paste cannot put a terminal escape into someone's session.
+function typedAnswer(v) {
+  if (typeof v !== 'string') return '';
+  return str(v.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, ''), MAX_TYPED);
+}
+
+// The `answers` map AskUserQuestion reads: { question text → answer }. Picks are
+// matched against the options Claude published, and a typed answer is the
+// tile's "Other" box — the same free text the terminal's "Other" row accepts.
+// Returns null when nothing was answered, so the card stays up.
+function buildAnswers(questions, keys, selections, typed) {
+  const answers = {};
+  let any = false;
+  for (let i = 0; i < questions.length; i++) {
+    const q = questions[i];
+    const text = typedAnswer(Array.isArray(typed) ? typed[i] : '');
+    let value = '';
+    if (q.kind === 'number') {
+      const n = Number(text);
+      const inRange = text !== '' && Number.isFinite(n)
+        && (q.min === null || q.min === undefined || n >= q.min)
+        && (q.max === null || q.max === undefined || n <= q.max);
+      value = inRange ? String(n) : '';
+    } else if (q.kind === 'text') {
+      value = text;
+    } else {
+      const allowed = new Set(q.options.map((o) => o.label));
+      const raw = Array.isArray(selections) && Array.isArray(selections[i]) ? selections[i] : [];
+      const picks = [];
+      for (const label of raw) {
+        const l = str(label, 120);
+        if (l && allowed.has(l) && picks.indexOf(l) === -1) picks.push(l);
+        if (picks.length >= MAX_OPTIONS) break;
+      }
+      if (q.multiSelect) value = joinAnswer(text ? picks.concat(text) : picks);
+      else value = text || picks[0] || '';
+    }
+    if (value) { answers[keys[i]] = value; any = true; }
   }
-  if (!lines.length) return '';
-  return 'The user answered from the Xenon dashboard instead of the terminal, so this '
-    + 'AskUserQuestion call was intercepted and carries their answer.\n\n'
-    + lines.join('\n')
-    + '\n\nTreat this as the answer to the question you just asked. Do not ask it again; '
-    + 'continue with the work using these choices.';
+  return any ? answers : null;
+}
+
+// What Claude reads when the user sends a plan back from the tile. Claude Code's
+// own "No, keep planning" row carries the typed feedback the same way: as the
+// reason the tool call was declined, with Claude still in plan mode.
+function planFeedbackMessage(feedback) {
+  const f = typedAnswer(feedback);
+  if (f) {
+    return 'The user reviewed the plan on the Xenon dashboard and wants changes before you start. '
+      + 'Stay in plan mode, revise the plan with this feedback, and present it again:\n\n' + f;
+  }
+  return 'The user reviewed the plan on the Xenon dashboard and did not approve it. '
+    + 'Stay in plan mode and ask what they would like to change.';
 }
 
 // The text handed to Claude when a follow-up typed on the dashboard is delivered
@@ -253,14 +370,57 @@ function followUpReason(text) {
     + t;
 }
 
+// How long after a mod approval is handed back the hook's own request for the
+// same call is still recognised as that call (takeHandBack).
+const HANDBACK_MS = 10 * 1000;
+function handBackKey(sessionId, tool) { return sessionId + '|' + tool; }
+
+// A mod `measure` message in the statusline's shape, so applyStatus stays the
+// one place quota and context are read. The mod reports reset times as ISO
+// 8601; the statusline (and the widget) use epoch seconds.
+const MOD_LIMIT_KINDS = { five_hour: 'five_hour', seven_day: 'seven_day' };
+function modMeasureAsStatus(sessionId, d) {
+  const rate = {};
+  for (const w of Array.isArray(d.rateLimits) ? d.rateLimits.slice(0, 4) : []) {
+    const key = w && MOD_LIMIT_KINDS[w.kind];
+    if (!key) continue;
+    const resetMs = Date.parse(str(w.resetsAt, 40));
+    rate[key] = {
+      used_percentage: w.percentUsed,
+      // undefined, not null: num(null) reads as 0, a reset at the epoch.
+      resets_at: Number.isFinite(resetMs) ? Math.round(resetMs / 1000) : undefined,
+    };
+  }
+  return {
+    session_id: sessionId,
+    context_window: { used_percentage: d.contextPct },
+    cost: { total_cost_usd: d.costUsd },
+    ...(Object.keys(rate).length ? { rate_limits: rate } : {}),
+  };
+}
+
 function createBridge(opts) {
   const options = opts || {};
   const now = () => (typeof options.now === 'function' ? options.now() : Date.now());
   const onChange = typeof options.onChange === 'function' ? options.onChange : () => {};
+  // Claude Code's configured permissions.defaultMode, when the caller can read
+  // it. Only used to decide whether a plan card offers auto mode for a session
+  // that entered plan mode before we heard anything else from it.
+  const defaultMode = () => {
+    try { return typeof options.defaultMode === 'function' ? str(options.defaultMode(), 30) : ''; } catch { return ''; }
+  };
+  // Is the Xenon mod listening in this session right now (claude-inbox.js)?
+  // Then a message for it while it is idle goes into that session instead of a
+  // background run.
+  const terminal = (id) => {
+    try { return typeof options.terminal === 'function' && options.terminal(id) === true; } catch { return false; }
+  };
 
   const sessions = new Map();   // session_id → live session record
   const pending = new Map();    // approval id → { …, resolve, timer }
   let limits = null;            // latest rate-limit reading (account-wide)
+  let modSeen = null;           // { at, version } of the mod's last message
+  const handBacks = new Map();  // `session|tool` → when a mod approval was handed back
   let seq = 0;                  // approval id counter (ids are per-boot)
 
   function touchSession(id, patch) {
@@ -287,16 +447,25 @@ function createBridge(opts) {
         waitFor: null,
         todos: [], plan: '', subagents: [], activity: [],
         compacting: false, permissionMode: '', effort: '',
+        // The last mode seen that was not plan, and whether auto mode has been
+        // seen at all: what a plan card needs to offer the same first choice
+        // the terminal's plan dialog does.
+        prePlanMode: '', sawAuto: false,
         // Is there a turn running? Starts true-for-over, because a session we
         // have only just heard of is not mid-answer. See the Notification case
         // in applyHook for the one thing this exists to decide.
         turnOver: true,
         lastSaid: '', linesAdded: null, linesRemoved: null,
-        startedAt: now(), lastAt: now(), cost: null, contextPct: null,
+        // turnAt: when the current turn began, for "working for…" on the tile.
+        startedAt: now(), turnAt: 0, lastAt: now(), cost: null, contextPct: null,
         endedAt: 0, endedReason: '',
         // Corroboration from Claude Code's own registry (claude-sessions.js).
         pid: null, alive: true,
         queued: null,
+        // A message handed to the mod for this idle session, until the turn
+        // starts ({ text, at, started }), and one that did not get in, offered
+        // back on the tile ({ text, reason, at }). See takeForTerminal.
+        handed: null, undelivered: null,
       };
       sessions.set(key, s);
     }
@@ -311,6 +480,10 @@ function createBridge(opts) {
     if (!s) return;
     s.state = 'waiting';
     s.waitFor = { kind, text: str(text, MAX_STR), at: now() };
+  }
+  function hasPendingFor(sessionId) {
+    for (const rec of pending.values()) if (rec.sessionId === sessionId) return true;
+    return false;
   }
   function clearWait(s, kind) {
     if (!s || !s.waitFor) return;
@@ -339,10 +512,13 @@ function createBridge(opts) {
       // Only replace a known reading with another known reading: a session that
       // reports no rate_limits (API-key user, or before the first API response)
       // must not blank out a good value another session just gave us.
+      // Each window is kept on its own: a post that carries only one of them
+      // used to null the other out.
       if (fivePct !== null || sevenPct !== null) {
+        const prev = limits || {};
         limits = {
-          fiveHour: fivePct === null ? null : { pct: fivePct, resetsAt: num(five.resets_at) },
-          sevenDay: sevenPct === null ? null : { pct: sevenPct, resetsAt: num(seven.resets_at) },
+          fiveHour: fivePct === null ? (prev.fiveHour || null) : { pct: fivePct, resetsAt: num(five.resets_at) },
+          sevenDay: sevenPct === null ? (prev.sevenDay || null) : { pct: sevenPct, resetsAt: num(seven.resets_at) },
           at: now(),
         };
       }
@@ -380,6 +556,73 @@ function createBridge(opts) {
     return !!s;
   }
 
+  // ── mod feed ───────────────────────────────────────────────────────────────
+  // The Xenon mod for Claude Code (integrations/claude-code/). It adds what the
+  // hooks cannot say — each subagent's model, the live context and quota
+  // without waiting for a statusline run — and never prompt text, tool
+  // arguments or file content. It enriches the records the hooks keep; it never
+  // creates a session state of its own. Its one other message is the outcome of
+  // a tile message it took from the inbox, as a code: the text never comes back.
+  function applyMod(data) {
+    const d = (data && typeof data === 'object') ? data : {};
+    if (d.v !== 1) return false;
+    const id = str(d.sessionId, 80);
+    if (!id) return false;
+    modSeen = { at: now(), version: str(d.version, 20) || (modSeen ? modSeen.version : '') };
+
+    switch (d.kind) {
+      case 'hello': {
+        const model = str(d.model, 60);
+        touchSession(id, model ? { model } : {});
+        emit();
+        return true;
+      }
+      case 'measure':
+        // Same figures the statusline posts, in the mod's units; one reader.
+        return applyStatus(modMeasureAsStatus(id, d));
+      case 'agent': {
+        const agentId = str(d.agentId, 60);
+        const model = str(d.model, 60);
+        if (!agentId || !model) return false;
+        const s = touchSession(id, {});
+        // The spawn can land before or after the SubagentStart hook: fill the
+        // entry that exists, or start it so the hook finds it by id.
+        const known = s.subagents.find((a) => a.id === agentId);
+        if (known) known.model = model;
+        else {
+          s.subagents.push({ id: agentId, type: str(d.type, 40), model, at: now() });
+          if (s.subagents.length > MAX_SUBAGENTS) s.subagents.shift();
+        }
+        emit();
+        return true;
+      }
+      case 'delivery': {
+        // A success only ends the "on its way" state a little sooner than
+        // UserPromptSubmit would; a refusal offers the text back on the tile.
+        // 'dropped' is a prompt hook's block, whose reason Claude Code shows in
+        // the session; anything else is 'refused'.
+        const s = sessions.get(id);
+        if (!s || !s.handed) return false;
+        const { text, started } = s.handed;
+        s.handed = null;
+        if (d.ok !== true) {
+          s.undelivered = { text, reason: d.reason === 'dropped' ? 'dropped' : 'refused', at: now() };
+          // Our own UserPromptSubmit hook fired alongside the one that blocked
+          // it and marked a turn that never began. Nothing will send Stop.
+          if (started && s.state === 'running') { s.state = 'idle'; s.turnOver = true; }
+        }
+        emit();
+        return true;
+      }
+      default:
+        return false;
+    }
+  }
+
+  function modStatus() {
+    return modSeen ? { version: modSeen.version, ageMs: now() - modSeen.at } : null;
+  }
+
   // ── hook feed ──────────────────────────────────────────────────────────────
   // Non-blocking lifecycle events. Returns true when the event moved state.
   function applyHook(data) {
@@ -398,13 +641,21 @@ function createBridge(opts) {
     // the basename alone cannot tell two `xenon` folders apart.
     const cwd = str(d.cwd, 400);
     if (cwd) touchSession(id, { cwd, project: projectName(cwd) });
+    // A hook from it means it is wired in after all: the hook feed owns its
+    // state from here on, not the registry file.
+    const wired = sessions.get(id);
+    if (wired && wired.unlinked) wired.unlinked = false;
 
     // Present on every event since 2.1.x and worth showing: a session running in
     // acceptEdits or bypassPermissions will never send a permission card, and a
     // user waiting for one deserves to know that rather than wonder.
     const ambient = {};
     const pm = str(d.permission_mode, 30);
-    if (pm) ambient.permissionMode = pm;
+    if (pm) {
+      ambient.permissionMode = pm;
+      if (pm !== 'plan') ambient.prePlanMode = pm;
+      if (pm === 'auto') ambient.sawAuto = true;
+    }
     const eff = d.effort && typeof d.effort === 'object' ? str(d.effort.level, 20) : '';
     if (eff) ambient.effort = eff;
     if (Object.keys(ambient).length) touchSession(id, ambient);
@@ -424,10 +675,14 @@ function createBridge(opts) {
         // notifications, system reminders, skill preambles — and one of those
         // as the session's headline reads like the user asked for it. Keep the
         // last REAL prompt instead of overwriting it with plumbing.
-        const patch = { state: 'running', tool: '', toolDetail: '', waitFor: null, turnOver: false };
+        const patch = { state: 'running', tool: '', toolDetail: '', waitFor: null, turnOver: false, turnAt: now() };
         const prompt = str(d.prompt, MAX_STR);
         if (prompt && !isInjectedPrompt(prompt)) patch.task = prompt;
-        touchSession(id, patch);
+        const s = touchSession(id, patch);
+        // A tile message handed to the mod has reached Claude Code. Kept until
+        // the mod reports, not cleared: another prompt hook may still block it,
+        // and offering it back then needs the text.
+        if (s && s.handed) s.handed.started = true;
         break;
       }
       case 'PreToolUse': {
@@ -525,7 +780,10 @@ function createBridge(opts) {
           // reader exists for history, and this is the live line.
           lastSaid: str(d.last_assistant_message, MAX_STR),
         });
-        clearWait(s, 'notification');
+        // A turn that ended is waiting for nothing, unless a card for it is
+        // still open. A permission denied in the terminal left its wait behind,
+        // and the session never counted as finished.
+        if (s && s.waitFor && !hasPendingFor(id)) s.waitFor = null;
         break;
       }
       case 'StopFailure':
@@ -541,7 +799,8 @@ function createBridge(opts) {
           state: 'idle', tool: '', toolDetail: '', waitFor: null, subagents: [], turnOver: true,
           endedAt: now(), endedReason: str(d.reason, 40) || 'other',
         });
-        if (s) s.queued = null;   // nothing will ever deliver it now
+        // Nothing will ever deliver it now.
+        if (s) { giveBack(s, true); s.queued = null; s.handed = null; }
         break;
       }
       default:
@@ -554,20 +813,39 @@ function createBridge(opts) {
   }
 
   // ── follow-ups into a live session ─────────────────────────────────────────
-  // Delivered by the Stop hook (header note 3), so this only works on a session
-  // that is going to finish a turn. An idle session will never fire Stop again;
-  // the caller resumes it as a run instead, and the tile says which of the two
-  // is about to happen rather than offering one box that behaves as either.
+  // Two ways in, and the tile says which one is about to happen rather than
+  // offering one box that behaves as either:
+  //   • 'turn': a turn is running, and the Stop hook delivers the text inside
+  //     it (header note 3).
+  //   • 'terminal': the session is idle, so no Stop is coming, but the Xenon mod
+  //     is listening in it (claude-inbox.js). The mod takes the text and starts
+  //     a new turn with it, as if it were typed there (takeForTerminal).
+  // An idle session with no mod listening is neither: the caller resumes it as
+  // a background run instead.
+  function inFlight(s, t) {
+    return !!(s.handed && !s.handed.started && t - s.handed.at < HANDED_TTL_MS);
+  }
+
   function queueFollowUp(sessionId, text) {
     const s = sessions.get(str(sessionId, 80));
     if (!s) return { ok: false, error: 'unknown_session' };
     if (s.endedAt) return { ok: false, error: 'session_ended' };
     const t = str(text, MAX_FOLLOWUP_CHARS);
     if (!t) return { ok: false, error: 'empty' };
-    if (s.queued) return { ok: false, error: 'already_queued' };
-    s.queued = { text: t, at: now() };
+    if (s.queued || inFlight(s, now())) return { ok: false, error: 'already_queued' };
+    const busy = s.state === 'running' || s.state === 'waiting';
+    // The turn ended while the text was being typed: queued, it would wait for
+    // a Stop that already happened.
+    if (!busy && !terminal(s.id)) return { ok: false, error: 'session_idle' };
+    // The mod hands text in as a message (prompt.submit), never as a command
+    // (command.run), so a "/" command would not run as one. Commands are typed
+    // in the session itself.
+    if (!busy && t.startsWith('/')) return { ok: false, error: 'slash_command' };
+    const via = busy ? 'turn' : 'terminal';
+    s.queued = { text: t, at: now(), via };
+    s.undelivered = null;
     emit();
-    return { ok: true };
+    return { ok: true, via };
   }
 
   function cancelFollowUp(sessionId) {
@@ -595,12 +873,67 @@ function createBridge(opts) {
     return followUpReason(text);
   }
 
+  // The mod's side (claude-inbox.js). Hands the text over ONCE and raw: the mod
+  // submits it as the user's own words, so it needs none of followUpReason's
+  // framing. Only to an idle session; one that is working gets it from the
+  // Stop hook, inside its turn. Kept as `handed` until the turn starts, so the
+  // tile can say it is on its way and offer it back if Claude Code refuses it.
+  function takeForTerminal(sessionId) {
+    const s = sessions.get(str(sessionId, 80));
+    if (!s || s.endedAt || !s.queued) return '';
+    if (s.state === 'running' || s.state === 'waiting') return '';
+    const { text, at } = s.queued;
+    s.queued = null;
+    if (now() - at > FOLLOWUP_TTL_MS) { emit(); return ''; }
+    s.handed = { text, at: now(), started: false };
+    emit();
+    return text;
+  }
+
+  // A message still waiting for this session, or handed over with no sign that
+  // it reached Claude Code, did not get in, so it is offered back on the tile
+  // instead of disappearing without a word. `turnToo` is for a session that
+  // ended: no Stop is coming to deliver a message queued for the turn either.
+  function giveBack(s, turnToo) {
+    let text = '';
+    if (s.queued && (turnToo || s.queued.via === 'terminal')) { text = s.queued.text; s.queued = null; }
+    else if (inFlight(s, now())) { text = s.handed.text; s.handed = null; }
+    if (!text) return false;
+    s.undelivered = { text, reason: 'closed', at: now() };
+    return true;
+  }
+
+  // The mod in that session stopped listening (claude-inbox.js): the terminal
+  // was closed, or Claude Code exited. The session itself may still be running
+  // without it, so a message for its turn stays for the Stop hook.
+  function terminalGone(sessionId) {
+    const s = sessions.get(str(sessionId, 80));
+    if (!s || !giveBack(s, false)) return false;
+    emit();
+    return true;
+  }
+
+  // The "Yes" rows of Claude Code's plan dialog, in its order: auto mode when it
+  // is available (else auto-accept edits), then manual approval. The terminal
+  // knows for certain whether auto is available and a hook is not told, so the
+  // evidence is what this session has shown us, then the user's default mode.
+  function planChoices(s) {
+    const autoOk = !!(s && (s.sawAuto || s.prePlanMode === 'auto')) || defaultMode() === 'auto';
+    return [autoOk ? 'auto' : 'acceptEdits', 'default'];
+  }
+
   // ── blocking permission requests ───────────────────────────────────────────
   // Returns { id, promise }. The promise resolves to 'allow' | 'deny' | 'timeout'.
   // 'timeout' means WE decline to answer, so the caller must respond in a way
   // that hands the choice back to Claude Code's own terminal prompt — never an
   // implicit allow.
-  function requestPermission(data) {
+  // `opts.ttlMs` shortens the wait (the mod's approvals hand back to the
+  // terminal after it); `opts.fromMod` marks a request whose expiry must not
+  // become a second card when Claude Code's own PermissionRequest hook, which
+  // runs right after the mod gives up, asks about the same call (takeHandBack).
+  function requestPermission(data, opts) {
+    const o = opts || {};
+    const ttlMs = Math.max(5000, Math.min(APPROVAL_TTL_MS, num(o.ttlMs) || APPROVAL_TTL_MS));
     const d = (data && typeof data === 'object') ? data : {};
     const sessionId = str(d.session_id, 80);
     const tool = str(d.tool_name, 60) || 'tool';
@@ -612,14 +945,18 @@ function createBridge(opts) {
     if (pending.size >= MAX_PENDING) return null;
 
     const s = sessions.get(sessionId);
-    if (s) { setWait(s, 'permission', detail || tool); s.lastAt = now(); }
+    const isPlan = tool === 'ExitPlanMode';
+    if (s) { setWait(s, 'permission', isPlan ? 'plan' : (detail || tool)); s.lastAt = now(); }
 
     const id = 'p' + (++seq) + '-' + now().toString(36);
     const createdAt = now();
     const rec = {
       id,
       sessionId,
-      kind: 'permission',
+      // 'plan' is a permission with the terminal's plan-dialog choices instead
+      // of Allow/Deny: approving one is only possible with the input echoed and
+      // a mode chosen (header note 2), so it is its own kind, not a flag.
+      kind: isPlan ? 'plan' : 'permission',
       project: (s && s.project) || projectName(d.cwd),
       tool,
       detail,
@@ -627,12 +964,17 @@ function createBridge(opts) {
       // ExitPlanMode's whole payload is the plan the user is being asked to
       // approve. Showing "ExitPlanMode" and an Allow button over it asked the
       // user to approve something they could not read.
-      plan: tool === 'ExitPlanMode' ? str(d.tool_input && d.tool_input.plan, 4000) : '',
+      plan: isPlan ? str(d.tool_input && d.tool_input.plan, MAX_PLAN_CHARS) : '',
+      choices: isPlan ? planChoices(s) : null,
+      // Server-side only: the input exactly as Claude Code sent it, to echo back.
+      input: isPlan && d.tool_input && typeof d.tool_input === 'object' && !Array.isArray(d.tool_input) ? d.tool_input : {},
+      risks: describeRisk(tool, detail, (s && s.cwd) || str(d.cwd, 400)),
       task: (s && s.task) || '',
       model: (s && s.model) || '',
       createdAt,
-      expiresAt: createdAt + APPROVAL_TTL_MS,
-      urgentAt: isDestructive(tool, detail) ? createdAt : createdAt + URGENT_AFTER_MS,
+      expiresAt: createdAt + ttlMs,
+      urgentAt: isDestructive(tool, detail) ? createdAt : createdAt + Math.min(URGENT_AFTER_MS, ttlMs / 2),
+      handBackKey: o.fromMod ? handBackKey(sessionId, tool) : '',
       resolve: null,
       timer: null,
     };
@@ -642,9 +984,10 @@ function createBridge(opts) {
       if (pending.get(id) !== rec) return;
       pending.delete(id);
       clearWait(s, 'permission');
+      if (rec.handBackKey) handBacks.set(rec.handBackKey, now());
       rec.resolve({ verdict: 'timeout' });
       emit();
-    }, APPROVAL_TTL_MS);
+    }, ttlMs);
     if (typeof rec.timer.unref === 'function') rec.timer.unref();
 
     pending.set(id, rec);
@@ -654,12 +997,9 @@ function createBridge(opts) {
 
   // AskUserQuestion — a real question, answered from the touchscreen.
   //
-  // This used to be a notice: a card showing the question with untappable
-  // options and a Dismiss button, because the belief was that a hook cannot
-  // answer. Half right. A hook cannot supply a tool RESULT — but it can deny the
-  // call with a reason, and the reason is put in front of the model, which acts
-  // on it (header note 2, measured). So the answer travels as a reason, and the
-  // card gets to be what it always looked like.
+  // The answer goes back as the tool's own input with `answers` filled in
+  // (header note 2), so the tool runs and returns it exactly as it would have
+  // if the user had picked it in the terminal.
   //
   // It arrives on PreToolUse rather than PermissionRequest for two reasons:
   // PreToolUse always fires, and it fires BEFORE the terminal prompt is drawn,
@@ -670,9 +1010,10 @@ function createBridge(opts) {
   // terminal exactly as it would have if Xenon were not installed.
   function askQuestion(data) {
     const d = (data && typeof data === 'object') ? data : {};
-    const questions = describeQuestions(d.tool_input);
-    if (!questions) return null;                   // nothing readable to show
+    const projected = projectQuestions(d.tool_input);
+    if (!projected) return null;                   // nothing readable to show
     if (pending.size >= MAX_PENDING) return null;
+    const questions = projected.shown;
 
     const sessionId = str(d.session_id, 80);
     const s = sessions.get(sessionId);
@@ -688,7 +1029,12 @@ function createBridge(opts) {
       tool: 'AskUserQuestion',
       detail: '',
       questions,
+      // Server-side only: the exact question texts (the answer keys) and the
+      // input to echo back with `answers` added.
+      keys: projected.keys,
+      input: d.tool_input,
       plan: '',
+      risks: [],
       task: (s && s.task) || '',
       model: (s && s.model) || '',
       createdAt,
@@ -717,39 +1063,25 @@ function createBridge(opts) {
   }
 
   // The user chose. `selections` is one array of labels per question, in the
-  // order the card showed them. Labels are matched against the options we
-  // published rather than trusted: the reason string goes to the model, and the
-  // only strings allowed in it are ones Claude itself wrote.
-  function answer(id, selections) {
+  // order the card showed them, and `typed` one string per question (the
+  // "Other" box, or the answer to a text/number question). Picks are matched
+  // against the options Claude published rather than trusted; a typed answer is
+  // the user's own words, the same thing the terminal's "Other" row sends.
+  function answer(id, selections, typed) {
     const rec = pending.get(str(id, 80));
     if (!rec || rec.kind !== 'question') return false;
 
-    const picked = [];
-    let any = false;
-    for (let i = 0; i < rec.questions.length; i++) {
-      const allowed = new Set(rec.questions[i].options.map((o) => o.label));
-      const raw = Array.isArray(selections) && Array.isArray(selections[i]) ? selections[i] : [];
-      const keep = [];
-      for (const label of raw) {
-        const l = str(label, 120);
-        // "Other" is offered by the tool itself and never appears in options.
-        if (l && (allowed.has(l) || l === 'Other')) keep.push(l);
-        if (keep.length >= MAX_OPTIONS) break;
-      }
-      if (!rec.questions[i].multiSelect && keep.length > 1) keep.length = 1;
-      if (keep.length) any = true;
-      picked.push(keep);
-    }
+    const answers = buildAnswers(rec.questions, rec.keys, selections, typed);
     // Nothing recognisable chosen: refuse rather than send Claude an answer that
     // says nothing. The card stays up and the user can try again.
-    if (!any) return false;
+    if (!answers) return false;
 
     pending.delete(rec.id);
     if (rec.timer) clearTimeout(rec.timer);
     const s = sessions.get(rec.sessionId);
     clearWait(s, 'question');
     if (s) s.lastAt = now();
-    rec.resolve({ verdict: 'answer', reason: answerReason(rec.questions, picked) });
+    rec.resolve({ verdict: 'answer', updatedInput: { ...rec.input, answers } });
     emit();
     return true;
   }
@@ -770,20 +1102,39 @@ function createBridge(opts) {
   // The user tapped. Returns true when this actually settled a live request —
   // a stale tap (already expired, or answered on another surface) returns false
   // so the caller can tell the surface its decision arrived too late.
-  function decide(id, behavior) {
+  //
+  // For a plan, `opts.mode` is the row the user picked (one of rec.choices; an
+  // unknown or missing one means the first, which is also the terminal's
+  // default row) and `opts.feedback` is what to change when they send it back.
+  function decide(id, behavior, opts) {
     const rec = pending.get(str(id, 80));
     if (!rec) return false;
     // A question is not a permission and is never settled by Allow/Deny — it
     // has its own answer path, which carries the choice. Routing it here would
     // reintroduce exactly the card that could not do what it showed.
     if (rec.kind === 'question') return false;
+    const o = opts && typeof opts === 'object' ? opts : {};
     const verdict = behavior === 'allow' ? 'allow' : 'deny';
+    let out = { verdict };
+    if (rec.kind === 'plan') {
+      if (verdict === 'allow') {
+        const want = str(o.mode, 30);
+        const mode = PLAN_MODES.has(want) && rec.choices.indexOf(want) !== -1 ? want : rec.choices[0];
+        out = {
+          verdict,
+          updatedInput: rec.input,
+          updatedPermissions: [{ type: 'setMode', mode, destination: 'session' }],
+        };
+      } else {
+        out = { verdict, message: planFeedbackMessage(o.feedback) };
+      }
+    }
     pending.delete(rec.id);
     if (rec.timer) clearTimeout(rec.timer);
     const s = sessions.get(rec.sessionId);
     clearWait(s, 'permission');
     if (s) s.lastAt = now();
-    rec.resolve({ verdict });
+    rec.resolve(out);
     emit();
     return true;
   }
@@ -796,10 +1147,29 @@ function createBridge(opts) {
     if (!rec) return false;
     pending.delete(rec.id);
     if (rec.timer) clearTimeout(rec.timer);
+    if (rec.handBackKey) handBacks.set(rec.handBackKey, now());
     const s = sessions.get(rec.sessionId);
     clearWait(s, rec.kind === 'question' ? 'question' : 'permission');
     if (rec.resolve) rec.resolve({ verdict: rec.kind === 'question' ? 'skip' : 'timeout' });
     emit();
+    return true;
+  }
+
+  // The mod asked about this call and got no answer in its short wait, so it
+  // let Claude Code go on, and the next thing Claude Code runs is the
+  // PermissionRequest hook link() installed, about the same call. Answering
+  // that one with "no decision" is the hand back to the terminal the user was
+  // promised; a second card waiting 9 minutes would break it. PermissionRequest
+  // carries no call id, so the session and tool, seconds apart, identify it.
+  // A mod card still pending for that pair (the mod gave up first) is withdrawn.
+  function takeHandBack(data) {
+    const d = (data && typeof data === 'object') ? data : {};
+    const key = handBackKey(str(d.session_id, 80), str(d.tool_name, 60) || 'tool');
+    for (const rec of pending.values()) if (rec.handBackKey === key) cancel(rec.id);
+    const t = now();
+    for (const [k, at] of handBacks) if (t - at > HANDBACK_MS) handBacks.delete(k);
+    if (!handBacks.has(key)) return false;
+    handBacks.delete(key);
     return true;
   }
 
@@ -827,7 +1197,8 @@ function createBridge(opts) {
           known.endedReason = 'gone';
           known.state = 'idle';
           known.tool = ''; known.toolDetail = ''; known.waitFor = null;
-          known.subagents = []; known.queued = null;
+          giveBack(known, true);
+          known.subagents = []; known.queued = null; known.handed = null;
           moved = true;
         }
         continue;
@@ -843,6 +1214,13 @@ function createBridge(opts) {
         if (!known.name && r.name && !r.nameDerived) known.name = r.name;
         if (!known.cwd && r.cwd) { known.cwd = r.cwd; known.project = projectName(r.cwd); }
         if (known.endedAt) { known.endedAt = 0; known.endedReason = ''; moved = true; }
+        // ...except for a session no hook reaches (started before the link):
+        // the file is all there is, and a state frozen at first sight left its
+        // open conversation without the refresh a working session gets.
+        if (known.unlinked && (r.status === 'busy' || r.status === 'idle')) {
+          const state = r.status === 'busy' ? 'running' : 'idle';
+          if (known.state !== state) { known.state = state; known.lastAt = now(); moved = true; }
+        }
         continue;
       }
 
@@ -872,7 +1250,8 @@ function createBridge(opts) {
       s.endedAt = now();
       s.endedReason = 'gone';
       s.state = 'idle';
-      s.tool = ''; s.toolDetail = ''; s.waitFor = null; s.queued = null;
+      giveBack(s, true);
+      s.tool = ''; s.toolDetail = ''; s.waitFor = null; s.queued = null; s.handed = null;
       moved = true;
     }
 
@@ -889,8 +1268,20 @@ function createBridge(opts) {
       // the moment the user has seen it.
       const limit = s.endedAt ? SESSION_RESTING_MS : SESSION_STALE_MS;
       const since = s.endedAt || s.lastAt;
-      if (t - since > limit) sessions.delete(k);
+      if (t - since > limit) { sessions.delete(k); continue; }
+      // Past their window these would say something no longer true.
+      if (s.handed && t - s.handed.at >= HANDED_TTL_MS) s.handed = null;
+      if (s.undelivered && t - s.undelivered.at >= UNDELIVERED_TTL_MS) s.undelivered = null;
     }
+  }
+
+  // Waiting for the end of the turn ('turn') or for the mod ('terminal'). A
+  // message the mod already took counts until the turn starts: it is on its
+  // way, and can no longer be cancelled.
+  function queuedView(s, t) {
+    if (s.queued) return { text: s.queued.text, ageMs: t - s.queued.at, via: s.queued.via };
+    if (inFlight(s, t)) return { text: s.handed.text, ageMs: t - s.handed.at, via: 'terminal', handed: true };
+    return null;
   }
 
   function snapshot() {
@@ -925,15 +1316,25 @@ function createBridge(opts) {
         linesAdded: s.linesAdded,
         linesRemoved: s.linesRemoved,
         startedAt: s.startedAt,
-        runForMs: t - s.startedAt,
+        // How long the turn has been working, not the session: a session open
+        // for an hour showed "1h" a second into a new turn.
+        runForMs: t - (s.turnAt || s.startedAt),
         ageMs: t - s.lastAt,
         ended: !!s.endedAt,
         endedReason: s.endedReason,
         // A session Xenon can see (its own registry file) but is not wired into,
         // because it started before Claude Code was linked. Its controls would
-        // all fail, so the widget says so instead of offering them.
-        unlinked: !!s.unlinked,
-        queued: s.queued ? { text: s.queued.text, ageMs: t - s.queued.at } : null,
+        // all fail, so the widget says so instead of offering them. Not while
+        // the mod listens in it: a tile message then gets in through the mod,
+        // and after a Xenon restart every open session looks unwired until its
+        // next hook.
+        unlinked: !!s.unlinked && !terminal(s.id),
+        // The Xenon mod is listening in this session right now
+        // (claude-inbox.js), so a message for it while idle goes into it.
+        terminal: !s.endedAt && terminal(s.id),
+        queued: queuedView(s, t),
+        // A tile message that did not get in, offered back once on the tile.
+        undelivered: s.undelivered ? { text: s.undelivered.text, reason: s.undelivered.reason, at: s.undelivered.at } : null,
         // Quiet for long enough that it reads as finished. The widget files
         // these under their own heading instead of dropping them, so a session
         // stays reachable for the follow-up you think of ten minutes later.
@@ -946,14 +1347,17 @@ function createBridge(opts) {
         id: p.id,
         sessionId: p.sessionId,
         // 'permission' → Allow/Deny, runs on the PC. 'question' → pick an
-        // option, answers Claude. The client renders a different card for each
-        // and must never guess from the tool name.
+        // option, answers Claude. 'plan' → the plan dialog's rows (approve into
+        // a mode, or send it back). The client renders a different card for
+        // each and must never guess from the tool name.
         kind: p.kind,
         project: p.project,
         tool: p.tool,
-        detail: p.detail,
+        detail: p.kind === 'plan' ? '' : p.detail,
         questions: p.questions || null,
         plan: p.plan || '',
+        choices: p.choices || null,
+        risks: p.risks || [],
         task: p.task,
         model: p.model,
         waitedMs: t - p.createdAt,
@@ -962,7 +1366,12 @@ function createBridge(opts) {
       }));
 
     return {
+      // The server's clock when this was built: activity marks carry absolute
+      // times, and the widget positions them against this, not its own clock.
+      now: t,
       limits: limits ? { ...limits, ageMs: t - limits.at } : null,
+      // The mod's last word, so the tile can say whether it is installed.
+      mod: modStatus(),
       sessions: live,
       approvals,
       // Cheap change key so the caller can skip an unchanged SSE push. Covers
@@ -973,11 +1382,15 @@ function createBridge(opts) {
         s.id, s.state, s.tool, s.toolDetail,
         s.waitFor ? s.waitFor.kind : '',
         s.todos.map(x => x.status).join(''),
-        s.subagents.length, s.activity.length,
-        s.queued ? 'q' : '', s.ended ? 'e' : '', s.resting ? 1 : 0,
+        s.subagents.map(a => a.model || '-').join('/'), s.activity.length,
+        s.queued ? 'q' + s.queued.via + (s.queued.handed ? 'h' : '') : '', s.ended ? 'e' : '', s.resting ? 1 : 0,
+        s.terminal ? 't' : '', s.undelivered ? 'u' + s.undelivered.at : '',
+        s.contextPct == null ? '' : Math.round(s.contextPct), s.model || '',
+        s.linesAdded || 0, s.linesRemoved || 0,
       ].join(':')).join(',')
         + '|' + approvals.map(a => a.id + (a.urgent ? '!' : '')).join(',')
-        + '|' + (limits ? `${limits.fiveHour && limits.fiveHour.pct}/${limits.sevenDay && limits.sevenDay.pct}` : ''),
+        + '|' + (limits ? `${limits.fiveHour && limits.fiveHour.pct}/${limits.sevenDay && limits.sevenDay.pct}` : '')
+        + '|' + (modSeen ? 'm' : ''),
     };
   }
 
@@ -1016,28 +1429,33 @@ function createBridge(opts) {
   // Is this session one we can still act on? The composer asks before offering
   // a box, so it can say which of the two things will happen instead of
   // discovering it on send. 'followup' = a turn is running and Stop will deliver
-  // it; 'resume' = idle, so the caller continues the same conversation as a run;
+  // it; 'terminal' = idle with the mod listening, which starts a turn with it;
+  // 'resume' = idle, so the caller continues the same conversation as a run;
   // 'none' = ended or never ours.
   function replyModeFor(id) {
     const s = sessions.get(str(id, 80));
     if (!s || s.endedAt) return 'none';
-    if (s.queued) return 'queued';
-    return (s.state === 'running' || s.state === 'waiting') ? 'followup' : 'resume';
+    if (s.queued || inFlight(s, now())) return 'queued';
+    if (s.state === 'running' || s.state === 'waiting') return 'followup';
+    return terminal(s.id) ? 'terminal' : 'resume';
   }
 
   return {
-    applyStatus, applyHook, requestPermission, askQuestion, answer, skipQuestion,
+    applyStatus, applyHook, applyMod, modStatus, requestPermission, takeHandBack, askQuestion, answer, skipQuestion,
     decide, cancel, snapshot, stop, cwdFor, mergeRegistry,
-    queueFollowUp, cancelFollowUp, takeFollowUp, replyModeFor,
+    queueFollowUp, cancelFollowUp, takeFollowUp, takeForTerminal, terminalGone, replyModeFor,
     get pendingCount() { return pending.size; },
   };
 }
 
 module.exports = {
+  describeRisk,
   createBridge,
   describeTool,
   describeTodos,
-  answerReason,
+  buildAnswers,
+  joinAnswer,
+  planFeedbackMessage,
   followUpReason,
   isDestructive,
   isInjectedPrompt,
@@ -1045,6 +1463,8 @@ module.exports = {
   URGENT_AFTER_MS,
   QUESTION_TTL_MS,
   FOLLOWUP_TTL_MS,
+  HANDED_TTL_MS,
+  UNDELIVERED_TTL_MS,
   SESSION_STALE_MS,
   SESSION_RESTING_MS,
 };

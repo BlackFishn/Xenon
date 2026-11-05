@@ -94,7 +94,7 @@ test('a timed-out dispatched toggle wakes fallback without replaying the write',
 });
 
 test('slider sends immediately, coalesces slow writes, and delivers the final value', async () => {
-  const context = vm.createContext({ setTimeout, clearTimeout, Date, setOffline: () => {} });
+  const context = vm.createContext({ setTimeout, clearTimeout, setInterval: () => 0, clearInterval() {}, Date, setOffline: () => {} });
   vm.runInContext(readFileSync(new URL('../js/volume.js', import.meta.url), 'utf8'), context);
   const sent = [];
   let finish;
@@ -117,7 +117,7 @@ test('an older OS confirmation cannot pull the master thumb back during a write'
   const slider = { value: 70, style: {}, classList: { toggle() {} } };
   const label = { textContent: '70%' };
   const context = vm.createContext({
-    setTimeout, clearTimeout, Date, setOffline() {}, audioData: null, speakerMuted: false, window: {},
+    setTimeout, clearTimeout, setInterval: () => 0, clearInterval() {}, Date, setOffline() {}, audioData: null, speakerMuted: false, window: {},
     document: { querySelectorAll: selector => selector === '[data-volf="vol-slider"]' ? [slider] : selector === '[data-volf="vol-val"]' ? [label] : [] },
   });
   vm.runInContext(readFileSync(new URL('../js/volume.js', import.meta.url), 'utf8'), context);

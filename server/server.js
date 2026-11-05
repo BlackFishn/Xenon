@@ -65,7 +65,11 @@ const { sanitizeBgAssets, sanitizeBgFps } = require('./js/custom-bg'); // single
 const { sanitizeSlideshow } = require('./js/slideshow-widget'); // single owner of the slideshow image rules (shared with the client)
 const slideshowFolder = require('./slideshow-folder');          // the slideshow's "folder on this PC" source
 const { createFileSearch } = require('./filesearch');           // local file search (Spotlight backend)
-const { createDiskSpace } = require('./diskspace');             // disk usage scan + guarded recycle-bin cleanup (helper-gated)
+const { createDiskSpace } = require('./diskspace');
+const { createDevClean } = require('./devclean');
+const { createFeatureUnlock } = require('./feature-unlock');
+const { listPosixApps } = require('./installed-apps');               // macOS/Linux apps for the search's Applications tier
+const { createMdfindRunner } = require('./mdfind');                 // macOS catalog (Spotlight) for search             // disk usage scan + guarded recycle-bin cleanup (helper-gated)
 const fileTransferLib = require('./file-transfer');             // phone ↔ PC file transfer: the store, the naming rules, the delivery copy
 const { createLivingIndex } = require('./living-index');       // the Living Index: helper-held in-RAM file index + watchers
 const { createPhone } = require('./phone');                    // the paired phone: phonebook + call log over Bluetooth, call state, dial
@@ -93,12 +97,13 @@ const icsFeeds = require('./ics-feeds.js');
 // isBlockedOpenPath is the Deck's openFile gate. It is re-applied by every
 // surface that opens a file the user did not type the path of: the Spotlight
 // results, and the transfer widget's received files.
-const { createRegistry, resolveOutputDevice, pickToggleDevice, isBlockedOpenPath } = require('./actions/registry');
+const { createRegistry, resolveOutputDevice, pickToggleDevice, pickFirstConnected, isBlockedOpenPath } = require('./actions/registry');
 const { createPerfRegistry } = require('./actions/perf-registry');
 const { createObs, scenePreviewRequest } = require('./actions/obs');
 const { createStreamerbot } = require('./actions/streamerbot');
 const { createHomeAssistant, normalizeHomeAssistant, preserveHaToken, redactHaToken } = require('./actions/home-assistant');
 const tclAcProfile = require('../packages/core/src/tcl-ac');
+const { createHaQuery, normalizeHistoryRequest } = require('./actions/home-assistant-query');
 const { createChroma } = require('./actions/chroma');
 const { createWaveLink } = require('./actions/wavelink');
 const { createClient: createVoicemeeter } = require('./actions/voicemeeter');
@@ -121,15 +126,24 @@ const { preserveNewsCreds, redactNewsCreds } = require('./news-creds');
 const claudeUsage = require('./claude-usage');
 const aiUsage = require('./ai-usage');
 const claudeBridge = require('./claude-bridge');
+const claudeInbox = require('./claude-inbox');
 const claudeSessions = require('./claude-sessions');
 const claudeLink = require('./claude-link');
 const claudeRun = require('./claude-run');
 const claudeTranscript = require('./claude-transcript');
+const claudeHistory = require('./claude-history');
+const claudeCommands = require('./claude-commands');
 const claudeAttach = require('./claude-attach');
+const codexAppServer = require('./codex-appserver');
+const codexBridge = require('./codex-bridge');
+const codexLink = require('./codex-link');
+const chatgptAsk = require('./chatgpt-ask');
 const communityCatalog = require('./community-catalog');
 const communityMessages = require('./community-messages');
 const communityInstalls = require('./community-installs');
 const supporterRedeem = require('./supporter-redeem');
+const widgetAutoUpdateLib = require('./widget-auto-update');   // Store widgets that update themselves (see its header)
+const presetCodec = require('./js/preset-share');   // decodePreset/peekLocked, shared with the client; the auto-updater reads a catalog code with them
 const versionPing = require('./version-ping');
 const iconPacks = require('./icon-packs');
 const soundPacks = require('./sound-packs');
@@ -155,6 +169,11 @@ const { createSpotifyProvider } = require('./stream-spotify');
 const { createLocalVideo } = require('./local-video');
 const localVideo = createLocalVideo({ getFfmpegPath });
 const { normalizeMediaSeekResult } = require('./media-seek-result');
+const lyrics = require('./lyrics');
+const { createLyricsCache } = require('./lyrics-cache');
+const { createLyricsOffsets } = require('./lyrics-offsets');
+const { createLyricsTranslator, cleanCap: cleanLyricsTranslateCap } = require('./lyrics-translator');
+const lyricsPrices = require('./lyrics-translate-price');
 
 // App version — read once from package.json so the in-app indicator always
 // matches the shipped build. Falls back gracefully if the file is unreadable.
@@ -186,8 +205,9 @@ const UPDATE_CHECK_TTL = 24 * 60 * 60 * 1000;   // reuse a successful probe for 
 const UPDATE_CHECK_RETRY = 60 * 60 * 1000;      // a failed probe retries after an hour
 const UPDATE_NOTES_MAX = 8000;                  // cap the release-notes body we keep/serve
 const UPDATE_MEDIA_MAX = 6;                     // at most this many bare URLs get a content-type probe
-let _updateCache = { at: 0, ok: false, latest: '', tag: '', url: '', notes: '', name: '', publishedAt: '', mediaTypes: {} };
+let _updateCache = { at: 0, ok: false, latest: '', tag: '', url: '', notes: '', name: '', publishedAt: '', noAuto: false, mediaTypes: {} };
 const { parseSemver, semverNewer } = require('./semver');
+const autoUpdateLib = require('./auto-update');
 const { nextSettingsRev } = require('./settings-rev');   // shared by every settings writer
 
 // ── Release-notes media (screenshots + videos) ──────────────────────────────
@@ -264,7 +284,7 @@ async function checkLatestRelease(force) {
   const now = Date.now();
   const ttl = _updateCache.ok ? UPDATE_CHECK_TTL : UPDATE_CHECK_RETRY;
   if (!force && _updateCache.at && now - _updateCache.at < ttl) return _updateCache;
-  _updateCache = { at: now, ok: false, latest: '', tag: '', url: '', notes: '', name: '', publishedAt: '', mediaTypes: {} };
+  _updateCache = { at: now, ok: false, latest: '', tag: '', url: '', notes: '', name: '', publishedAt: '', noAuto: false, mediaTypes: {} };
   try {
     const res = await fetch(`https://api.github.com/repos/${UPDATE_REPO}/releases/latest`, {
       headers: { 'User-Agent': 'XenonEdgeHub', Accept: 'application/vnd.github+json' },
@@ -280,6 +300,9 @@ async function checkLatestRelease(force) {
           notes: String((rel && rel.body) || '').slice(0, UPDATE_NOTES_MAX),
           name: String((rel && rel.name) || tag),
           publishedAt: String((rel && rel.published_at) || ''),
+          // Read from the WHOLE body, before the notes are capped: the marker
+          // must work wherever in the notes it was written.
+          noAuto: autoUpdateLib.hasNoAutoMarker(String((rel && rel.body) || '')),
           mediaTypes: {},
         };
         // Resolve embedded screenshots/videos (GitHub-hosted only). Best-effort —
@@ -426,7 +449,9 @@ function providerModelFor(provider, role, settings) {
 
 // One answer through the user's Claude Code / Codex subscription (ai-cli.js),
 // for the features a person starts themselves: a search, a button, the fold of
-// their own conversation. Automatic background ones never come here.
+// their own conversation. Automatic background ones never come here; the one
+// exception, lyrics translation, is a supporter's explicit opt-in with a
+// monthly cap, on the plan's small model (completeLyricsTranslation).
 async function cliOneShot(provider, systemText, userText, settings) {
   const s = settings || (await readHubSettings().catch(() => null)) || {};
   const model = provider === 'claudecode' ? s.claudeCodeModel : s.codexModel;
@@ -632,7 +657,7 @@ function buildCoreAiFunctions() {
           glass_blur: { type: 'NUMBER', description: 'Glass blur in px 0–40 (default 22)' },
           glass_saturation: { type: 'NUMBER', description: 'Glass colour saturation % 100–220 (default 160)' },
           border_strength: { type: 'NUMBER', description: 'Panel border strength 0–2 (1 = default)' },
-          shadow_strength: { type: 'NUMBER', description: 'Panel shadow strength 0–2 (1 = default)' },
+          shadow_strength: { type: 'NUMBER', description: 'Tile drop shadow strength 0–2 (0 = default, no shadow)' },
         } } },
         { name: 'create_animated_background', description: 'Write and apply a custom ANIMATED BACKGROUND for the dashboard from the user\'s description. YOU author the code: define a JavaScript function draw(ctx, t, w, h) that paints ONE frame — ctx is a canvas 2D context, t is elapsed seconds (float), w and h are the pixel size. It is called ~60×/second on a full-screen canvas behind the dashboard. Keep it self-contained (declare any particles/state with const or let ABOVE the draw function so it persists across frames), efficient, and tasteful behind a UI (avoid a pure-white fill or harsh strobing). The code runs in an isolated sandbox with NO network, DOM, storage or dashboard access, so use only the canvas 2D API, Math and Date. Use for requests like "crea uno sfondo animato con particelle blu", "make me a drifting starfield background", "sfondo tipo nebulosa viola". Applies live and persists.', parameters: { type: 'OBJECT', properties: {
           name: { type: 'STRING', description: 'Short name for this background (e.g. "Nebulosa viola")' },
@@ -768,6 +793,17 @@ communityCatalog.initCache({ dataDir: DATA_DIR });
 // Last-known model lists, so the first AI turn after a restart resolves against
 // what the providers actually offer instead of the built-in offline defaults.
 aiModels.initCache({ dataDir: DATA_DIR });
+// Song lyrics already fetched from LRCLIB (and the songs it has none for), so a
+// replay is instant and offline. Loaded lazily on the first lookup.
+const lyricsCache = createLyricsCache({ dataDir: DATA_DIR });
+// Supporter Lyrics widget: per-song timing, and translations paid for once.
+const lyricsOffsets = createLyricsOffsets({ dataDir: DATA_DIR });
+const lyricsTranslator = createLyricsTranslator({
+  dataDir: DATA_DIR,
+  complete: (req) => completeLyricsTranslation(req),
+  // The provider's own message (no lyrics, no key): enough to tell a bad key from a bad reply.
+  onError: (e) => console.warn('[lyrics] translation failed:', String((e && e.message) || e).slice(0, 200)),
+});
 // Deck soundboard library: uploaded clips live here under server-generated
 // names; the extension set mirrors the /deck/sound streaming allowlist.
 const DECK_SOUNDS_DIR = path.join(DATA_DIR, 'sounds');
@@ -841,7 +877,13 @@ function getInstalledApps() {
   const now = Date.now();
   if (now - _installedApps.at < INSTALLED_APPS_TTL_MS) return Promise.resolve(_installedApps.list);
   if (_installedApps.inflight) return _installedApps.inflight;
-  _installedApps.inflight = Promise.all([_enumStartMenuLnks(), _enumStoreApps()])
+  // macOS and Linux: .app bundles and .desktop entries (installed-apps.js).
+  // Off Windows this tier used to answer nothing, so an app's name found its
+  // files and never the app.
+  const enumerate = process.platform === 'win32'
+    ? Promise.all([_enumStartMenuLnks(), _enumStoreApps()])
+    : listPosixApps({ lang: String(process.env.LANG || '').slice(0, 2) }).then((apps) => [apps, []]);
+  _installedApps.inflight = enumerate
     .then(([lnks, store]) => {
       // Same display name in both worlds (a Store app plus a desktop shortcut):
       // the Store entry wins — it launches even when the lnk is stale.
@@ -857,6 +899,22 @@ function getInstalledApps() {
 }
 
 async function launchInstalledApp(app) {
+  // Both POSIX kinds come from installed-apps.js's own enumeration (the search
+  // resolves an opaque id back to it), re-checked to exist before the launch.
+  if (app.kind === 'macapp') {
+    if (!/\.app$/.test(app.target)) throw new Error('bad_app');
+    await fs.promises.stat(app.target);
+    await new Promise((resolve, reject) => {
+      execFile('open', [app.target], { timeout: 8000 }, (e) => (e ? reject(e) : resolve()));
+    });
+    return;
+  }
+  if (app.kind === 'desktop') {
+    if (!/\.desktop$/.test(app.target)) throw new Error('bad_app');
+    await fs.promises.stat(app.target);
+    await launchLinuxApp(app.target);
+    return;
+  }
   if (app.kind === 'store') {
     if (!/^[\w.-]+![\w.-]+$/.test(app.target)) throw new Error('bad_aumid');
     await new Promise((resolve, reject) => {
@@ -886,13 +944,14 @@ const livingIndex = process.platform === 'linux'
 const fileSearch = createFileSearch({
   dataDir: DATA_DIR,
   livingIndex,
-  openExternal: (p) => openExternalPath(p),
+  openExternal: (p, args) => openExternalPath(p, args),
   // Injected rather than kept as a second copy of the platform switch: the
   // transfer widget's "show in folder" is the same verb, and two copies of a
   // three-way platform branch drift into one of them working off Windows.
   revealExternal: (p, dir) => revealInFileManager(p, dir),
   appsProvider: getInstalledApps,
   launchApp: launchInstalledApp,
+  catalogRunner: process.platform === 'darwin' ? createMdfindRunner() : undefined,
 });
 // Global Spotlight hotkey (helper-gated, opt-in). The helper's hotkey-serve
 // owns a RegisterHotKey + message loop and pushes a line per press; the server
@@ -1313,6 +1372,23 @@ const diskSpace = createDiskSpace({
   // A cleanup runs as a background job; push its progress to the dashboard over
   // SSE so the widget shows real advancement and can re-attach after a reload.
   onCleanProgress: (snapshot) => { try { broadcastSSE('disk_clean', snapshot || {}); } catch {} },
+  // A cached overview learned something after it was answered (the background
+  // duplicate check finished): the widget refetches the drive it names.
+  onDiskUpdate: (info) => { try { broadcastSSE('disk_update', info || {}); } catch {} },
+  revealExternal: (p, dir) => revealInFileManager(p, dir),
+});
+// Dev cleanup (supporter-only): Docker, Ollama models, stale editor workspace
+// storage, WSL/Docker virtual disks. Every route checks featureUnlock first.
+// Editor folders go through the Disk widget's guarded Recycle-Bin delete; the
+// .vhdx compaction is compact-vhdx.ps1, which raises its own UAC prompt.
+const featureUnlock = createFeatureUnlock({ dataDir: DATA_DIR });
+const devClean = createDevClean({
+  run: execFilePromise,
+  getSettings: () => readHubSettings(),
+  trash: (root, paths) => diskSpace.trashUnder(root, paths),
+  scriptPath: path.join(__dirname, 'compact-vhdx.ps1'),
+  spawnDetached: (exe, args) => { spawn(exe, args, { windowsHide: true, stdio: 'ignore' }).unref(); },
+  onProgress: (info) => { try { broadcastSSE('devclean', info || {}); } catch {} },
 });
 // Installed Deck icon packs (the 'icons' preset kind): one validated folder per
 // pack, written/served only through icon-packs.js (see that module's boundary
@@ -1447,6 +1523,7 @@ const EXAMPLE_WIDGETS = {
   'hello-xenon': 'hello-xenon',
   'teleprompter': 'teleprompter',
   'github-stars': 'github-stars',
+  'ha-room': 'ha-room',
 };
 
 // Short-lived cache of the validated package scan, shared by the hot SDK paths
@@ -1622,6 +1699,16 @@ function sdkGrantsFor(pkgId) {
     // as an allowlist directly.
     userHosts: (g && g.userHosts && typeof g.userHosts === 'object' && !Array.isArray(g.userHosts)) ? g.userHosts : {},
   };
+}
+
+// Whether ANY installed package has been granted a data stream. The demand gate
+// for server work that exists only to feed widgets: fails closed with
+// sdkGrantsFor, so safe mode and a suspended package cost nothing.
+function sdkStreamGranted(stream) {
+  const sw = _serverHubSettings && _serverHubSettings.sdkWidgets;
+  const grants = sw && sw.grants && typeof sw.grants === 'object' ? sw.grants : null;
+  if (!grants) return false;
+  return Object.keys(grants).some((pkgId) => sdkGrantsFor(pkgId).streams.includes(stream));
 }
 
 // ── SDK persistent store + secret vault (per-package, host-mediated) ─────────
@@ -1930,14 +2017,16 @@ async function installWidgetPayload(payload, origin, catalogVersion) {
     // Capture BEFORE writing: "no folder yet" means a brand-new id, so a plain
     // import records 'import' instead of inheriting the local-folder default.
     const existed = await fs.promises.access(dest).then(() => true, () => false);
-    await fs.promises.mkdir(dest, { recursive: true });
-    for (const f of v.files) {
-      const abs = path.join(dest, ...f.relPath.split('/'));
-      // Defense in depth: relPath is already traversal-proof, assert anyway.
-      if (abs !== dest && !abs.startsWith(dest + path.sep)) continue;
-      await fs.promises.mkdir(path.dirname(abs), { recursive: true });
-      await fs.promises.writeFile(abs, f.bytes);
-    }
+    // The same swap the automatic update uses: the package is written beside the
+    // live one and renamed into place, so a failure half way leaves the old version
+    // whole, and a file the new version no longer ships does not linger from the
+    // old one (a mixed tree is how an update ends up running the old script against
+    // the new page). The widget's own data lives in widget-store, not in this folder.
+    const swapped = await sdkWidgets.installPackageStaged(SDK_WIDGETS_DIR, SDK_STAGING_DIR, v, async () => {
+      const scan = await refreshSdkScan();
+      return scan.packages.some((p) => p.id === v.id && p.version === v.manifest.version);
+    });
+    if (!swapped.ok) return { ok: false, error: 'install_failed' };
     await recordWidgetOrigin(v.id, sdkWidgets.mergeOrigin(existed ? widgetOriginOf(v.id) : null, origin), catalogVersion);
     await refreshSdkScan();
     return { ok: true, id: v.id, name: v.manifest.name, actions: v.manifest.actions, streams: v.manifest.streams, hosts: v.manifest.hosts };
@@ -4160,6 +4249,10 @@ function liveMediaSnapshot(data, ageMs) {
     const position = Number(snapshot.position) || 0;
     const duration = Number(snapshot.duration) || 0;
     snapshot.position = Math.min(duration, position + Math.floor(ageMs / 1000));
+    // The unrounded twin (hosts that send it) ages by the exact time, so the
+    // lyrics clock is not up to a second off.
+    const positionMs = Number(snapshot.positionMs);
+    if (Number.isFinite(positionMs)) snapshot.positionMs = Math.round(Math.min(duration * 1000, positionMs + ageMs));
   }
   return snapshot;
 }
@@ -4896,14 +4989,18 @@ async function getMediaInfo(force = false) {
   mediaPending = (async () => {
   try {
     const data = normalizeMedia(await runMediaRequest('info', 12000));
+    // Aged from when the host answered: an online cover lookup can take seconds.
+    const readAt = Date.now();
     const hydrated = applyStickyThumb(await hydrateArtwork(data));
-    mediaCache = { data: hydrated, updatedAt: Date.now() };
+    mediaCache = { data: hydrated, updatedAt: readAt };
     mediaPending = null;
-    return hydrated;
+    return liveMediaSnapshot(hydrated, Date.now() - readAt);
   } catch (e) {
     if (mediaCache.data) {
       mediaPending = null;
-      return mediaCache.data;
+      // Aged like a cache hit: the raw copy carries a position seconds old,
+      // which the lyrics would read as a seek back.
+      return liveMediaSnapshot(mediaCache.data, Date.now() - mediaCache.updatedAt);
     }
     const fallback = applyStickyThumb(await hydrateArtwork(normalizeMedia(await getMediaFallback(e.message))));
     mediaCache = { data: fallback, updatedAt: Date.now() };
@@ -5001,6 +5098,154 @@ async function mediaSeek(position) {
     mediaCache.updatedAt = 0;
     return { ok: false, error: 'unavailable' };
   }
+}
+
+// ── Song lyrics (LRCLIB) ─────────────────────────────────────────────────────
+// Lyrics for whatever is playing, from any host (lyrics.js builds the query,
+// lyrics-cache.js remembers the answer). One lookup per track at a time, and a
+// 429/503 from LRCLIB pauses EVERY lookup until its Retry-After has passed —
+// their API terms require it.
+const LYRICS_USER_AGENT = `Xenon v${APP_VERSION || '0'} (https://github.com/marcimastro98/Xenon)`;
+const _lyricsPending = new Map();
+let _lyricsCooldownUntil = 0;
+
+function lyricsReply(media, key, result) {
+  const out = { ok: true, state: result.state, key, title: String(media.title || ''), source: 'LRCLIB' };
+  if (result.state === 'synced') out.lines = result.lines;
+  else if (result.state === 'plain') out.plain = result.plain;
+  return out;
+}
+
+function lookupLyricsOnce(media, key) {
+  if (_lyricsPending.has(key)) return _lyricsPending.get(key);
+  const pending = (async () => {
+    try {
+      const out = await lyrics.lookup(media, { userAgent: LYRICS_USER_AGENT });
+      if (out.state === 'busy') {
+        _lyricsCooldownUntil = Date.now() + out.retryAfter * 1000;
+        await lyricsCache.set(key, out, { until: _lyricsCooldownUntil });
+      } else {
+        await lyricsCache.set(key, out);
+      }
+      return out;
+    } finally {
+      _lyricsPending.delete(key);
+    }
+  })();
+  _lyricsPending.set(key, pending);
+  return pending;
+}
+
+async function getCurrentLyrics() {
+  if (_serverHubSettings.mediaLyrics === false) return { ok: true, state: 'off' };
+  const media = await getMediaInfo();
+  if (!media || !media.active || !String(media.title || '').trim()) return { ok: true, state: 'idle' };
+  const key = lyrics.trackKey(media);
+  if (!key) return { ok: true, state: 'idle' };
+  if (!lyrics.validDuration(media)) return lyricsReply(media, key, { state: 'live' });
+  const cached = await lyricsCache.get(key);
+  const result = cached
+    || (Date.now() < _lyricsCooldownUntil ? { state: 'busy' } : await lookupLyricsOnce(media, key));
+  const out = lyricsReply(media, key, result);
+  // The song's own timing, set from the supporter widget; the free Media-tile
+  // view applies it too, so the song is right on every screen.
+  const songOffset = await lyricsOffsets.get(key);
+  if (songOffset !== null) out.offsetMs = songOffset;
+  return out;
+}
+
+// The lyrics of the song playing NOW, when `key` names it. Both supporter
+// writes below act only on that song: a stale screen asking about the previous
+// one gets a 409 instead of changing a song nobody is looking at.
+async function lyricsForPlayingKey(key) {
+  if (typeof key !== 'string' || !key) return { status: 400 };
+  const media = await getMediaInfo();
+  if (!media || !media.active || lyrics.trackKey(media) !== key) return { status: 409 };
+  return { status: 200, entry: await lyricsCache.get(key) };
+}
+
+// The texts a translation is made from: always the server's own copy.
+function lyricsTexts(entry) {
+  if (!entry) return null;
+  if (entry.state === 'synced') return entry.lines.map(l => l.text);
+  if (entry.state === 'plain') return entry.plain;
+  return null;
+}
+
+// Each cloud provider translates on its small low-cost family, whatever model
+// the user picked for the assistant: a song a day on Opus would be real money.
+const LYRICS_TRANSLATE_FAMILY = Object.freeze({ gemini: 'auto:flash-lite', openai: 'auto:mini', anthropic: 'auto:haiku' });
+
+async function lyricsTranslationModel(provider, settings) {
+  if (aiCli.isCliProvider(provider)) return aiCli.lightModel(provider);
+  const family = LYRICS_TRANSLATE_FAMILY[provider];
+  if (!family) return '';
+  const apiKey = provider === 'gemini' ? await geminiKeyFor('')
+    : provider === 'openai' ? settings.openaiApiKey : settings.anthropicApiKey;
+  return aiModels.resolve(provider, 'chat', family, apiKey);
+}
+
+// One request to the user's configured Xenon AI provider →
+// { text, tokens, input, output } (the last two split for the cost estimate).
+// Claude Code and Codex run on the user's plan: nothing to pay per song, but
+// each song counts toward the plan's limits, which the widget says before the
+// switch is turned on. They run on the plan's small model at low effort.
+async function completeLyricsTranslation({ system, user, maxTokens }) {
+  const settings = await readHubSettings().catch(() => null) || {};
+  const provider = aiLocal.sanitizeProvider(settings.aiProvider);
+  let tokens = 0;
+  let split = null;
+  const onUsage = (n, parts) => { tokens = n; split = parts || null; };
+  let text = '';
+  if (provider === 'ollama') {
+    const result = await aiLocal.localChat({
+      baseUrl: aiLocal.sanitizeOllamaUrl(settings.ollamaUrl),
+      model: aiLocal.resolveModel(aiLocal.sanitizeModel(settings.ollamaModel), settings.hardwareScan),
+      geminiTools: [], history: [{ role: 'user', parts: [{ text: user }] }], systemText: system,
+      executeTool: async () => ({ fnResult: {}, clientActions: [] }),
+    });
+    text = result && result.text;
+  } else if (aiCli.isCliProvider(provider)) {
+    text = await aiCli.oneShot({
+      provider, model: await lyricsTranslationModel(provider, settings), effort: 'low',
+      // Total only: a plan's tokens have no price, and Codex's large fixed
+      // instructions would skew the per-song figure a paid provider is priced on.
+      systemText: system, userText: user, onUsage: (n) => { tokens = n; },
+    });
+  } else if (provider === 'openai' || provider === 'anthropic') {
+    const mod = provider === 'openai' ? aiOpenai : aiAnthropic;
+    text = await mod.oneShot({
+      apiKey: provider === 'openai' ? settings.openaiApiKey : settings.anthropicApiKey,
+      model: await lyricsTranslationModel(provider, settings), systemText: system, userText: user, maxTokens, onUsage,
+    });
+  } else if (provider === 'gemini') {
+    const apiKey = await geminiKeyFor('');
+    const opts = { model: await lyricsTranslationModel(provider, settings), temperature: 0.2, json: true, onUsage };
+    // Measured: 3.x Flash-Lite rejects a zero thinking budget and wants a level;
+    // the Flash fallback rejects the "minimal" level and takes the budget. A
+    // rejected request is a 400 that is not billed, so one retry costs nothing.
+    try {
+      text = await _geminiOneShot(apiKey, [{ text: user }], system, maxTokens, { ...opts, thinkingLevel: 'minimal' });
+    } catch (e) {
+      if (!/invalid argument|thinking/i.test(String(e && e.message))) throw e;
+      text = await _geminiOneShot(apiKey, [{ text: user }], system, maxTokens, opts);
+    }
+  } else {
+    throw new Error('provider not supported');
+  }
+  return { text: String(text || ''), tokens, input: split && split.input, output: split && split.output };
+}
+
+// Why translation cannot run right now, or '' when it can. Checked before any
+// request is made, so a missing key never costs a round trip.
+async function lyricsTranslateBlocker() {
+  if (_serverHubSettings.lyricsTranslate !== true) return 'off';
+  const settings = await readHubSettings().catch(() => null) || {};
+  const provider = aiLocal.sanitizeProvider(settings.aiProvider);
+  if (provider === 'openai' && !settings.openaiApiKey) return 'no_ai';
+  if (provider === 'anthropic' && !settings.anthropicApiKey) return 'no_ai';
+  if (provider === 'gemini' && !(await geminiKeyFor(''))) return 'no_ai';
+  return '';
 }
 
 function parseCsvLine(line) {
@@ -5152,12 +5397,29 @@ async function setDefaultMic(id) {
   if (!match) throw new Error('Unknown microphone');
   const preserveMute = !!(before.mic && before.mic.muted);
 
-  await svvExec(['/SetDefault', wanted, 'all']);
+  await setDefaultAudioDevice(wanted);
   await new Promise(resolve => setTimeout(resolve, 120));
   const after = await _getAudioInfoRaw();
   if (!after.mic || after.mic.id !== wanted) throw new Error('Default microphone change was not applied');
   if (preserveMute && !after.mic.muted) await setMicMute(true);
   return after.mic;
+}
+
+// Make a device the default. Windows keeps three defaults per direction:
+// Console and Multimedia (together, what the Sound panel calls the Default
+// Device) and Communications (what Discord, Teams and call apps use), and
+// SoundVolumeView sets one role per call or 'all'. Everything in Xenon that
+// switches a device comes through here, so one setting decides for all of
+// them. Asked on Discord: "would only swap the default device (not the
+// communication device)". macOS and Linux have one default and ignore roles.
+async function setDefaultAudioDevice(id, settings) {
+  const s = settings || _serverHubSettings || {};
+  if (process.platform !== 'win32' || s.audioSetCommunications !== false) {
+    await svvExec(['/SetDefault', id, 'all']);
+    return;
+  }
+  await svvExec(['/SetDefault', id, '0']);   // Console
+  await svvExec(['/SetDefault', id, '1']);   // Multimedia
 }
 
 // Promise wrapper around a single SoundVolumeView call, and the ONE place that
@@ -5204,6 +5466,9 @@ const deckHa = createHomeAssistant(async () => {
   const s = (await readHubSettings().catch(() => null)) || {};
   return { baseUrl: (s.homeAssistant && s.homeAssistant.url) || '', token: (s.homeAssistant && s.homeAssistant.token) || '' };
 });
+
+// SDK widget reads (history, camera frames) over the same connection.
+const haQuery = createHaQuery(deckHa);
 
 // Lazy UniFi Protect client — logs into the user's UniFi OS console on demand and
 // pulls camera JPEG snapshots for the Cameras tile. No persistent socket: an
@@ -5842,9 +6107,25 @@ function lockWorkstation() {
 // Deck registry, the Spotlight search results, Performance Mode and the
 // Start-Menu app launcher. Reaching for runPowerShellScript directly is how one
 // of them ends up working on Windows and failing everywhere else.
-function openExternalPath(p) {
+//
+// `args` (openApp only, already an argv array from the registry) are launch
+// arguments for the program. On Windows they travel as base64 JSON so no quote or
+// space in them can re-cut the PowerShell command line; the script rebuilds one
+// correctly quoted line. On macOS they follow `--args`, which an app that is
+// already running ignores (only `open -n` would start a second copy, and that
+// breaks single-instance apps).
+function openExternalPath(p, args) {
+  const argv = Array.isArray(args) ? args.map(String) : [];
   if (process.platform === 'win32') {
-    return runPowerShellScript(DECK_ACTIONS_SCRIPT, ['open', p], 8000);
+    const packed = argv.length ? Buffer.from(JSON.stringify(argv), 'utf8').toString('base64') : '';
+    return runPowerShellScript(DECK_ACTIONS_SCRIPT, packed ? ['open', p, packed] : ['open', p], 8000);
+  }
+  if (process.platform === 'darwin' && argv.length) {
+    return new Promise((resolve, reject) => {
+      execFile('/usr/bin/open', ['-a', String(p), '--args', ...argv], { timeout: 8000 }, (err) => {
+        if (err) reject(err); else resolve({ ok: true });
+      });
+    });
   }
   // `--` ends option parsing on macOS, so a file whose name begins with a dash
   // cannot become a flag. xdg-open has no such separator — it rejects `--` as an
@@ -5872,8 +6153,9 @@ function openExternalPath(p) {
 // is spawned directly, detached, resolved on the 'spawn' event so ENOENT and
 // a missing execute bit surface as clean errors instead of silent successes.
 // The registry has already validated shape + existence before this runs.
-function launchLinuxApp(p) {
+function launchLinuxApp(p, args) {
   const target = String(p);
+  const argv = Array.isArray(args) ? args.map(String) : [];
   if (/\.desktop$/i.test(target)) {
     return new Promise((resolve, reject) => {
       execFile('gio', ['launch', target], { timeout: 8000 }, (err) => {
@@ -5884,7 +6166,7 @@ function launchLinuxApp(p) {
   return new Promise((resolve, reject) => {
     let child;
     try {
-      child = spawn(target, [], { detached: true, stdio: 'ignore' });
+      child = spawn(target, argv, { detached: true, stdio: 'ignore' });
     } catch (e) { reject(e); return; }
     child.once('error', (e) => reject(e));
     child.once('spawn', () => { child.unref(); resolve({ ok: true }); });
@@ -5990,6 +6272,7 @@ function runUserScript(p, hidden) {
 const deckRegistryDeps = {
   fileExists: (p) => { try { return fs.existsSync(p); } catch { return false; } },
   lockWorkstation: () => lockWorkstation().then(() => ({ ok: true }), (err) => ({ ok: false, error: String(err) })),
+  pageTurn: (target) => routePageHotkey({ target }),
   // Apply a named SignalRGB scene (scene switcher, not a colour provider — see
   // signalrgb.js). Gated on the user enabling SignalRGB in Settings → Lighting,
   // so a stale Deck key can't drive it after the integration is turned off.
@@ -5999,11 +6282,11 @@ const deckRegistryDeps = {
     }
     return signalrgb.applyEffect(effect);
   },
-  openExternal: (p) => openExternalPath(p),
+  openExternal: (p, args) => openExternalPath(p, args),
   // Linux app launcher (.desktop via `gio launch`, binaries spawned directly)
   // — openExternal's xdg-open opens documents, it does not run programs. Left
   // undefined elsewhere; the registry only routes to it on linux.
-  launchApp: process.platform === 'linux' ? (p) => launchLinuxApp(p) : undefined,
+  launchApp: process.platform === 'linux' ? (p, args) => launchLinuxApp(p, args) : undefined,
   // Run a user-configured script (the runScript action), in a visible or hidden
   // window where the platform has the concept. The path is validated to a real
   // script in the registry before it reaches here.
@@ -6060,7 +6343,7 @@ const deckRegistryDeps = {
     try { info = await getAudioInfo(); } catch { return { ok: false, error: 'audio_unavailable' }; }
     const match = resolveOutputDevice(wanted, info && info.speakers);
     if (!match) return { ok: false, error: 'unknown_device' };
-    await svvExec(['/SetDefault', match.id, 'all']);
+    await setDefaultAudioDevice(match.id);
     cachedSpeakerId = match.id;
     cachedSpeakerName = match.name || cachedSpeakerName;
     return { ok: true };
@@ -6073,7 +6356,22 @@ const deckRegistryDeps = {
     try { info = await getAudioInfo(); } catch { return { ok: false, error: 'audio_unavailable' }; }
     const match = pickToggleDevice(a, b, info && info.speakers);
     if (!match) return { ok: false, error: 'unknown_device' };
-    await svvExec(['/SetDefault', match.id, 'all']);
+    await setDefaultAudioDevice(match.id);
+    cachedSpeakerId = match.id;
+    cachedSpeakerName = match.name || cachedSpeakerName;
+    return { ok: true };
+  },
+  // The first output of an ordered list that is connected right now: headphones
+  // when they are on, the speakers otherwise. Asked on Discord for a key that
+  // ends a session on "my Bluetooth headphones if connected, else speakers".
+  // Already the default: nothing is switched, so the sound does not drop out
+  // for a change that changes nothing.
+  audioDeviceFirst: async (ids) => {
+    let info;
+    try { info = await getAudioInfo(); } catch { return { ok: false, error: 'audio_unavailable' }; }
+    const match = pickFirstConnected(ids, info && info.speakers);
+    if (!match) return { ok: false, error: 'none_connected' };
+    if (!match.isDefault) await setDefaultAudioDevice(match.id);
     cachedSpeakerId = match.id;
     cachedSpeakerName = match.name || cachedSpeakerName;
     return { ok: true };
@@ -6327,8 +6625,8 @@ const deckRegistry = createRegistry(deckRegistryDeps);
 // window helper does the graceful close and protected-process refusal.
 const perfRegistry = createPerfRegistry({
   closeWindow: (id) => runWindowsTool(['close', id], 8000),
-  openExternal: (p) => openExternalPath(p),
-  launchApp: process.platform === 'linux' ? (p) => launchLinuxApp(p) : undefined,
+  openExternal: (p, args) => openExternalPath(p, args),
+  launchApp: process.platform === 'linux' ? (p, args) => launchLinuxApp(p, args) : undefined,
   fileExists: (p) => { try { return fs.existsSync(p); } catch { return false; } },
   setPriority: (name, level) => runPowerShellScript(PERF_PRIORITY_SCRIPT, ['set', name, level === 'high' ? 'high' : 'normal'], 6000),
 });
@@ -6732,16 +7030,26 @@ function _geminiTtsToWav(text, apiKey, voice = 'Charon') {
 // One-shot Gemini text generation (no tools, no history). Used by the opt-in
 // advanced features (Game Companion, Guardian) for single fire-and-forget
 // analyses. `parts` follows the Gemini content-part shape (text / inlineData).
-function _geminiOneShot(apiKey, parts, systemText, maxTokens = 512) {
+// `opts` (all optional): `model` overrides the chat model, `temperature`,
+// `json` asks for a JSON reply, `onUsage(totalTokens, { input, output })` reports what it cost,
+// `thinkingLevel` replaces the zero thinking budget: Gemini 3.x Flash-Lite
+// answers 400 "invalid argument" to `thinkingBudget: 0` and takes a level instead.
+function _geminiOneShot(apiKey, parts, systemText, maxTokens = 512, opts = {}) {
   return new Promise((resolve, reject) => {
+    const generationConfig = {
+      temperature: Number.isFinite(opts.temperature) ? opts.temperature : 0.7,
+      maxOutputTokens: maxTokens, candidateCount: 1,
+      thinkingConfig: opts.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : { thinkingBudget: 0 },
+      ...(opts.json ? { responseMimeType: 'application/json' } : {}),
+    };
     const payload = JSON.stringify({
       ...(systemText ? { system_instruction: { parts: [{ text: String(systemText) }] } } : {}),
       contents: [{ role: 'user', parts }],
-      generationConfig: { temperature: 0.7, maxOutputTokens: maxTokens, candidateCount: 1, thinkingConfig: { thinkingBudget: 0 } },
+      generationConfig,
     });
     const gReq = https.request({
       hostname: 'generativelanguage.googleapis.com',
-      path: `/v1beta/models/${AI_MODELS.chat}:generateContent?key=${encodeURIComponent(apiKey)}`,
+      path: `/v1beta/models/${encodeURIComponent(opts.model || AI_MODELS.chat)}:generateContent?key=${encodeURIComponent(apiKey)}`,
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload), 'User-Agent': 'Xenon/2.0' },
     }, (gRes) => {
@@ -6751,6 +7059,15 @@ function _geminiOneShot(apiKey, parts, systemText, maxTokens = 512) {
         try {
           const parsed = JSON.parse(d);
           if (parsed.error) return reject(new Error(parsed.error.message || 'gemini error'));
+          const meta = parsed?.usageMetadata;
+          const used = Number(meta?.totalTokenCount);
+          if (typeof opts.onUsage === 'function' && Number.isSafeInteger(used)) {
+            // Thinking is billed at the output price.
+            opts.onUsage(used, {
+              input: Number(meta.promptTokenCount),
+              output: (Number(meta.candidatesTokenCount) || 0) + (Number(meta.thoughtsTokenCount) || 0),
+            });
+          }
           const text = (parsed?.candidates?.[0]?.content?.parts || [])
             .filter(p => typeof p.text === 'string' && !p.thought).map(p => p.text).join('').trim();
           if (!text) return reject(new Error('empty response'));
@@ -6993,7 +7310,7 @@ async function executeAiTool(fnName, fnArgs, deps) {
         // exportable/shareable — unlike packages that arrive via import.
         const r = await installWidgetPayload(payload, 'creator');
         fnResult = r.ok
-          ? { ok: true, id: r.id, name: r.name, note: 'Installed. Tell the user to add a "Custom widget" tile from the + palette and pick it — its permissions are approved there, never automatically.' }
+          ? { ok: true, id: r.id, name: r.name, note: 'Installed. Tell the user to add it from the + panel in Layout mode (it is listed by name, and under the Installed filter); its permissions are approved there, never automatically.' }
           : { ok: false, error: r.error };
       }
     } else if (fnName === 'deck_action_catalog') {
@@ -7772,7 +8089,7 @@ async function executeAiTool(fnName, fnArgs, deps) {
           if (!match || !match.id) {
             fnResult = { error: 'not_found', available: list.map(d => d.label || d.name).slice(0, 24) };
           } else {
-            if (kind === 'speaker') await svvExec(['/SetDefault', match.id, 'all']);
+            if (kind === 'speaker') await setDefaultAudioDevice(match.id);
             else await setDefaultMic(match.id);
             if (kind === 'speaker') cachedSpeakerId = match.id;
             fnResult = { ok: true, kind: kind === 'speaker' ? 'speaker' : 'microphone', device: match.label || match.name };
@@ -7929,7 +8246,7 @@ async function transcodeMp4BackgroundToWebm(sourcePath, targetPath) {
 
 const DashboardInstances = require('./js/dashboard-instances.js');
 
-const DASHBOARD_WIDGET_IDS = Object.freeze(['media', 'agenda', 'mic', 'audio', 'system', 'notes', 'tasks', 'calendar', 'timer', 'chat', 'deck', 'remote', 'twitch', 'twitchwatch', 'obs', 'youtube', 'youtubelive', 'discord', 'spotify', 'browser', 'secondscreen', 'weather', 'smarthome', 'tcl-ac', 'streamerbot', 'wavelink', 'lighting', 'notifications', 'stocks', 'football', 'news', 'claude', 'aiusage', 'vitals', 'unifi', 'slideshow', 'fans', 'power', 'battery', 'search', 'disk', 'transfer', 'phone', 'custom']);
+const DASHBOARD_WIDGET_IDS = Object.freeze(['media', 'agenda', 'mic', 'audio', 'system', 'notes', 'tasks', 'calendar', 'timer', 'chat', 'deck', 'remote', 'twitch', 'twitchwatch', 'obs', 'youtube', 'youtubelive', 'discord', 'spotify', 'browser', 'secondscreen', 'weather', 'smarthome', 'tcl-ac', 'streamerbot', 'wavelink', 'lighting', 'notifications', 'stocks', 'football', 'news', 'claude', 'aiusage', 'openaicodex', 'chatgpt', 'vitals', 'unifi', 'slideshow', 'fans', 'power', 'battery', 'search', 'disk', 'devclean', 'lyrics', 'transfer', 'phone', 'custom']);
 const DASHBOARD_PAGE_IDS = Object.freeze(['dashboard']);
 const DASHBOARD_TAB_IDS = Object.freeze(['main', 'net']);
 const CALENDAR_TAB_IDS = Object.freeze(['calendar', 'tasks', 'timer']);
@@ -7996,6 +8313,8 @@ const DEFAULT_DASHBOARD_LAYOUT = Object.freeze({
     news:     Object.freeze({ x: 0, y: 38, w: 8, h: 10, visible: false, page: 'dashboard' }),
     claude:   Object.freeze({ x: 16, y: 28, w: 8, h: 10, visible: false, page: 'dashboard' }),
     aiusage:  Object.freeze({ x: 0, y: 0, w: 8, h: 16, visible: false, page: 'dashboard' }),
+    openaicodex: Object.freeze({ x: 16, y: 38, w: 8, h: 10, visible: false, page: 'dashboard' }),
+    chatgpt:  Object.freeze({ x: 16, y: 48, w: 8, h: 12, visible: false, page: 'dashboard' }),
     vitals:   Object.freeze({ x: 8, y: 38, w: 8, h: 8, visible: false, page: 'dashboard' }),
     unifi:    Object.freeze({ x: 8, y: 18, w: 8, h: 8, visible: false, page: 'dashboard' }),
     slideshow: Object.freeze({ x: 0, y: 48, w: 8, h: 8, visible: false, page: 'dashboard' }),
@@ -8004,6 +8323,8 @@ const DEFAULT_DASHBOARD_LAYOUT = Object.freeze({
     battery:  Object.freeze({ x: 0, y: 56, w: 8, h: 8, visible: false, page: 'dashboard' }),
     search:   Object.freeze({ x: 8, y: 56, w: 8, h: 8, visible: false, page: 'dashboard' }),
     disk:     Object.freeze({ x: 16, y: 54, w: 8, h: 10, visible: false, page: 'dashboard' }),
+    devclean: Object.freeze({ x: 0, y: 64, w: 8, h: 10, visible: false, page: 'dashboard' }),
+    lyrics: Object.freeze({ x: 8, y: 64, w: 6, h: 10, visible: false, page: 'dashboard' }),
     transfer: Object.freeze({ x: 8, y: 64, w: 8, h: 10, visible: false, page: 'dashboard' }),
     // Tall rather than wide: it is a list of people, and the keypad wants the
     // height. Hidden until the user adds it, like every opt-in widget.
@@ -8129,7 +8450,7 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   clockDateScale: 1,
   clockDateFormat: 'full',
   panelBorderStrength: 1,
-  panelShadowStrength: 1,
+  tileShadowStrength: 0,   // off, and renamed on purpose; see the client twin in js/settings.js
   mutedText: null,
   lineColor: null,
   backgroundMedia: null,
@@ -8142,10 +8463,24 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   contentInstalls: Object.freeze([]),
   weather: Object.freeze({ mode: 'auto', city: '', provider: 'auto', refreshMin: 30, forecastDays: 3, tile: Object.freeze({ hero: 'full', metrics: true, hourly: true, forecast: true, fields: WEATHER_FIELDS_ALL_ON }) }),
   tempUnit: 'c', // 'c' | 'f' — weather temperature display unit
+  hwTempUnit: 'auto', // 'auto' | 'c' | 'f' — hardware readings; auto follows tempUnit
   // Mirrors js/settings.js: 'off' | 'minimal' | 'wave'. Read by
   // audioLevelsWanted(): anything but 'off' is a first-party reason to run the
   // helper's meter, beside the SDK grants.
   mediaVisualizer: 'off',
+  // Song lyrics from LRCLIB (sends title + artist; listed on the privacy page).
+  // false = /api/lyrics answers 'off' and never reaches out.
+  mediaLyrics: true,
+  // Lyrics widget timing nudge, ms; a positive value shows lines earlier.
+  lyricsOffsetMs: 0,
+  // Supporter Lyrics widget. Translation sends the song's lines to the user's
+  // own Xenon AI provider (one request per song, capped per month), so it is
+  // off until they turn it on. Reading = romanization for ja/ko/zh lines.
+  lyricsTranslate: false,
+  lyricsReading: true,
+  lyricsTranslateCap: 200,
+  // Stage: the widget fills the screen while music plays on its page.
+  lyricsStage: false,
   clockFormat: 'auto', // 'auto' | '12' | '24' — auto follows the UI language
   topbarStyle: 'full', // 'full' | 'minimal' — minimal docks the topbar actions into collapsible edge rails
   // Minimal-mode edge-rail drawer positions (true = collapsed). Persisted here —
@@ -8190,6 +8525,7 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
       Object.freeze({ id: 'dots', hidden: false }),
       Object.freeze({ id: 'badges', hidden: false }),
       Object.freeze({ id: 'claude', hidden: false }),
+      Object.freeze({ id: 'codex', hidden: false }),
     ]),
   }),
   weekStart: 'mon', // 'mon' | 'sun' — calendar first day of week
@@ -8208,6 +8544,9 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   // Native app only: hide the kiosk window while the machine is used over RDP
   // (monitor.rs watches SM_REMOTESESSION; native-bridge.js relays the toggle).
   hideOnRdp: false,
+  // Windows keeps a separate default for calls (Discord, Teams): true = moving
+  // the output or input moves that one too, as Xenon always did.
+  audioSetCommunications: true,
   // Open the dashboard in the default browser at Windows logon. The user's
   // intent (default on); the actual scheduled task is registered/removed by
   // /startup/auto-open and only ever for real-browser use, never Xeneon Edge.
@@ -8233,6 +8572,19 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   // each module).
   hubMessages: true,
   catalogDrops: true,
+  monthlyDrops: true,
+  // Automatic updates (server/auto-update.js). ON by default and normalized
+  // with `!== false`, so existing installs get it with this update as well: it
+  // sends nothing anywhere new (the release check already runs), it only
+  // installs what the user would otherwise be asked to install, at a moment
+  // they are not using the PC. One tap in Settings -> General turns it off.
+  autoUpdate: true,
+  // Store widgets update themselves (server/widget-auto-update.js). Same posture
+  // as autoUpdate: ON, normalized with `!== false`, sends nothing anywhere new (it
+  // reads the catalog the Store already reads). It never raises a widget's
+  // permissions and never touches a theme, a page or a Deck: a version that asks
+  // for more than was approved waits for the user, as an update always did.
+  autoUpdateWidgets: true,
   // Counts an install of a catalog entry, with NO identifier attached: the hub
   // bumps a per-entry counter and discards the request (see community-installs.js).
   // Normalized `=== true` like versionPing, NOT `!== false` like the two above:
@@ -8277,6 +8629,13 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   // and both switchable, because they are the two things this widget can put on
   // screen while you are looking at something else.
   claudeWidget: { approvals: true, questions: true, topbar: true },
+  // OpenAI Codex widget: the approval cards, and how long a card waits before
+  // the decision goes back to Codex. Short by default because, unlike Claude
+  // Code, Codex shows no prompt of its own while our hook waits (codex-bridge.js
+  // header). The topbar marker is an island item, owned by topbarClock.
+  codexWidget: { approvals: true, waitSec: 90 },
+  // "Ask ChatGPT" tile: the model Codex answers with ('default' lets Codex choose).
+  chatgptWidget: { model: 'default' },
   dashboardLayout: DEFAULT_DASHBOARD_LAYOUT,
   dashboardLayoutVersion: DASHBOARD_LAYOUT_VERSION,
   geminiApiKey: '',
@@ -8365,7 +8724,7 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   // indexRoots defaults per platform for the reason spelled out in
   // normalizeSearchSettings: "C:\" is not a path off Windows, and a default the
   // validator there would reject leaves the index permanently off.
-  searchSettings: Object.freeze({ indexRoots: Object.freeze([POWERSHELL_SUPPORTED ? 'C:\\' : os.homedir()]), hotkeyEnabled: false, hotkeyCombo: 'alt+space', aiFullContext: false }),
+  searchSettings: Object.freeze({ indexRoots: Object.freeze([POWERSHELL_SUPPORTED ? 'C:\\' : os.homedir()]), hotkeyEnabled: false, hotkeyCombo: 'alt+space', aiFullContext: false, recentInTile: false }),
   pageHotkeys: Object.freeze([]),
   diskSettings: Object.freeze({ devFolders: Object.freeze([]), installerAgeDays: 30 }),
   bgAurora: Object.freeze({ enabled: true, intensity: 55, speed: 50 }),
@@ -8484,6 +8843,11 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   // install and never again — on disk, not in localStorage, because a browser set
   // to clear its site data would otherwise bring it back for good.
   supportAskSeen: false,
+  // The day that ask went away, so the December appeal (js/support-appeal.js)
+  // keeps a month between the two; '' on installs that saw it before the field.
+  supportAskSeenDay: '',
+  // The last calendar year the December appeal was shown. Once a year, at most.
+  supportAppealYear: 0,
   // The one-time "show off your setup" invitation (js/share-nudge.js). Same
   // rules as the ask above, same reason it is here and not in localStorage.
   shareNudgeSeen: false,
@@ -9289,6 +9653,9 @@ function normalizeSearchSettings(value, defaultRoot) {
     // recent opens. Privacy-touching → strict opt-in, anything not literally
     // true stays off (same rule as the wake word).
     aiFullContext: v.aiFullContext === true,
+    // The Search TILE listing recently opened files when its box is empty. Off
+    // unless literally true: the tile sits on a dashboard others can see.
+    recentInTile: v.recentInTile === true,
   };
 }
 
@@ -9349,11 +9716,24 @@ function normalizeTopbarRails(value) {
   return { left: v.left !== false, right: v.right !== false };
 }
 
+// OpenAI Codex widget surfaces outside its tile. Twin of normalizeCodexWidget
+// in js/settings.js. `approvals` is read by /api/codex/permission, which answers
+// "no decision" at once when it is off; `waitSec` is how long a card waits
+// before the decision goes back to Codex (Codex shows nothing else meanwhile).
+function normalizeCodexWidget(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const w = Math.round(Number(source.waitSec));
+  return {
+    approvals: source.approvals !== false,
+    waitSec: Number.isFinite(w) ? Math.max(30, Math.min(540, w)) : 90,
+  };
+}
+
 // Minimal-island personalization: anchor + ordered segment list with hidden
 // flags. Rebuild from the canonical id set (drop unknown/dupes, append missing
 // in default order) — never spread untrusted input. Migrates the earlier
 // {date,weather} booleans onto their items when `items` is absent.
-const TOPBAR_ISLAND_IDS = ['time', 'date', 'weather', 'media', 'vitals', 'dots', 'badges', 'claude'];
+const TOPBAR_ISLAND_IDS = ['time', 'date', 'weather', 'media', 'vitals', 'dots', 'badges', 'claude', 'codex'];
 function normalizeTopbarClock(value, legacyRoot) {
   const v = value && typeof value === 'object' ? value : {};
   const legacy = legacyRoot && typeof legacyRoot === 'object' ? legacyRoot : {};
@@ -9639,7 +10019,7 @@ function normalizeHubSettings(value) {
     clockDateScale: clampNumber(source.clockDateScale, 0.8, 2, DEFAULT_HUB_SETTINGS.clockDateScale),
     clockDateFormat: ['full', 'medium', 'short'].includes(source.clockDateFormat) ? source.clockDateFormat : DEFAULT_HUB_SETTINGS.clockDateFormat,
     panelBorderStrength: clampNumber(source.panelBorderStrength, 0, 2, DEFAULT_HUB_SETTINGS.panelBorderStrength),
-    panelShadowStrength: clampNumber(source.panelShadowStrength, 0, 2, DEFAULT_HUB_SETTINGS.panelShadowStrength),
+    tileShadowStrength: clampNumber(source.tileShadowStrength, 0, 2, DEFAULT_HUB_SETTINGS.tileShadowStrength),
     mutedText: normalizeHex(source.mutedText, null),
     lineColor: normalizeHex(source.lineColor, null),
     backgroundMedia: sanitizeSettingsBackgroundMedia(source.backgroundMedia),
@@ -9648,7 +10028,14 @@ function normalizeHubSettings(value) {
     ambientMode: normalizeAmbientMode(source.ambientMode),
     weather: normalizeSettingsWeather(source.weather),
     tempUnit: source.tempUnit === 'f' ? 'f' : 'c',
+    hwTempUnit: ['auto', 'c', 'f'].includes(source.hwTempUnit) ? source.hwTempUnit : 'auto',
     mediaVisualizer: ['off', 'minimal', 'wave'].includes(source.mediaVisualizer) ? source.mediaVisualizer : (source.mediaVisualizer === true ? 'wave' : 'off'),
+    mediaLyrics: source.mediaLyrics !== false,
+    lyricsOffsetMs: Math.round(clampNumber(source.lyricsOffsetMs, -3000, 3000, 0) / 100) * 100,
+    lyricsTranslate: source.lyricsTranslate === true,
+    lyricsReading: source.lyricsReading !== false,
+    lyricsTranslateCap: cleanLyricsTranslateCap(source.lyricsTranslateCap),
+    lyricsStage: source.lyricsStage === true,
     clockFormat: ['auto', '12', '24'].includes(source.clockFormat) ? source.clockFormat : 'auto',
     topbarStyle: source.topbarStyle === 'minimal' ? 'minimal' : 'full',
     topbarRails: normalizeTopbarRails(source.topbarRails),
@@ -9663,8 +10050,9 @@ function normalizeHubSettings(value) {
     upcomingColumns: [0, 1, 2].includes(Number(source.upcomingColumns)) ? Number(source.upcomingColumns) : 0,
     swipeNavigation: source.swipeNavigation !== false,
     swipeHomeGesture: source.swipeHomeGesture !== false,
-    nativeZoom: clampNumber(source.nativeZoom, 0.6, 1.6, DEFAULT_HUB_SETTINGS.nativeZoom),
+    nativeZoom: clampNumber(source.nativeZoom, 0.6, 2.5, DEFAULT_HUB_SETTINGS.nativeZoom),
     hideOnRdp: source.hideOnRdp === true,
+    audioSetCommunications: source.audioSetCommunications !== false,
     autoOpenBrowser: source.autoOpenBrowser !== false,
     versionPing: source.versionPing === true,
     // `!== false` on purpose: absent means on, so existing installs keep getting
@@ -9672,6 +10060,9 @@ function normalizeHubSettings(value) {
     // update. See the note on the defaults above.
     hubMessages: source.hubMessages !== false,
     catalogDrops: source.catalogDrops !== false,
+    monthlyDrops: source.monthlyDrops !== false,
+    autoUpdate: source.autoUpdate !== false,
+    autoUpdateWidgets: source.autoUpdateWidgets !== false,
     catalogStats: source.catalogStats === true,
     // The release id the What's New modal was dismissed for, and the Discord
     // card's flag. Both `=== true`/bounded-string rather than `!== false`: an
@@ -9687,6 +10078,8 @@ function normalizeHubSettings(value) {
     lastUsageDay: DAY_RE.test(String(source.lastUsageDay || '')) ? String(source.lastUsageDay) : '',
     usageDays: clampNumber(Math.floor(Number(source.usageDays) || 0), 0, 100000, 0),
     supportAskSeen: source.supportAskSeen === true,
+    supportAskSeenDay: DAY_RE.test(String(source.supportAskSeenDay || '')) ? String(source.supportAskSeenDay) : '',
+    supportAppealYear: clampNumber(Math.floor(Number(source.supportAppealYear) || 0), 0, 9999, 0),
     shareNudgeSeen: source.shareNudgeSeen === true,
     // Snowflakes only, deduped and capped. This list is echoed straight back to
     // every surface and used as a DOM key, so anything that is not a Discord id
@@ -9784,6 +10177,8 @@ function normalizeHubSettings(value) {
     bgCustom: normalizeBgCustom(source.bgCustom),
     slideshow: normalizeSlideshow(source.slideshow),
     claudeWidget: normalizeClaudeWidget(source.claudeWidget),
+    codexWidget: normalizeCodexWidget(source.codexWidget),
+    chatgptWidget: { model: aiCli.sanitizeModel(source.chatgptWidget && source.chatgptWidget.model) },
     lighting: normalizeLighting(source.lighting),
     calendarFeeds: icsFeeds.normalizeCalendarFeeds(source.calendarFeeds, CALENDAR_FEED_PALETTE),
     stocks: stocks.normalizeStocks(source.stocks),
@@ -9831,7 +10226,12 @@ function normalizeHubSettings(value) {
     // Third-party widget SDK: feature flag + per-tile package assignments + the
     // per-package permission grants (client-owned schema; the client re-validates
     // on load, and the bridge enforces grants before any action is dispatched).
-    sdkWidgets: sanitizeServerPassthrough(source.sdkWidgets),
+    // Its own, larger cap: the client keeps up to 32 grants, each carrying its
+    // streams, actions, hosts, hooks, handlers and filled-in addresses — about
+    // 330 bytes typical and over 2 KB for a widget that asks for everything. At
+    // the shared 8000 the whole object was DROPPED past roughly two dozen
+    // widgets, taking every grant and assignment with it in silence.
+    sdkWidgets: sanitizeServerPassthrough(source.sdkWidgets, SDK_WIDGETS_SETTINGS_MAX),
     // Monotonic save revision (client-owned): round-tripped so the client's
     // boot-time merge can compare it against the local copy and avoid clobbering
     // a newer local layout with a stale server one.
@@ -10006,11 +10406,12 @@ function sanitizeCustomThemes(value) {
 
 // Defensive passthrough for a client-owned settings object: keep it only if it's
 // a plain object that serializes within a sane size, returning a clean copy.
-function sanitizeServerPassthrough(value) {
+const SDK_WIDGETS_SETTINGS_MAX = 128 * 1024;
+function sanitizeServerPassthrough(value, maxLen = 8000) {
   if (!value || typeof value !== 'object') return undefined;
   try {
     const json = JSON.stringify(value);
-    if (json.length > 8000) return undefined;
+    if (json.length > maxLen) return undefined;
     return JSON.parse(json);
   } catch { return undefined; }
 }
@@ -10754,6 +11155,123 @@ deckRegistryDeps.remote = remoteControl;
 // elevated applier. Disabled on a git checkout.
 const selfUpdate = createSelfUpdate({ root: path.join(__dirname, '..'), dataDir: DATA_DIR });
 
+// Automatic updates: decides WHEN to run the same prepare/apply as the button.
+// Everything it reads about the machine is gathered here, the policy lives in
+// server/auto-update.js. Each blocker is one thing a restart would break for
+// someone: a game, a Performance Mode session, a file on its way, a disk
+// cleanup, Claude waiting on an answer, a live voice session, a ringing call.
+const AUTO_UPDATE_STATE_PATH = path.join(DATA_DIR, 'auto-update.json');
+// Test-only knobs for the end-to-end run, never set by an install: a release
+// age of 0 hours, and an idle PC. Logged loudly so they cannot go unnoticed.
+const AUTO_UPDATE_MIN_AGE_MS = (() => {
+  const h = Number(process.env.XENON_AUTOUPDATE_MIN_AGE_H);
+  return Number.isFinite(h) && h >= 0 && h < 24 * 30 ? h * 3600 * 1000 : undefined;
+})();
+const AUTO_UPDATE_ASSUME_IDLE = process.env.XENON_AUTOUPDATE_ASSUME_IDLE === '1';
+if (AUTO_UPDATE_MIN_AGE_MS !== undefined) console.warn('[auto-update] TEST OVERRIDE: release age limit ' + (AUTO_UPDATE_MIN_AGE_MS / 3600000) + 'h');
+if (AUTO_UPDATE_ASSUME_IDLE) console.warn('[auto-update] TEST OVERRIDE: the PC is treated as idle');
+
+async function autoUpdateIdleSeconds() {
+  if (AUTO_UPDATE_ASSUME_IDLE) return 24 * 3600;
+  if (POWERSHELL_SUPPORTED) {
+    // A sample the idle probe took in the last minute is as good as a new one.
+    if (_idleProbe.at > 0 && Date.now() - _idleProbe.at < 60000 && typeof _idleProbe.sec === 'number') return _idleProbe.sec;
+    try {
+      const r = await runCollector(IDLE_SCRIPT, [], 5000);
+      if (r && r.ok === true && Number.isFinite(Number(r.idleSec))) return Math.max(0, Number(r.idleSec));
+    } catch { /* unknown */ }
+    return null;
+  }
+  if (nativeCollectors && typeof nativeCollectors.idleSeconds === 'function') {
+    try { return await nativeCollectors.idleSeconds(); } catch { return null; }
+  }
+  return null;
+}
+
+async function autoUpdateSignals() {
+  const blockers = [];
+  try { if (gameDetect.isGaming() || gameDetect.isGameRunning()) blockers.push('game'); } catch { /* probe off */ }
+  const perf = _serverHubSettings && _serverHubSettings.performance;
+  if (perf && perf.active === true) blockers.push('performance');
+  try { if (fileTransfer.stats().inflight > 0) blockers.push('transfer'); } catch { /* not ready */ }
+  try {
+    const ds = await diskSpace.status();
+    if (ds && (ds.running || (ds.clean && ds.clean.running))) blockers.push('disk');
+  } catch { /* disk module unavailable: nothing running there */ }
+  try { if (_claudeBridge.pendingCount > 0) blockers.push('claude'); } catch { /* bridge off */ }
+  try { if (_codexBridge.pendingCount > 0) blockers.push('codex'); } catch { /* bridge off */ }
+  try { if (_chatgptAsker.activeCount > 0) blockers.push('chatgpt'); } catch { /* not ready */ }
+  if (_liveActive) blockers.push('voice');
+  try { if (calls.current().length > 0) blockers.push('call'); } catch { /* calls off */ }
+  return { blockers, idleSec: await autoUpdateIdleSeconds() };
+}
+
+const autoUpdater = autoUpdateLib.createAutoUpdater({
+  currentVersion: APP_VERSION,
+  selfUpdate,
+  checkRelease: (force) => checkLatestRelease(force),
+  isEnabled: () => !!(_serverHubSettings && _serverHubSettings.autoUpdate !== false),
+  signals: autoUpdateSignals,
+  readLastResult: () => readPwshJson(path.join(DATA_DIR, 'update-result.json')),
+  store: {
+    read: () => readPwshJson(AUTO_UPDATE_STATE_PATH),
+    write: (obj) => writeFileAtomic(AUTO_UPDATE_STATE_PATH, JSON.stringify(obj)),
+  },
+  broadcast: (event, data) => { try { broadcastSSE(event, data); } catch { /* no clients */ } },
+  log: (msg) => console.log('[auto-update] ' + msg),
+  port: PORT,
+  minAgeMs: AUTO_UPDATE_MIN_AGE_MS,
+});
+
+// Store widgets that update themselves. The decision logic lives in
+// widget-auto-update.js; this only hands it the server's own readers and the one
+// install path (the staged swap with rollback). Every package still passes
+// validateWidgetPayload before a byte is written, and no grant is ever issued.
+const WIDGET_AUTO_UPDATE_STATE_PATH = path.join(DATA_DIR, 'widget-auto-update.json');
+const SDK_STAGING_DIR = path.join(DATA_DIR, 'widget-staging');   // beside the packages dir, never inside it
+const widgetAutoUpdater = widgetAutoUpdateLib.createWidgetAutoUpdater({
+  currentVersion: APP_VERSION,
+  isEnabled: () => !!(_serverHubSettings && _serverHubSettings.autoUpdateWidgets !== false),
+  safeMode: () => !!(_serverHubSettings && _serverHubSettings.safeMode === true),
+  signals: autoUpdateSignals,
+  fetchCatalog: () => communityCatalog.fetchVisibleCatalog(false),
+  fetchCode: (id) => communityCatalog.fetchCode(id),
+  // The supporter pass already saved on this PC, never a typed one.
+  redeem: (entryId, kv) => supporterRedeem.redeem({ entryId, code: '', kv, dataDir: DATA_DIR }),
+  // Tried first for a locked widget: an install the hub already knows as an owner
+  // needs no pass, which is what lets a purchased (XL) widget update by itself.
+  update: (entryId, opts) => supporterRedeem.update({ entryId, have: opts && opts.have, kv: opts && opts.kv, dataDir: DATA_DIR }),
+  codec: { peekLocked: presetCodec.peekLocked, decodePreset: presetCodec.decodePreset },
+  validatePayload: (payload) => sdkWidgets.validateWidgetPayload(payload),
+  listInstalled: async () => (await sdkPackagesCached()).packages,
+  originOf: (id) => widgetOriginOf(id),
+  catalogVersionOf: (id) => widgetCatalogVersionOf(id),
+  isSuspended: (id) => sdkPkgSuspended(id),
+  // The RAW approved grants: sdkGrantsFor() masks to empty under safe mode and for
+  // a suspended package, which would read as "nothing approved" here.
+  grantsOf: (id) => {
+    const sw = _serverHubSettings && _serverHubSettings.sdkWidgets;
+    return (sw && sw.grants && typeof sw.grants === 'object' && sw.grants[id]) || {};
+  },
+  installStaged: async (validated, catalogVersion) => {
+    const res = await sdkWidgets.installPackageStaged(SDK_WIDGETS_DIR, SDK_STAGING_DIR, validated, async () => {
+      const scan = await refreshSdkScan();
+      return scan.packages.some((p) => p.id === validated.id && p.version === validated.manifest.version);
+    });
+    if (res.ok) {
+      await recordWidgetOrigin(validated.id, sdkWidgets.mergeOrigin(widgetOriginOf(validated.id), 'import'), catalogVersion);
+      await refreshSdkScan();
+    }
+    return res;
+  },
+  store: {
+    read: () => readPwshJson(WIDGET_AUTO_UPDATE_STATE_PATH),
+    write: (obj) => writeFileAtomic(WIDGET_AUTO_UPDATE_STATE_PATH, JSON.stringify(obj)),
+  },
+  broadcast: (event, data) => { try { broadcastSSE(event, data); } catch { /* no clients */ } },
+  log: (msg) => console.log('[widget-auto-update] ' + msg),
+});
+
 // Guardian — opt-in hardware-health history. The interval only does real work
 // while the user has enabled the feature in Settings → Funzioni AI; collection
 // is local and free, the AI reads the digest via the guardian_report tool.
@@ -11197,15 +11715,14 @@ const PROCESSES_POLL_MS = 2000;
 const PROCESSES_TOP = 8;          // per metric; the collector sends the union of the three
 let _processesBusy = false;
 let _processesProblemSaid = '';
+// The last five minutes of readings, so a widget that draws history opens with
+// it already drawn (GET /api/processes/history, replayed by the SDK host as a
+// `history` message). Filled by the tick below and nothing else: no timer of its
+// own, no disk, ~0.5 MB, and empty until someone has been granted the stream.
+const _processesHistory = require('./stream-history').createStreamHistory({ maxAgeMs: 5 * 60 * 1000, maxItems: 160 });
 
 function processesWanted() {
-  const sw = _serverHubSettings && _serverHubSettings.sdkWidgets;
-  const grants = sw && sw.grants && typeof sw.grants === 'object' ? sw.grants : null;
-  if (!grants) return false;
-  for (const pkgId of Object.keys(grants)) {
-    if (sdkGrantsFor(pkgId).streams.includes('processes')) return true;
-  }
-  return false;
+  return sdkStreamGranted('processes');
 }
 
 // The collector is ours, but this is still parsed input crossing a boundary:
@@ -11291,6 +11808,7 @@ setInterval(async () => {
     const data = normalizeProcesses(raw);
     if (!data) { announceProcessesProblem('unavailable'); return; }
     announceProcessesProblem('');
+    _processesHistory.push(data);
     if (sseClients.size > 0) broadcastSSE('processes', data);
   } catch {
     announceProcessesProblem('unavailable');
@@ -12188,7 +12706,25 @@ let _claudeLastFetch = 0;
 // hooks here (see claude-link.js for how that config is installed). It supplies
 // the two things the filesystem cannot — the real subscription quota, and a
 // blocking permission request the user answers from the touchscreen.
-const _claudeBridge = claudeBridge.createBridge({ onChange: () => _claudeBridgeChanged() });
+// Claude Code's permissions.defaultMode, re-read just before a plan card is
+// built (see the /api/claude/permission route) so it is never stale.
+let _claudeDefaultMode = '';
+const _claudeBridge = claudeBridge.createBridge({
+  onChange: () => _claudeBridgeChanged(),
+  defaultMode: () => _claudeDefaultMode,
+  terminal: (id) => _claudeInbox.present(id),
+});
+// Tile messages for a session open in a terminal (claude-inbox.js): the Xenon
+// mod holds a request here while its session runs, and a message for that
+// session while it is idle goes through it, as a new turn in the terminal,
+// instead of a background run. The bridge decides what may be handed over.
+const _claudeInbox = claudeInbox.createInbox({
+  take: (id) => _claudeBridge.takeForTerminal(id),
+  onPresence: (id, present) => {
+    if (!present) _claudeBridge.terminalGone(id);
+    _claudeBridgeChanged();
+  },
+});
 const _aiUsage = aiUsage.createService({ claudeReader: _claudeReader, bridge: () => _claudeBridge.snapshot(), connection: () => claudeLink.status(DATA_DIR, PORT), quotaCache: aiUsage.createClaudeQuotaReader(), liveQuota: require('./ai-usage-live').createLiveQuotaReader() });
 let _claudeBridgeToken = '';        // resolved once at boot from DATA_DIR
 let _claudeBridgePushTimer = null;
@@ -12204,6 +12740,23 @@ const _claudeAttach = claudeAttach.createAttachments({ dir: path.join(DATA_DIR, 
 const _claudeRunner = claudeRun.createRunner({
   projectsDir: () => claudeUsage.resolveProjectsDir(),
   onChange: () => _claudeBridgeChanged(),
+});
+
+// The "/" picker of the tile's prompt box: names and descriptions of the
+// commands and skills a run can use. The project comes from the runner's own
+// allowlist by id, never from the request.
+const _claudeCommands = claudeCommands.createCommandList({
+  configDir: () => path.dirname(claudeUsage.resolveProjectsDir()),
+  projectDir: async (id) => ((await _claudeRunner.listProjects(false)).find((p) => p.id === id) || {}).path || '',
+});
+
+// The chat list on the tile's Chats face. Removal reuses the disk pipeline's
+// Recycle Bin/Trash path and its guard; a session the bridge sees running is
+// refused, along with any transcript written in the last few minutes.
+const _claudeHistory = claudeHistory.createSessionStore({
+  projectsDir: () => claudeUsage.resolveProjectsDir(),
+  trash: (root, paths) => diskSpace.trashUnder(root, paths),
+  liveIds: () => new Set((_claudeBridge.snapshot().sessions || []).filter((s) => !s.ended).map((s) => s.id)),
 });
 
 // Bridge-driven repaints are throttled (a busy session fires Pre/PostToolUse per
@@ -12248,9 +12801,58 @@ function _claudeBridgeAuth(req) {
   catch { return false; }
 }
 
+// What /api/claude/mod tells the mod: which hub, and whether the tile is out.
+function _claudeModReply() {
+  return { ok: true, hub: APP_VERSION, tile: _widgetPlaced('claude'), mod: _claudeBridge.modStatus() };
+}
+
+// Shows the approval card and waits for a tap. Resolves the PermissionRequest
+// decision ({ behavior, … }) on an explicit Allow/Deny, null on anything else
+// (expired, too many waiting, caller gone): null always means "the terminal
+// asks". Shared by the hook route and the mod's route.
+async function _claudeHoldPermission(res, data, opts) {
+  const pendingReq = _claudeBridge.requestPermission(data, opts);
+  if (!pendingReq) return null;                    // too many already waiting
+  // Claude Code gave up (Ctrl-C, or its own hook timeout): stop showing a
+  // card nobody can answer any more.
+  const onGone = () => _claudeBridge.cancel(pendingReq.id);
+  res.on('close', onGone);
+  const out = await pendingReq.promise;
+  res.off('close', onGone);
+  if (out.verdict !== 'allow' && out.verdict !== 'deny') return null;
+  // A plan also carries the echoed input and the chosen mode: without
+  // updatedInput Claude Code ignores an allow for ExitPlanMode and keeps its
+  // own dialog up (claude-bridge.js, header note 2).
+  const decision = { behavior: out.verdict };
+  if (out.verdict === 'allow' && out.updatedInput) decision.updatedInput = out.updatedInput;
+  if (out.verdict === 'allow' && out.updatedPermissions) decision.updatedPermissions = out.updatedPermissions;
+  if (out.verdict === 'deny' && out.message) decision.message = out.message;
+  return decision;
+}
+
 // Resolve (or mint) the bridge token once at boot. Until it lands, both ingest
 // endpoints reject — which is the safe direction, and the window is a few ms.
 claudeLink.ensureToken(DATA_DIR).then((t) => { _claudeBridgeToken = t; }).catch(() => {});
+
+// A Claude Code link that is there but incomplete is repaired once at boot and
+// again whenever the widget asks: an older Xenon wrote a smaller hook set, and
+// something may rewrite settings.json after us. Without this the widget reported
+// "connected" over a link that could not deliver a question or a follow-up.
+// Only an existing link is touched (repairLink never connects on its own), and
+// the time of the last repair is exposed so the widget can say that sessions
+// already open must be restarted to pick it up.
+let _claudeLinkRepairedAt = 0;
+async function _claudeLinkStatus() {
+  const st = await claudeLink.repairLink(DATA_DIR, PORT);
+  if (st && st.repaired) {
+    _claudeLinkRepairedAt = Date.now();
+    _claudeBridgeToken = await claudeLink.ensureToken(DATA_DIR);
+    console.log('[claude] Claude Code link updated to the current hook set: '
+      + (st.repairedMissing || []).length + ' missing, ' + (st.repairedOutdated || 0) + ' out of date');
+  }
+  return { ...st, repairedAt: _claudeLinkRepairedAt };
+}
+_claudeLinkStatus().catch(() => {});
 
 function _claudeSettings() {
   const s = _serverHubSettings && _serverHubSettings.claude;
@@ -12262,12 +12864,17 @@ function _claudeSettings() {
 // whatever plan/budget the user picked).
 function _claudePayload(usage) {
   const cfg = _claudeSettings();
+  const live = _claudeBridge.snapshot();
   return {
     usage,
     // Live state straight from Claude Code (quota, sessions, pending approvals).
     // Null-safe for every consumer: the widget falls back to the transcript
     // aggregate whenever the user hasn't linked Claude Code yet.
-    live: _claudeBridge.snapshot(),
+    live,
+    // The title Claude Code gave each session shown (a /rename wins), so three
+    // sessions in one project stop reading "xenon", "xenon", "xenon". Answered
+    // from memory; a title read in the background repaints the tile.
+    titles: _claudeSessionTitles(live, usage),
     // Runs the dashboard started itself, so the tile can show progress and offer
     // a stop. Empty for every user who never uses the feature.
     runs: _claudeRunner.snapshot(),
@@ -12279,6 +12886,12 @@ function _claudePayload(usage) {
     tile: cfg.tile,
     refreshedAt: Date.now(),
   };
+}
+
+function _claudeSessionTitles(live, usage) {
+  const ids = ((live && live.sessions) || []).map((s) => s.id)
+    .concat(((usage && usage.sessions) || []).map((s) => s.id));
+  return _claudeHistory.titles(ids, () => { try { _claudeBroadcast(); } catch { /* the next push retries */ } });
 }
 
 // Every read path must rebuild the live block rather than serve the copy stored
@@ -12304,7 +12917,8 @@ function _claudeBroadcast(usage) {
   // Elapsed time is deliberately NOT in the signature; a still-running run must
   // not force a repaint every tick.
   const runSig = payload.runs.map(r => `${r.id}:${r.state}:${r.output.length}`).join(',');
-  const fullSig = `${u ? u.sig : ''}|${payload.budget.weekly}|${payload.budget.plan}|${payload.live.sig}|${runSig}`;
+  const titleSig = Object.keys(payload.titles).map((id) => id + '=' + payload.titles[id]).join('\n');
+  const fullSig = `${u ? u.sig : ''}|${payload.budget.weekly}|${payload.budget.plan}|${payload.live.sig}|${runSig}|${titleSig}`;
   const changed = fullSig !== _claudeCache.sig;
   _claudeCache = { data: payload, sig: fullSig, refreshedAt: payload.refreshedAt };
   if (changed) broadcastSSE('claude', payload);
@@ -12335,6 +12949,176 @@ setInterval(() => {
   if (Date.now() - _claudeLastFetch < period) return;
   refreshClaude().catch(() => {});
 }, 10000).unref();
+
+// ── OpenAI Codex ─────────────────────────────────────────────────────────────
+// Two feeds, kept apart because they cost different things:
+//  - the ACCOUNT side (plan windows, tokens per day, recent conversations) comes
+//    from one `codex app-server` child (codex-appserver.js), running only while a
+//    Codex or ChatGPT tile is placed or a widget holds the `codex` stream AND a
+//    dashboard is open, stopped a few minutes after that stops being true;
+//  - the LIVE side (sessions, approvals) is pushed by Codex itself through the
+//    hooks codex-link.js installs (codex-bridge.js) and costs nothing until a
+//    hook fires. Like the Claude bridge it is not gated on the tile: a pending
+//    approval must reach the overlay even when the tile was never added.
+const _codexBridge = codexBridge.createBridge({
+  onChange: () => _codexChanged(),
+  waitMs: () => {
+    const w = _serverHubSettings && _serverHubSettings.codexWidget;
+    return (w && Number.isFinite(w.waitSec) ? w.waitSec : 90) * 1000;
+  },
+});
+const _codexApp = codexAppServer.createAppServer({
+  resolveExe: () => aiCli.resolveCodex(),
+  env: () => aiCli.childEnv('codex'),
+  cwd: () => os.tmpdir(),
+  clientVersion: APP_VERSION || '0.0.0',
+  isOurHook: (cmd) => codexLink.isOurCommand(cmd),
+  onChange: () => { _codexRefreshLink().catch(() => {}); },
+  log: (m) => console.log('[codex] ' + m),
+});
+let _codexBridgeToken = '';
+let _codexPushTimer = null;
+let _codexSig = '';
+let _codexLinkCache = null;
+let _codexLinkRepairedAt = 0;
+
+// "Is this tile on the dashboard", answered strictly: an unknown layout is NO.
+// _feedWidgetInUse() answers yes when unsure, which is right for a cheap read
+// and wrong for starting a long-lived child.
+function _widgetPlaced(widgetId) {
+  const layout = _serverHubSettings && _serverHubSettings.dashboardLayout;
+  if (!layout || typeof layout !== 'object') return false;
+  const w = layout.widgets && layout.widgets[widgetId];
+  if (w && typeof w === 'object' && w.visible === true) return true;
+  if (Array.isArray(layout.copies) && layout.copies.some((c) => c && c.widget === widgetId)) return true;
+  const groups = layout.groups && typeof layout.groups === 'object' ? layout.groups : {};
+  for (const gid of Object.keys(groups)) {
+    const members = groups[gid] && Array.isArray(groups[gid].members) ? groups[gid].members : [];
+    if (members.some((m) => m === widgetId || (typeof m === 'string' && m.indexOf(widgetId + '~') === 0))) return true;
+  }
+  return false;
+}
+// Some installed package actually GRANTED this stream (sdkGrantsFor applies safe
+// mode and per-package suspend, so both switch the feed off for free).
+function _sdkStreamGranted(stream) {
+  const sw = _serverHubSettings && _serverHubSettings.sdkWidgets;
+  const grants = sw && sw.grants && typeof sw.grants === 'object' ? sw.grants : null;
+  if (!grants) return false;
+  for (const pkgId of Object.keys(grants)) {
+    if (sdkGrantsFor(pkgId).streams.includes(stream)) return true;
+  }
+  return false;
+}
+function _codexWanted() {
+  return sseClients.size > 0 && (_widgetPlaced('openaicodex') || _widgetPlaced('chatgpt') || _sdkStreamGranted('codex'));
+}
+function _syncCodexDemand() {
+  const wanted = _codexWanted();
+  _codexApp.setDemand({ wanted, visible: wanted });
+}
+
+function _codexBridgeAuth(req) {
+  const got = String(req.headers['x-xenon-bridge'] || '');
+  if (!_codexBridgeToken || got.length !== _codexBridgeToken.length) return false;
+  try { return crypto.timingSafeEqual(Buffer.from(got), Buffer.from(_codexBridgeToken)); }
+  catch { return false; }
+}
+
+// The link as the tile shows it. `trust` is Codex's own verdict (hooks/list)
+// when the app-server child is running, else null and the tile explains /hooks.
+// Reading never writes: every rewrite of hooks.json costs the user a re-trust.
+async function _codexLinkStatus({ fresh = false } = {}) {
+  const trust = await _codexApp.hooksStatus({ fresh }).catch(() => null);
+  const st = await codexLink.status(DATA_DIR, { trust });
+  _codexLinkCache = {
+    linked: st.linked, complete: st.complete, unparsable: st.unparsable, trust: st.trust,
+    exists: st.exists, linkedAt: st.linkedAt, repairedAt: _codexLinkRepairedAt,
+  };
+  return { ...st, repairedAt: _codexLinkRepairedAt };
+}
+async function _codexRefreshLink() {
+  await _codexLinkStatus().catch(() => {});
+  _codexChanged();
+}
+
+// Boot: the token codex-hook.js presents (and the port it dials, stored next to
+// it), then a repair only for a link the user made whose node or script path
+// moved. A repair changes the hook hash, so the tile says to trust it again.
+codexLink.ensureToken(DATA_DIR, PORT)
+  .then((t) => { _codexBridgeToken = t; return codexLink.repairLink(DATA_DIR, PORT); })
+  .then((st) => {
+    if (st && st.repaired) {
+      _codexLinkRepairedAt = Date.now();
+      console.log('[codex] Codex hooks pointed at a path that moved; updated (trust them again in Codex /hooks)');
+    }
+    return _codexLinkStatus();
+  })
+  .catch(() => {});
+
+function _codexCfg() {
+  const w = _serverHubSettings && _serverHubSettings.codexWidget;
+  return w && typeof w === 'object' ? w : { approvals: true, waitSec: 90 };
+}
+function _codexPayload() {
+  const app = _codexApp.snapshot();
+  return {
+    app,
+    live: _codexBridge.snapshot(),
+    link: _codexLinkCache,
+    cfg: _codexCfg(),
+    // What an SDK widget granted the `codex` stream receives: built here, an
+    // allowlist of numbers (codex-bridge.js sdkProjection). main.js forwards only
+    // this part to widget frames.
+    sdk: codexBridge.sdkProjection(app, _codexBridge.counts()),
+    refreshedAt: Date.now(),
+  };
+}
+function _codexBroadcast() {
+  const payload = _codexPayload();
+  const { refreshedAt, live, ...rest } = payload;
+  const sig = live.sig + '|' + JSON.stringify(rest);
+  if (sig === _codexSig) return payload;
+  _codexSig = sig;
+  broadcastSSE('codex', payload);
+  return payload;
+}
+function _codexChanged() {
+  if (_codexPushTimer || sseClients.size === 0) return;
+  _codexPushTimer = setTimeout(() => {
+    _codexPushTimer = null;
+    try { _codexBroadcast(); } catch { /* a repaint must never break ingest */ }
+  }, 300);
+  if (typeof _codexPushTimer.unref === 'function') _codexPushTimer.unref();
+}
+
+// ── "Ask ChatGPT" tile ───────────────────────────────────────────────────────
+// Conversations answered on the user's ChatGPT plan through OpenAI's own codex
+// program (chatgpt-ask.js has the why). The store is DATA_DIR/chatgpt.json, a
+// bounded cache written atomically; a turn runs off the request and its answer
+// arrives over SSE ('chatgpt'), and every running turn is killed on shutdown.
+const _chatgptStore = chatgptAsk.createStore({ file: path.join(DATA_DIR, 'chatgpt.json'), writeFileAtomic });
+const _chatgptAsker = chatgptAsk.createAsker({
+  store: _chatgptStore,
+  chat: (opts) => aiCli.chat(opts),
+  model: () => {
+    const w = _serverHubSettings && _serverHubSettings.chatgptWidget;
+    return (w && w.model) || 'default';
+  },
+  onChange: (id) => _chatgptChanged(id),
+});
+function _chatgptPayload(changedId) {
+  return {
+    conversations: _chatgptStore.list(),
+    active: _chatgptAsker.snapshot(),
+    // The one conversation that changed, whole, so an open thread repaints
+    // without a second request. Only sent on a change, never on a seed.
+    changed: changedId ? _chatgptStore.get(changedId) : null,
+  };
+}
+function _chatgptChanged(id) {
+  if (sseClients.size === 0) return;
+  try { broadcastSSE('chatgpt', _chatgptPayload(id)); } catch { /* a repaint must never break a turn */ }
+}
 
 // Security: only accept connections from loopback addresses.
 // Double-checked at both the TCP socket level (remoteAddress) and the HTTP Host header
@@ -12394,6 +13178,10 @@ const CSRF_MUTATION_PATHS = new Set([
   '/api/ai/chatgpt/login',
   '/api/ai/chatgpt/logout',
   '/api/ai/chatgpt/models',
+  // Postpones the automatic update by an hour. It can only delay, never start
+  // an install, but a page on another site has no business holding updates
+  // back for the user either.
+  '/update/auto/postpone',
   // Raises a UAC prompt and changes the startup task's run level. POST-only, but
   // guarded here too: a cross-site drive-by must not be able to make the local
   // server throw an administrator prompt at the user.
@@ -12444,11 +13232,17 @@ const CSRF_MUTATION_PATHS = new Set([
   '/api/community/installed',
   '/api/community/installs',
   '/api/community/poll',
+  // A read, but a cache miss asks the supporter hub for its count.
+  '/api/community/support-goal',
   // POST-only, but it triggers an outbound request to the supporter hub AND a
   // successful call consumes one of the code's device activations — a cross-site
   // drive-by (or a sandboxed iframe posting with Origin: null) must not be able
   // to burn a user's activations or pump the hub.
   '/api/community/redeem',
+  // The owner update: POST-only, an outbound request to the supporter hub, and a
+  // successful answer carries a content key and sometimes a private file, so a
+  // drive-by or a sandboxed iframe with a null Origin must not be able to ask.
+  '/api/community/update',
   // Same shape one step further: the remembered pass. /forget destroys
   // something only the user can restore (by typing the code again) and /save
   // would let a sandboxed widget plant a code of its own, so neither may be
@@ -12521,6 +13315,11 @@ const CSRF_MUTATION_PATHS = new Set([
   // a session to keep going. A page must be able to forge neither.
   '/api/claude/question',
   '/api/claude/turn-end',
+  // The mod feed: token-gated ingest like /event, posted by the claude process.
+  // The inbox hands a tile message to the mod, which starts a turn with it.
+  '/api/claude/mod',
+  '/api/claude/mod/permission',
+  '/api/claude/mod/inbox',
   '/api/claude/decide',
   // Browser-originated like /decide, and guarded for the same reason. /answer
   // resolves a question Claude is blocked on and /reply puts words into a live
@@ -12536,6 +13335,25 @@ const CSRF_MUTATION_PATHS = new Set([
   '/api/claude/run',
   '/api/claude/run/stop',
   '/api/claude/attach',
+  // Moves chat transcripts to the Recycle Bin: never from a drive-by page or a
+  // sandboxed widget frame.
+  '/api/claude/history/delete',
+  // OpenAI Codex bridge, the same shape. /event and /permission are posted by
+  // codex-hook.js (which Codex runs) and are token-gated as well; listing them
+  // stops a page from forging a session or an approval card. /decide answers a
+  // real one, and /link writes the Codex hooks.json, so neither may be reachable
+  // from a drive-by or an Origin:null widget frame. The GET of /link is a pure
+  // read (it never repairs) and is named back in for paired devices.
+  '/api/codex/event',
+  '/api/codex/permission',
+  '/api/codex/decide',
+  '/api/codex/link',
+  '/api/codex/unlink',
+  // The Ask ChatGPT tile: /ask spends the user plan on a program run, /cancel
+  // kills one, /delete removes conversations. None may be a drive-by.
+  '/api/chatgpt/ask',
+  '/api/chatgpt/cancel',
+  '/api/chatgpt/delete',
   // Local file search: /open launches a file with its registered handler and
   // /reveal opens an Explorer window — a drive-by or Origin:null iframe must
   // be able to do neither, even though both only accept server-minted opaque
@@ -12553,7 +13371,25 @@ const CSRF_MUTATION_PATHS = new Set([
   '/disk/scan/cancel',
   '/disk/clean',
   '/disk/clean/cancel',
+  // Opens a file manager window on the PC, like /search/reveal.
+  '/disk/reveal',
   '/api/disk/advisor',
+  // Dev cleanup: prunes Docker, removes Ollama models, recycles editor folders,
+  // raises a UAC prompt to compact a virtual disk; the unlock spends a device
+  // slot of the supporter pass on the hub.
+  '/api/devclean/run',
+  '/api/devclean/compact',
+  '/api/features/devclean/unlock',
+  // GET, but a cache miss sends one outbound lookup to LRCLIB for the song
+  // playing now, so a cross-site page must not be able to drive it.
+  '/api/lyrics',
+  '/api/features/lyrics/unlock',
+  // Spends the one trial this install gets: a navigation must not be able to.
+  '/api/features/lyrics/trial',
+  // Supporter Lyrics widget writes: a song's timing, and a translation that may
+  // spend the user's AI provider quota. POST-only.
+  '/api/lyrics/offset',
+  '/api/lyrics/translate',
   // Suppresses the Edge fallback after the native kiosk opened the Spotlight
   // window — a drive-by must not be able to swallow the user's hotkey.
   '/spotlight/claimed',
@@ -13949,12 +14785,27 @@ const handleRequest = async (req, res) => {
     try   { json(await getNetworkInfo()); }
     catch (e) { err500(e.message); }
 
+  } else if (reqPath === '/api/processes/history' && req.method === 'GET') {
+    // The recent `processes` readings, as ages rather than clock times (the
+    // reader may be a paired phone with its own clock). A pure read of what the
+    // SSE stream already carried, so it widens nothing on the paired-device
+    // door; empty when no package holds the grant, exactly like the stream.
+    json({ ok: true, items: processesWanted() ? _processesHistory.toWire() : [] });
+
   } else if (reqPath === '/api/disks/io' && req.method === 'GET') {
     // Per-disk throughput and IOPS, for the SDK's `diskIo` stream. A read, and
     // a costed one — it is pulled by a widget that is on screen asking, never
     // polled by the server.
     try   { json(await getDiskIo()); }
     catch (e) { json({ ok: false, disks: [], error: String((e && e.message) || e) }); }
+
+  } else if (reqPath === '/api/devstorage' && req.method === 'GET') {
+    // The SDK `devStorage` stream: how much space developer tools hold, numbers
+    // only. Not supporter-gated (the cleanup actions are), but it spawns docker
+    // and reg, so it answers only when some package was granted the stream.
+    if (!_sdkStreamGranted('devStorage')) { json({ ok: false, error: 'not_granted' }); return; }
+    try   { json({ ok: true, ...(await devClean.summary()) }); }
+    catch (e) { json({ ok: false, error: String((e && e.message) || e) }); }
 
   } else if (reqPath === '/api/gamemode/status' && req.method === 'GET') {
     // Game mode runs off foreground full-screen detection (no PresentMon needed).
@@ -14590,6 +15441,40 @@ const handleRequest = async (req, res) => {
       minVersion: audioLevels.minVersion(),
     });
 
+  } else if (reqPath === '/audio/levels/install-helper' && req.method === 'POST') {
+    // "Install Xenon Helper", under the wave switch in Settings. The boot heal
+    // only ever replaces a helper that is already there, so one that never
+    // arrived had no way in short of re-running the setup. This is the same
+    // verified download (signed SHA256SUMS, pinned key, fail closed), for this
+    // version's release. A paired device cannot reach it (remote-access.js).
+    try {
+      await readBody(req);
+      if (process.platform !== 'win32') { json({ ok: false, status: 'unsupported' }); return; }
+      if (!_helperInstall) {
+        _helperInstall = createHelperUpdate({ helperExe: HELPER_EXE, appVersion: APP_VERSION }).install()
+          .finally(() => { _helperInstall = null; });
+      }
+      const status = await _helperInstall;
+      const ok = status === 'installed' || status === 'up-to-date';
+      startupLog.write('helper install from Settings: ' + status);
+      if (ok) {
+        writeFileAtomic(HELPER_CHECK_MARKER, APP_VERSION).catch(() => {});
+        // A helper that gave up (too old, kept dying) gets a fresh start now,
+        // not at the next restart.
+        audioLevels.reset();
+        refreshAudioLevelsWatch();
+      }
+      json({ ok, status });
+    } catch (e) { json({ ok: false, status: 'error', detail: String(e && e.message || e) }); }
+
+  } else if (reqPath === '/audio/watch' && req.method === 'GET') {
+    // "A Volume or Microphone panel is on screen". The prefix check at the top of
+    // this handler has already re-armed the 8 second audio tick, which is all this
+    // route is for: the dashboard sends it every 30 seconds while a mixer is in view
+    // and not at all while none is. It reads nothing and spawns nothing, so a mixer
+    // left on screen all day costs one empty request every half minute.
+    json({ ok: true });
+
   } else if (reqPath === '/audio/apps' && req.method === 'GET') {
     // Broader app list for the Deck editor's app picker: every application audio
     // session (active OR inactive) that has a real exe, deduped by process name.
@@ -14773,13 +15658,14 @@ const handleRequest = async (req, res) => {
   } else if (reqPath === '/speaker/set' && req.method === 'POST') {
     try {
       const { id } = JSON.parse(await readBody(req));
-      svvExec(['/SetDefault', id, 'all']).then(() => { cachedSpeakerId = id; json({ ok: true }); }, e => err500(e.message));
+      setDefaultAudioDevice(id).then(() => { cachedSpeakerId = id; json({ ok: true }); }, e => err500(e.message));
     } catch (e) { err500(e.message); }
 
   } else if (reqPath === '/mic/set' && req.method === 'POST') {
     try {
       const { id } = JSON.parse(await readBody(req));
       const mic = await setDefaultMic(id);
+      cachedMicId = (mic && mic.id) || id;
       json({ ok: true, mic });
     } catch (e) { err500(e.message); }
 
@@ -15238,9 +16124,40 @@ const handleRequest = async (req, res) => {
   } else if (reqPath === '/update/apply' && req.method === 'POST') {
     // Hand off to the external applier (elevated, detached). Only valid once a
     // build is staged; from here the swap happens outside this process.
+    // The port is this server's, so an install on XENON_PORT updates itself
+    // and not whatever else listens on 3030.
     try {
       await readBody(req);
-      json(selfUpdate.apply());
+      json(selfUpdate.apply({ port: PORT }));
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/update/auto-status' && req.method === 'GET') {
+    // Where the automatic updater stands, for the line in Settings -> General.
+    // ?safe=1 also answers "could the app restart right now?", which the native
+    // app asks before updating its own shell; it reads idle time, so it is only
+    // computed on request. `shellSilent` says whether that shell update can run
+    // with nobody there to answer a password prompt (see self-update.js).
+    try {
+      const out = autoUpdater.status();
+      if (urlObj.searchParams.get('safe') === '1') {
+        out.safeNow = await autoUpdater.safeNow();
+        out.shellSilent = selfUpdate.shellUpdatesSilently();
+      }
+      json(out);
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/widgets/auto-update' && req.method === 'GET') {
+    // Where the widget auto-updater stands, for the line in Settings -> Widget e
+    // condivisione: the switch, the last run, and what is waiting for the user.
+    // Read-only, names and versions only.
+    try { json(await widgetAutoUpdater.status()); } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/update/auto/postpone' && req.method === 'POST') {
+    // "Postpone by an hour" from the countdown on any dashboard. It can only
+    // delay an update, never start one, so a paired phone may send it too.
+    try {
+      await readBody(req);
+      json(autoUpdater.postpone());
     } catch (e) { err500(e.message); }
 
   } else if (reqPath === '/api/native/status' && req.method === 'GET') {
@@ -15542,6 +16459,12 @@ const handleRequest = async (req, res) => {
         // so a stale mirror cannot un-dismiss it.
         if (prev.supportAskSeen === true) incoming.supportAskSeen = true;
         if (prev.shareNudgeSeen === true) incoming.shareNudgeSeen = true;
+        // Browser-owned too, and just as one-way: the first day stamped stays,
+        // and the appeal year only moves forward.
+        if (prev.supportAskSeenDay) incoming.supportAskSeenDay = prev.supportAskSeenDay;
+        if (Number(prev.supportAppealYear) > (Number(incoming.supportAppealYear) || 0)) {
+          incoming.supportAppealYear = prev.supportAppealYear;
+        }
       }
       // Vitals state is widget-owned and monotonic: a refill stamps "now", XP
       // only grows, the daily counter resets on a new day. A stale settings
@@ -15607,6 +16530,12 @@ const handleRequest = async (req, res) => {
       _serverHubSettings = settings;
       return { prev, settings };
       });
+      if ((prev && prev.autoUpdate !== false) !== (settings.autoUpdate !== false)) {
+        try { autoUpdater.settingsChanged(); } catch { /* next tick reads it anyway */ }
+      }
+      if ((prev && prev.autoUpdateWidgets !== false) !== (settings.autoUpdateWidgets !== false)) {
+        try { widgetAutoUpdater.settingsChanged(); } catch { /* next tick reads it anyway */ }
+      }
       // Ad-blocker toggle changed → tear the headless Edge down so the next tile
       // open relaunches it with (or without) --load-extension. Open tiles re-open
       // via BrowserTile.restart() on the client right after this save resolves.
@@ -15679,6 +16608,9 @@ const handleRequest = async (req, res) => {
       // Pick up plan/budget changes and a just-enabled News widget/ticker source
       // immediately (their timers are gated on the widget being in use).
       if (_feedWidgetInUse('claude')) refreshClaude().catch(() => {});
+      // A Codex/ChatGPT tile added or removed, or a widget granted the stream.
+      _syncCodexDemand();
+      _codexChanged();
       if (_feedWidgetInUse('news', 'news') && Date.now() - _newsCache.refreshedAt > 60 * 1000) refreshNews().catch(() => {});
       // Tell every OTHER open surface (Xeneon Edge screen / browser / native app)
       // that the settings changed, so they re-hydrate live instead of clobbering
@@ -15744,6 +16676,13 @@ const handleRequest = async (req, res) => {
       json(await communityInstalls.fetchInstallCounts({ ids: urlObj.searchParams.get('ids') }));
     } catch (e) { err500(e.message); }
 
+  } else if (reqPath === '/api/community/support-goal' && req.method === 'GET') {
+    // How many people pay for Xenon right now and the goal that makes it pay for
+    // itself: two public integers from the hub, nothing about this install sent,
+    // so not gated by a setting either. Cached an hour (community-installs.js).
+    // In CSRF_MUTATION_PATHS (a cache miss is an outbound request).
+    try { json(await communityInstalls.fetchSupportGoal()); } catch (e) { err500(e.message); }
+
   } else if (reqPath === '/api/community/messages' && req.method === 'GET') {
     // Announcement feed — messages.json on the project site, proxied with the
     // same TTL cache + ETag revalidation as the catalog. Every install gets the
@@ -15779,7 +16718,20 @@ const handleRequest = async (req, res) => {
     try {
       const body = JSON.parse(await readBody(req) || '{}');
       json(await supporterRedeem.redeem({
-        entryId: body.entryId, code: body.code, dataDir: DATA_DIR,
+        entryId: body.entryId, code: body.code, kv: body.kv, dataDir: DATA_DIR,
+      }));
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/community/update' && req.method === 'POST') {
+    // Owner update: "I already unlocked this entry on this install, is there a newer
+    // version and may I have its key?" Sends no code. The hub answers only a device
+    // it recorded as an owner (the activation /redeem wrote) and says not_owner to
+    // every other caller. The key and any private bundle go to the browser exactly
+    // as a redeem answer does, and are never kept here. In CSRF_MUTATION_PATHS.
+    try {
+      const body = JSON.parse(await readBody(req) || '{}');
+      json(await supporterRedeem.update({
+        entryId: body.entryId, have: body.have, kv: body.kv, dataDir: DATA_DIR,
       }));
     } catch (e) { err500(e.message); }
 
@@ -15998,6 +16950,22 @@ const handleRequest = async (req, res) => {
     } catch { /* a malformed event must never fail the caller's tool call */ }
     res.writeHead(204); res.end();
 
+  } else if (reqPath === '/api/claude/mod' && req.method === 'POST') {
+    // The Xenon mod for Claude Code (integrations/claude-code/): its feed of
+    // subagent models, context and quota. Same token as the hooks. Unlike a
+    // hook, the mod reads this body, so it may answer; nothing in it acts on
+    // Claude Code.
+    if (!_claudeBridgeAuth(req)) { res.writeHead(403, { 'Content-Type': 'text/plain' }); res.end('Forbidden'); return; }
+    let accepted = false;
+    try { accepted = _claudeBridge.applyMod(JSON.parse(await readBody(req))); }
+    catch { /* malformed: answered as not accepted */ }
+    json({ ..._claudeModReply(), accepted });
+
+  } else if (reqPath === '/api/claude/mod' && req.method === 'GET') {
+    // The mod's /xenon command: does the hub hear this install at all.
+    if (!_claudeBridgeAuth(req)) { res.writeHead(403, { 'Content-Type': 'text/plain' }); res.end('Forbidden'); return; }
+    json(_claudeModReply());
+
   } else if (reqPath === '/api/claude/permission' && req.method === 'POST') {
     // The blocking one. Claude Code holds its tool call open while this request
     // is unanswered, so the user can decide on the Xeneon Edge instead of at the
@@ -16024,34 +16992,76 @@ const handleRequest = async (req, res) => {
       // If one reaches this route anyway (an older link, a hand-edited config),
       // it gets no decision, which is the tool proceeding to ask normally.
       if (data && data.tool_name === 'AskUserQuestion') { json({}); return; }
-      const pendingReq = _claudeBridge.requestPermission(data);
-      if (!pendingReq) { json({}); return; }        // too many already waiting
-      // Claude Code gave up (Ctrl-C, or its own hook timeout): stop showing a
-      // card nobody can answer any more.
-      const onGone = () => _claudeBridge.cancel(pendingReq.id);
-      res.on('close', onGone);
-      const { verdict } = await pendingReq.promise;
-      res.off('close', onGone);
-      // The wait can end because the caller vanished (Ctrl-C), in which case the
-      // socket is already gone and writing would throw from inside the catch.
-      if (res.writableEnded || res.destroyed) return;
-      if (verdict === 'allow' || verdict === 'deny') {
-        json({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: verdict } } });
-      } else {
-        json({});                                    // timed out → ask in the terminal
+      // The mod already asked about this call and its wait ran out: the
+      // terminal asks now, not a second card (claude-bridge.js, takeHandBack).
+      if (_claudeBridge.takeHandBack(data)) { json({}); return; }
+      // Whether the plan card offers auto mode depends on it (claude-bridge.js,
+      // planChoices). One small read, only for a plan.
+      if (data && data.tool_name === 'ExitPlanMode') {
+        _claudeDefaultMode = await claudeLink.defaultMode().catch(() => '');
       }
+      const decision = await _claudeHoldPermission(res, data);
+      if (res.writableEnded || res.destroyed) return;
+      json(decision ? { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision } } : {});
     } catch { try { if (!res.writableEnded && !res.destroyed) json({}); } catch { /* caller already gone */ } }
+
+  } else if (reqPath === '/api/claude/mod/permission' && req.method === 'POST') {
+    // The mod's approvals: the same card as /api/claude/permission, held only
+    // for the short wait the user chose in the mod (10-120 s). The mod runs
+    // before Claude Code's own PermissionRequest hook, so an explicit tap here
+    // settles the call and the hook never fires; anything else answers
+    // { decision: null } and the mod lets Claude Code go on, which reaches the
+    // hook, which takeHandBack turns into the terminal prompt. Like the hook
+    // route, it can never approve on its own. The mod sends only the one field
+    // the card shows (command, path, URL…), never file content or a prompt.
+    if (!_claudeBridgeAuth(req)) { res.writeHead(403, { 'Content-Type': 'text/plain' }); res.end('Forbidden'); return; }
+    if (_serverHubSettings && _serverHubSettings.claudeWidget
+      && _serverHubSettings.claudeWidget.approvals === false) {
+      req.resume();
+      json({ decision: null });
+      return;
+    }
+    try {
+      const body = JSON.parse(await readBody(req));
+      const data = body && body.v === 1 && typeof body.sessionId === 'string' ? {
+        session_id: body.sessionId,
+        tool_name: body.tool,
+        tool_input: body.input,
+        cwd: body.cwd,
+      } : null;
+      if (!data || data.tool_name === 'AskUserQuestion' || data.tool_name === 'ExitPlanMode') { json({ decision: null }); return; }
+      const ttlMs = Math.max(10, Math.min(120, Number(body.waitSec) || 30)) * 1000;
+      const decision = await _claudeHoldPermission(res, data, { ttlMs, fromMod: true });
+      if (res.writableEnded || res.destroyed) return;
+      json({ decision });
+    } catch { try { if (!res.writableEnded && !res.destroyed) json({ decision: null }); } catch { /* caller already gone */ } }
+
+  } else if (reqPath === '/api/claude/mod/inbox' && req.method === 'POST') {
+    // The mod (0.3.0+) asking, from a timer in an interactive session, whether
+    // the tile has a message for it. Held open until one is queued or the hold
+    // runs out (claude-inbox.js), and a session with a request held here is
+    // what the tile offers "goes into the open session" for. The answer is
+    // { text } or {}: only an idle session is handed anything, and only once
+    // (claude-bridge.js, takeForTerminal). The text is never logged.
+    if (!_claudeBridgeAuth(req)) { res.writeHead(403, { 'Content-Type': 'text/plain' }); res.end('Forbidden'); return; }
+    let sessionId = '';
+    try {
+      const body = JSON.parse(await readBody(req, 4096));
+      if (body && body.v === 1 && typeof body.sessionId === 'string') sessionId = body.sessionId;
+    } catch { /* malformed: refused below as a bad session */ }
+    if (res.writableEnded || res.destroyed) return;
+    const held = _claudeInbox.hold(sessionId, res);
+    if (held === 'bad_session') { res.writeHead(400, { 'Content-Type': 'text/plain' }); res.end('Bad session'); }
+    else if (held === 'busy') { res.writeHead(429, { 'Content-Type': 'text/plain' }); res.end('Busy'); }
 
   } else if (reqPath === '/api/claude/question' && req.method === 'POST') {
     // A question from Claude, answered on the touchscreen.
     //
     // This is a PreToolUse hook scoped to AskUserQuestion, and it blocks the
-    // same way the permission route does. The answer cannot be returned as the
-    // tool's result — no hook can do that — so it is returned as a DENY whose
-    // reason carries the user's choice, which Claude reads and acts on. That
-    // mechanism was measured before this route existed; see the header of
-    // claude-bridge.js, note 2, and answerReason() for the wording that makes
-    // Claude treat it as an answer rather than a refusal.
+    // same way the permission route does. The answer is returned as an ALLOW
+    // whose updatedInput is the tool's own input with `answers` filled in, so
+    // the tool runs and hands Claude the choice as its normal result — what the
+    // terminal would have produced (claude-bridge.js, header note 2).
     //
     // Every non-answer path is an empty object: the tool then runs and asks in
     // the terminal, exactly as it would if Xenon were not installed. Nothing
@@ -16072,8 +17082,14 @@ const handleRequest = async (req, res) => {
       const out = await ask.promise;
       res.off('close', onGone);
       if (res.writableEnded || res.destroyed) return;
-      if (out.verdict === 'answer' && out.reason) {
-        json({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: out.reason } });
+      if (out.verdict === 'answer' && out.updatedInput) {
+        // For an allow the reason is shown to the user, not to Claude: it is
+        // the line in the terminal that says where the answer came from.
+        json({ hookSpecificOutput: {
+          hookEventName: 'PreToolUse', permissionDecision: 'allow',
+          permissionDecisionReason: 'Answered on the Xenon dashboard',
+          updatedInput: out.updatedInput,
+        } });
       } else {
         json({});                                    // skipped or timed out → the terminal asks
       }
@@ -16103,31 +17119,37 @@ const handleRequest = async (req, res) => {
     // The touchscreen answering a question. Browser-originated, so CSRF-guarded
     // rather than token-gated, like /decide. `selections` is one array of option
     // labels per question; the bridge matches them against the options Claude
-    // itself published and refuses anything else, so the text that reaches the
-    // model is never text the page made up.
+    // itself published and refuses anything else. `typed` is one string per
+    // question: the "Other" box, or a text/number answer — the user's own words,
+    // as the terminal's "Other" row would send them.
     try {
       const body = JSON.parse(await readBody(req));
       const id = String(body && body.id || '');
       const ok = body && body.skip === true
         ? _claudeBridge.skipQuestion(id)
-        : _claudeBridge.answer(id, Array.isArray(body && body.selections) ? body.selections : []);
+        : _claudeBridge.answer(id,
+          Array.isArray(body && body.selections) ? body.selections : [],
+          Array.isArray(body && body.typed) ? body.typed : []);
       json({ ok });
     } catch (e) { err500(e.message); }
 
   } else if (reqPath === '/api/claude/reply' && req.method === 'POST') {
-    // A follow-up typed on the dashboard for a session that is working. It is
-    // QUEUED, not sent: delivery happens at the end of the current turn, via
-    // /api/claude/turn-end. The tile shows that state, because "sent" would be a
-    // lie for however long the turn still has to run.
+    // A follow-up typed on the dashboard for a live session. It is QUEUED, not
+    // sent, and the tile shows that state, because "sent" would be a lie until
+    // it arrives. Two delivery points (claude-bridge.js, queueFollowUp): the end
+    // of the running turn, via /api/claude/turn-end, or, for an idle session
+    // whose mod is listening, the mod, woken here so it arrives at once.
     //
-    // A session that is idle will never fire Stop again, so nothing here could
-    // deliver it. The client asks replyModeFor() first and offers a resume run
-    // instead — the same conversation, continued the only way it can be.
+    // An idle session with no mod listening will never fire Stop again, so
+    // nothing here could deliver it: it is refused (session_idle), and the tile
+    // offers a resume run instead, the same conversation continued as a run.
     try {
       const body = JSON.parse(await readBody(req));
       const sessionId = String(body && body.sessionId || '');
       if (body && body.cancel === true) { json({ ok: _claudeBridge.cancelFollowUp(sessionId) }); return; }
-      json(_claudeBridge.queueFollowUp(sessionId, String(body && body.text || '')));
+      const out = _claudeBridge.queueFollowUp(sessionId, String(body && body.text || ''));
+      if (out.ok && out.via === 'terminal') _claudeInbox.wake(sessionId);
+      json(out);
     } catch (e) { err500(e.message); }
 
   } else if (reqPath === '/api/claude/decide' && req.method === 'POST') {
@@ -16135,7 +17157,12 @@ const handleRequest = async (req, res) => {
     // CSRF-guarded rather than token-gated.
     try {
       const body = JSON.parse(await readBody(req));
-      const ok = _claudeBridge.decide(String(body && body.id || ''), body && body.behavior === 'allow' ? 'allow' : 'deny');
+      // mode/feedback only mean something for a plan card; the bridge ignores
+      // them for any other request.
+      const ok = _claudeBridge.decide(String(body && body.id || ''), body && body.behavior === 'allow' ? 'allow' : 'deny', {
+        mode: typeof (body && body.mode) === 'string' ? body.mode : '',
+        feedback: typeof (body && body.feedback) === 'string' ? body.feedback : '',
+      });
       // ok:false means the request already expired or was answered on another
       // surface — the widget tells the user rather than silently doing nothing.
       json({ ok });
@@ -16149,7 +17176,7 @@ const handleRequest = async (req, res) => {
     } catch { err500('Could not connect Claude usage. Check that Claude settings are valid and writable.'); }
 
   } else if (reqPath === '/api/claude/link' && req.method === 'GET') {
-    try { json(await claudeLink.status(DATA_DIR, PORT)); }
+    try { json(await _claudeLinkStatus()); }
     catch (e) { err500(e.message); }
 
   } else if (reqPath === '/api/claude/link' && req.method === 'POST') {
@@ -16171,8 +17198,16 @@ const handleRequest = async (req, res) => {
     // already works in. The client picks one by id — it never sends a path.
     try {
       const list = await _claudeRunner.listProjects(urlObj.searchParams.has('refresh'));
-      json({ projects: list.map(p => ({ id: p.id, name: p.name, path: p.path })) });
+      // What this Claude Code accepts for a run (permission modes, effort), so
+      // the prompt box offers only what will take effect.
+      const options = await claudeRun.cliOptions();
+      json({ projects: list.map(p => ({ id: p.id, name: p.name, path: p.path })), options });
     } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/claude/commands' && req.method === 'GET') {
+    // Names and one-line descriptions only, for the prompt box's "/" picker.
+    try { json({ commands: await _claudeCommands.list(urlObj.searchParams.get('project') || '') }); }
+    catch (e) { err500(e.message); }
 
   } else if (reqPath === '/api/claude/transcript' && req.method === 'GET') {
     // The last turns of one session, so a follow-up is not written blind. Pure
@@ -16181,8 +17216,23 @@ const handleRequest = async (req, res) => {
     try {
       const out = await claudeTranscript.readTail(
         claudeUsage.resolveProjectsDir(),
-        urlObj.searchParams.get('session') || '');
+        urlObj.searchParams.get('session') || '',
+        { full: urlObj.searchParams.get('full') === '1' });
       json(out);
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/claude/history' && req.method === 'GET') {
+    // Every chat Claude Code keeps on this PC: id, title, project name, size,
+    // last activity. Read only when the tile's Chats face asks.
+    try { json(await _claudeHistory.list()); }
+    catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/claude/history/delete' && req.method === 'POST') {
+    // Session ids only; the module resolves them against its own listing and
+    // sends the files to the Recycle Bin/Trash.
+    try {
+      const body = JSON.parse(await readBody(req));
+      json(await _claudeHistory.remove(body && body.ids));
     } catch (e) { err500(e.message); }
 
   } else if (reqPath === '/api/claude/attach' && req.method === 'POST') {
@@ -16222,6 +17272,8 @@ const handleRequest = async (req, res) => {
         projectId,
         prompt: String(body && body.prompt || ''),
         model: String(body && body.model || ''),
+        mode: String(body && body.mode || ''),
+        effort: String(body && body.effort || ''),
         resume,
       });
       json(out);
@@ -16231,6 +17283,128 @@ const handleRequest = async (req, res) => {
     try {
       const body = JSON.parse(await readBody(req));
       json({ ok: _claudeRunner.stop(String(body && body.id || '')) });
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/codex' && req.method === 'GET') {
+    // The Codex tile's whole state: account side from app-server, live side from
+    // the hooks, the link, the tile settings. `?refresh` re-reads the account
+    // side now (the tile's refresh button), skipping any read still in flight.
+    try {
+      _syncCodexDemand();
+      if (urlObj.searchParams.has('refresh')) {
+        await Promise.all(['limits', 'usage', 'threads'].map((k) => _codexApp.refresh(k).catch(() => {})));
+      }
+      json(_codexPayload());
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/codex/thread' && req.method === 'GET') {
+    // One conversation, as the tile shows it when a row is tapped: requests and
+    // final answers, cleaned of attachment paths (codex-appserver.js parseTurns).
+    // Only a thread Codex listed to us or a session its hooks reported, so this
+    // never reads an arbitrary id.
+    try {
+      const id = String(urlObj.searchParams.get('id') || '');
+      if (!/^[0-9A-Za-z-]{8,64}$/.test(id) || !(_codexApp.knowsThread(id) || _codexBridge.hasSession(id))) {
+        json({ ok: false, error: 'not_found' });
+        return;
+      }
+      json(await _codexApp.readThread(id));
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/codex/event' && req.method === 'POST') {
+    // A lifecycle hook from Codex, through codex-hook.js. 204 and no body, ever:
+    // this endpoint has no say in what Codex does.
+    if (!_codexBridgeAuth(req)) { res.writeHead(403, { 'Content-Type': 'text/plain' }); res.end('Forbidden'); return; }
+    try { _codexBridge.applyHook(JSON.parse(await readBody(req))); } catch { /* malformed: ignored */ }
+    res.writeHead(204); res.end();
+
+  } else if (reqPath === '/api/codex/permission' && req.method === 'POST') {
+    // The blocking one: Codex waits on this answer. Every path that is not an
+    // explicit tap answers `{}`, which codex-hook.js turns into "no decision"
+    // and Codex into its own prompt. This endpoint cannot approve on its own.
+    if (!_codexBridgeAuth(req)) { res.writeHead(403, { 'Content-Type': 'text/plain' }); res.end('Forbidden'); return; }
+    if (_codexCfg().approvals === false) { req.resume(); json({}); return; }
+    try {
+      const pendingReq = _codexBridge.requestPermission(JSON.parse(await readBody(req)));
+      if (!pendingReq) { json({}); return; }
+      // Codex gave up (Ctrl-C, its own timeout) and killed the hook: drop the card.
+      const onGone = () => _codexBridge.cancel(pendingReq.id);
+      res.on('close', onGone);
+      const out = await pendingReq.promise;
+      res.off('close', onGone);
+      if (res.writableEnded || res.destroyed) return;
+      json(codexBridge.toHookOutput(out));
+    } catch { try { if (!res.writableEnded && !res.destroyed) json({}); } catch { /* caller gone */ } }
+
+  } else if (reqPath === '/api/codex/decide' && req.method === 'POST') {
+    // The touchscreen answering a pending Codex request: allow, deny, or
+    // handback ("Answer in Codex": no decision, at once).
+    try {
+      const body = JSON.parse(await readBody(req));
+      const behavior = body && ['allow', 'deny', 'handback'].includes(body.behavior) ? body.behavior : '';
+      json({ ok: behavior ? _codexBridge.decide(String(body.id || ''), behavior) : false });
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/codex/link' && req.method === 'GET') {
+    try { json(await _codexLinkStatus({ fresh: urlObj.searchParams.has('fresh') })); }
+    catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/codex/link' && req.method === 'POST') {
+    // Writes Xenon's hooks into the user's Codex hooks.json (backed up first,
+    // their own hooks kept in place). Codex runs them only after the user trusts
+    // them in /hooks; the answer says whether it has, when Codex can tell us.
+    try {
+      const st = await codexLink.link(DATA_DIR, PORT);
+      _codexBridgeToken = await codexLink.ensureToken(DATA_DIR, PORT);
+      if (st.error) { json({ ok: false, ...st }); return; }
+      const fresh = await _codexLinkStatus({ fresh: true });
+      _codexChanged();
+      json({ ok: true, ...fresh });
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/codex/unlink' && req.method === 'POST') {
+    try {
+      await codexLink.unlink(DATA_DIR);
+      const st = await _codexLinkStatus({ fresh: true });
+      _codexChanged();
+      json({ ok: true, ...st });
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/chatgpt' && req.method === 'GET') {
+    // The conversation list and what is answering right now. Program status
+    // and models come from /api/ai/cli/status and /api/ai/cli/models.
+    try { await _chatgptStore.load(); json(_chatgptPayload(null)); }
+    catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/chatgpt/conversation' && req.method === 'GET') {
+    try {
+      await _chatgptStore.load();
+      const id = String(urlObj.searchParams.get('id') || '');
+      const c = chatgptAsk.isId(id) ? _chatgptStore.get(id) : null;
+      if (!c) { json({ ok: false, error: 'not_found' }); return; }
+      json({ ok: true, conversation: c });
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/chatgpt/ask' && req.method === 'POST') {
+    // Answers at once with the conversation id; the reply arrives over SSE.
+    try {
+      const body = JSON.parse(await readBody(req));
+      json(await _chatgptAsker.ask({ conversationId: body && body.conversationId, text: body && body.text }));
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/chatgpt/cancel' && req.method === 'POST') {
+    try {
+      const body = JSON.parse(await readBody(req));
+      const id = String(body && body.conversationId || '');
+      json({ ok: chatgptAsk.isId(id) && _chatgptAsker.cancel(id) });
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/chatgpt/delete' && req.method === 'POST') {
+    try {
+      const body = JSON.parse(await readBody(req));
+      if (body && body.all === true) { await _chatgptAsker.clear(); json({ ok: true }); return; }
+      const id = String(body && body.id || '');
+      json({ ok: chatgptAsk.isId(id) && await _chatgptAsker.remove(id) });
     } catch (e) { err500(e.message); }
 
   } else if (reqPath === '/api/football' && req.method === 'GET') {
@@ -16416,6 +17590,39 @@ const handleRequest = async (req, res) => {
     }
     catch (e) { err500(e.message); }
 
+  } else if (reqPath === '/stream/homeassistant/query' && req.method === 'POST') {
+    // Home Assistant READS for SDK widgets: an entity's recent history, or one
+    // camera frame. Gated per package on the `homeassistant` stream grant, and
+    // only for entities the user already selected (the same ones the stream
+    // shows that widget) — a widget can't name a lock, a person or a camera the
+    // user never chose. POST JSON, so the loopback Origin layer covers it.
+    try {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const pkgId = String(body.pkg || '');
+      if (!sdkFeatureEnabled() || !/^[a-z0-9][a-z0-9-]{1,40}$/.test(pkgId)) { json({ ok: false, error: 'not_allowed' }); return; }
+      if (!sdkGrantsFor(pkgId).streams.includes('homeassistant')) { json({ ok: false, error: 'not_allowed' }); return; }
+      const s = (await readHubSettings().catch(() => null)) || {};
+      const ha = (s && s.homeAssistant) || {};
+      if (!(ha.url && ha.token)) { json({ ok: false, error: 'not_configured' }); return; }
+      const allowed = [].concat(ha.entities || [], ha.energyEntities || []);
+      const p = (body.params && typeof body.params === 'object') ? body.params : {};
+      const release = sdkTileGate(pkgId, 'tile');
+      if (!release) { json({ ok: false, error: 'rate_limited' }); return; }
+      try {
+        if (body.op === 'history') {
+          const q = normalizeHistoryRequest(p.ids, p.hours, allowed);
+          json(q.error ? { ok: false, error: q.error } : await haQuery.history(q.ids, q.hours));
+        } else if (body.op === 'camera') {
+          json(await haQuery.cameraFrame(p.id, allowed));
+        } else {
+          json({ ok: false, error: 'bad_op' });
+        }
+      } finally { release(); }
+    } catch (e) {
+      // A fixed code: a failed HA call's message can carry the HA host and port.
+      json({ ok: false, error: e instanceof SyntaxError ? 'bad_json' : 'ha_failed' });
+    }
+
   } else if (reqPath === '/ha/deck-watch' && req.method === 'POST') {
     // A SURFACE tells the server which HA entities its deck keys are bound to;
     // the shared watch then includes the UNION across surfaces in the coalesced
@@ -16460,7 +17667,10 @@ const handleRequest = async (req, res) => {
       if (!(ha.url && ha.token)) { json({ ok: false, error: 'not_configured' }); return; }
       const entities = await deckHa.listEntities();
       json({ ok: true, entities });
-    } catch (e) { json({ ok: false, error: (e && e.message) || 'ha_failed' }); }
+    } catch (e) {
+      // A fixed code: a failed HA call's message can carry the HA host and port.
+      json({ ok: false, error: e instanceof SyntaxError ? 'bad_json' : 'ha_failed' });
+    }
 
   } else if (reqPath === '/api/homeassistant/test' && req.method === 'POST') {
     // Settings "Connect" button: verify the URL + token by opening one connection.
@@ -16504,7 +17714,10 @@ const handleRequest = async (req, res) => {
       }
       try { probe.close(); } catch (e) { /* ignore */ }
       json(Object.assign({ entities }, r));
-    } catch (e) { json({ ok: false, error: (e && e.message) || 'ha_failed' }); }
+    } catch (e) {
+      // A fixed code: a failed HA call's message can carry the HA host and port.
+      json({ ok: false, error: e instanceof SyntaxError ? 'bad_json' : 'ha_failed' });
+    }
 
   } else if (reqPath === '/api/homeassistant/service' && req.method === 'POST') {
     // Call a Home Assistant service (tile controls). POST-only, so the loopback
@@ -16514,7 +17727,10 @@ const handleRequest = async (req, res) => {
       const target = body.entityId ? { entity_id: String(body.entityId) } : null;
       const data = (body.data && typeof body.data === 'object' && !Array.isArray(body.data)) ? body.data : {};
       json(await deckHa.callService(String(body.domain || ''), String(body.service || ''), target, data, body.profile));
-    } catch (e) { json({ ok: false, error: (e && e.message) || 'ha_failed' }); }
+    } catch (e) {
+      // A fixed code: a failed HA call's message can carry the HA host and port.
+      json({ ok: false, error: e instanceof SyntaxError ? 'bad_json' : 'ha_failed' });
+    }
 
   } else if (reqPath === '/api/unifiprotect/state' && req.method === 'GET') {
     // First paint + periodic status poll for the Cameras tile: whether UniFi
@@ -17025,12 +18241,15 @@ const handleRequest = async (req, res) => {
       if (_features.genesis === true) {
         const ds = (aiBody.dashboardState && typeof aiBody.dashboardState === 'object') ? aiBody.dashboardState : null;
         const _avail = (ds && Array.isArray(ds.availableWidgets) ? ds.availableWidgets : [])
-          .filter(w => typeof w === 'string').slice(0, 32).map(w => w.slice(0, 24));
+          // 64, not 32: the list has grown past 40, and the cut fell on the
+          // newest widgets (search, disk, transfer, phone…), which the model was
+          // then never told exist.
+          .filter(w => typeof w === 'string').slice(0, 64).map(w => w.slice(0, 24));
         const _pages = (ds && Array.isArray(ds.pages) ? ds.pages : [])
           .filter(p => p && typeof p === 'object').slice(0, 8)
           .map(p => ({
             name: String(p.name || '').slice(0, 40),
-            widgets: (Array.isArray(p.widgets) ? p.widgets : []).slice(0, 32).map(w => String(w).slice(0, 24)),
+            widgets: (Array.isArray(p.widgets) ? p.widgets : []).slice(0, 64).map(w => String(w).slice(0, 24)),
           }));
         const _maxPages = (ds && Number.isFinite(ds.maxPages)) ? ds.maxPages : 8;
         AI_FUNCTIONS.push(
@@ -17060,8 +18279,8 @@ const handleRequest = async (req, res) => {
               title: { type: 'STRING', description: 'Short key label in the user\'s language (max ~12 chars)' },
               icon: { type: 'STRING', description: 'A single emoji for the key, e.g. 🎙️' },
               color: { type: 'STRING', description: 'Accent hex color for the key, e.g. #ff3b30' },
-              action: { type: 'STRING', description: 'One of: media_playpause, media_next, media_prev, play_sound, mic_toggle, volume_mute, volume_up, volume_down, app_mixer, app_volume_up, app_volume_down, app_mute, ai_voice, ai_chat, ai_prompt, lighting_color, open_app, open_file, open_store_app, open_url, hotkey, webhook, obs_record, obs_stream, obs_scene, obs_scene_next, twitch_clip, twitch_marker, twitch_ad, twitch_title, twitch_game, twitch_chat, twitch_shoutout, twitch_chatmode, yt_broadcast, sb_action, remote_disconnect, remote_block, remote_screen_cycle' },
-              value: { type: 'STRING', description: 'Action parameter when needed: prompt text for ai_prompt; hex color for lighting_color; URL for open_url/webhook; app path for open_app/open_file; key combo for hotkey (e.g. "ctrl+shift+m"); scene name for obs_scene; app name for app_volume_up/down and app_mute; new title/game/message/login for twitch_title/twitch_game/twitch_chat/twitch_shoutout. Omit otherwise.' },
+              action: { type: 'STRING', description: 'One of: media_playpause, media_next, media_prev, play_sound, mic_toggle, volume_mute, volume_up, volume_down, app_mixer, app_volume_up, app_volume_down, app_mute, ai_voice, ai_chat, ai_prompt, lighting_color, open_app, open_file, open_store_app, open_url, hotkey, webhook, dashboard_page, obs_record, obs_stream, obs_scene, obs_scene_next, twitch_clip, twitch_marker, twitch_ad, twitch_title, twitch_game, twitch_chat, twitch_shoutout, twitch_chatmode, yt_broadcast, sb_action, remote_disconnect, remote_block, remote_screen_cycle' },
+              value: { type: 'STRING', description: 'Action parameter when needed: prompt text for ai_prompt; hex color for lighting_color; URL for open_url/webhook; app path for open_app/open_file; key combo for hotkey (e.g. "ctrl+shift+m"); a page name or next/prev/back for dashboard_page; scene name for obs_scene; app name for app_volume_up/down and app_mute; new title/game/message/login for twitch_title/twitch_game/twitch_chat/twitch_shoutout. Omit otherwise.' },
               ledColor: { type: 'STRING', description: 'Optional hex color: flashes the RGB lighting when the key fires. Use on the most important keys.' },
             }, required: ['title', 'icon', 'action'] } },
           }, required: ['profile', 'keys'] } },
@@ -18751,8 +19970,42 @@ const handleRequest = async (req, res) => {
         disable = rawDisable ? JSON.parse(rawDisable) : undefined;
         if (disable && typeof disable !== 'object') disable = undefined;
       } catch { disable = undefined; }
-      json(await fileSearch.search(q, { disable }));
+      // The dashboard is answered from the index at once (Windows Search gets
+      // a short head start) and collects the catalog's rows with ?catalog=1.
+      json(urlObj.searchParams.get('catalog') === '1'
+        ? await fileSearch.catalog(q, { disable })
+        : await fileSearch.search(q, { disable, catalogWaitMs: 300 }));
     } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/search/recent' && req.method === 'GET') {
+    // What the empty search shows: files and folders recently opened from
+    // Xenon, re-checked to exist, each with an opaque id. Read-only, from the
+    // usage log in DATA_DIR. The Search TILE asks only when its setting is on.
+    try { json(await fileSearch.recent({ max: 8 })); } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/search/thumb' && req.method === 'GET') {
+    // The preview of an image result, by opaque id. Raster types only, bounded,
+    // served as the image it is with nosniff and a sandboxing CSP, never from a
+    // cross-site request (the transfer thumbnail's shape).
+    if (String(req.headers['sec-fetch-site'] || '').toLowerCase() === 'cross-site') {
+      res.writeHead(403); res.end(); return;
+    }
+    try {
+      const target = await fileSearch.thumbTarget(urlObj.searchParams.get('id'));
+      if (!target) { res.writeHead(404); res.end(); return; }
+      const body = await fs.promises.readFile(target.path);
+      const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', avif: 'image/avif' };
+      res.writeHead(200, {
+        'Content-Type': MIME[target.ext] || 'application/octet-stream',
+        'Content-Length': String(body.length),
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'; sandbox",
+        'Cache-Control': 'private, max-age=300',
+      });
+      res.end(body);
+    } catch (e) {
+      if (e && e.code === 'ENOENT') { res.writeHead(404); res.end(); } else err500(e.message);
+    }
 
   } else if (reqPath === '/search/open' && req.method === 'POST') {
     // Open one search result. The body carries an opaque id minted by the
@@ -18786,7 +20039,9 @@ const handleRequest = async (req, res) => {
       let extractPath = null;
       if (target && target.app) {
         if (target.kind === 'store') icon = await resolveStoreAppIcon(target.target);
-        else extractPath = target.target;
+        // A Start Menu shortcut has an embedded icon to extract; a macOS bundle
+        // or a .desktop entry does not go through the Windows extractor.
+        else if (target.kind === 'lnk') extractPath = target.target;
       } else if (target && (target.ext === 'exe' || target.ext === 'lnk')) {
         extractPath = target.path;
       }
@@ -19004,6 +20259,8 @@ const handleRequest = async (req, res) => {
       json({
         ...(await diskSpace.status()),
         fdaBlocked: process.platform === 'darwin' && !_macFdaGranted && _macFdaBlockedRoots.length > 0,
+        // The helper download exists on Windows only (POST /audio/levels/install-helper).
+        canInstallHelper: process.platform === 'win32',
       });
     } catch (e) { err500(e.message); }
 
@@ -19011,8 +20268,21 @@ const handleRequest = async (req, res) => {
     // Per-root live overview (Living-Index path): ?i=N indexes the configured
     // roots — the wire never carries a path (Slideshow shape). Read-only
     // compute over the in-RAM index; ?refresh=1 skips the 30s cache.
+    // ?stale=1 answers the last persisted overview instead (display only, no
+    // ids): what the widget shows while the index rebuilds after a restart.
     try {
-      json(await diskSpace.overview(urlObj.searchParams.get('i'), urlObj.searchParams.get('refresh') === '1'));
+      const i = urlObj.searchParams.get('i');
+      json(urlObj.searchParams.get('stale') === '1'
+        ? await diskSpace.snapshot(i)
+        : await diskSpace.overview(i, urlObj.searchParams.get('refresh') === '1'));
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/disk/reveal' && req.method === 'POST') {
+    // "Show in folder" for a file or folder of the current disk overview, by
+    // the opaque id it minted. Reveals, never opens: it runs nothing.
+    try {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      json(await diskSpace.reveal(body.i, body.id));
     } catch (e) { err500(e.message); }
 
   } else if (reqPath === '/disk/browse' && req.method === 'GET') {
@@ -19145,6 +20415,129 @@ const handleRequest = async (req, res) => {
     // Stop a running cleanup after the current batch (never mid-move). In
     // CSRF_MUTATION_PATHS.
     try { json(diskSpace.cancelClean()); } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/lyrics' && req.method === 'GET') {
+    // Lyrics for the song playing now. No parameters: the server reads its own
+    // media session, so nothing from the page reaches the LRCLIB query. Kept
+    // out of /media/ on purpose: that prefix is JSONP-readable by any site.
+    try { json(await getCurrentLyrics()); }
+    catch (e) { json({ ok: false, state: 'error', error: String((e && e.message) || e) }); }
+
+  } else if (reqPath === '/api/features/lyrics' && req.method === 'GET') {
+    // Is the supporter-only Lyrics widget usable on this install? `unlocked`
+    // covers a running trial too; `owned`, `trialEndsAt` and `trialAvailable`
+    // tell the tile which of the two it is. The lyrics themselves stay free:
+    // the Media tile's button reads them too.
+    try { json({ ok: true, ...(await featureUnlock.status('lyrics')) }); } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/features/lyrics/trial' && req.method === 'POST') {
+    // Starts the one-week trial, once per install. No hub call, no code. In
+    // CSRF_MUTATION_PATHS; a paired phone may start it like any tile action.
+    try { json(await featureUnlock.startTrial('lyrics')); } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/features/lyrics/unlock' && req.method === 'POST') {
+    // One /redeem against the hub's `feature-lyrics` entry, with the saved pass
+    // (or a code typed in the tile). In CSRF_MUTATION_PATHS + REMOTE_ADMIN.
+    try {
+      const body = JSON.parse(await readBody(req) || '{}');
+      json(await featureUnlock.unlock('lyrics', typeof body.code === 'string' ? body.code : ''));
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/lyrics/offset' && req.method === 'POST') {
+    // Supporter widget: this song's own timing, { key, ms } (0 = back to the
+    // global one). Only for the song playing now. In CSRF_MUTATION_PATHS.
+    try {
+      if (!(await featureUnlock.isUnlocked('lyrics'))) { json({ ok: false, error: 'locked' }); return; }
+      const body = JSON.parse(await readBody(req) || '{}');
+      const playing = await lyricsForPlayingKey(body.key);
+      if (playing.status !== 200) { json({ ok: false, error: 'stale' }); return; }
+      const ms = await lyricsOffsets.set(body.key, body.ms);
+      json(ms === null ? { ok: false, error: 'bad_value' } : { ok: true, offsetMs: ms });
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/lyrics/translate' && req.method === 'POST') {
+    // Supporter widget: translation and reading of the song playing now,
+    // { key, lang, cachedOnly }. The lines come from the server's own lyrics
+    // cache, never from the request. A request to the user's AI provider is made
+    // only when they turned translation on, under the monthly cap, once per
+    // song (lyrics-translator.js). In CSRF_MUTATION_PATHS.
+    try {
+      if (!(await featureUnlock.isUnlocked('lyrics'))) { json({ ok: false, error: 'locked' }); return; }
+      const blocker = await lyricsTranslateBlocker();
+      if (blocker) { json({ ok: false, error: blocker }); return; }
+      const body = JSON.parse(await readBody(req) || '{}');
+      const playing = await lyricsForPlayingKey(body.key);
+      if (playing.status !== 200) { json({ ok: false, error: 'stale' }); return; }
+      const texts = lyricsTexts(playing.entry);
+      if (!texts) { json({ ok: false, error: 'no_lyrics' }); return; }
+      json(await lyricsTranslator.translate({
+        songKey: body.key, texts, lang: String(body.lang || '').slice(0, 5),
+        reading: _serverHubSettings.lyricsReading !== false,
+        cap: _serverHubSettings.lyricsTranslateCap, cachedOnly: body.cachedOnly === true,
+      }));
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/lyrics/translate/usage' && req.method === 'GET') {
+    // This month's translated songs and tokens, for the counter in the widget,
+    // with what 100 songs cost on the model translation runs on. The model id
+    // only, never a key.
+    try {
+      const settings = await readHubSettings().catch(() => null) || {};
+      const model = await lyricsTranslationModel(aiLocal.sanitizeProvider(settings.aiProvider), settings);
+      await lyricsPrices.refresh(); // the published price table, at most every 12 h
+      json({ ok: true, ...(await lyricsTranslator.usage(_serverHubSettings.lyricsTranslateCap, model)) });
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/features/devclean' && req.method === 'GET') {
+    // Is the supporter-only Dev cleanup unlocked on this install? A boolean.
+    try { json({ ok: true, unlocked: await featureUnlock.isUnlocked('devclean') }); } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/features/devclean/preview' && req.method === 'GET') {
+    // What the locked tile shows a non-supporter: this PC's own numbers, the
+    // same names-free summary the SDK's devStorage stream carries for free.
+    // Pulled only while the tile is on screen.
+    try { json({ ok: true, ...(await devClean.summary()) }); }
+    catch (e) { json({ ok: false, error: String((e && e.message) || e) }); }
+
+  } else if (reqPath === '/api/features/devclean/unlock' && req.method === 'POST') {
+    // One /redeem against the hub's `feature-devclean` entry, with the saved
+    // pass (or a code typed in the tile). In CSRF_MUTATION_PATHS + REMOTE_ADMIN.
+    try {
+      const body = JSON.parse(await readBody(req) || '{}');
+      json(await featureUnlock.unlock('devclean', typeof body.code === 'string' ? body.code : ''));
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath.startsWith('/api/devclean/') && !(await featureUnlock.isUnlocked('devclean'))) {
+    // The gate lives here, not only in the tile: every Dev cleanup route
+    // refuses until the feature is unlocked.
+    res.writeHead(403, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ ok: false, error: 'locked' }));
+
+  } else if (reqPath === '/api/devclean/overview' && req.method === 'GET') {
+    // Read-only: sizes per source with opaque item ids. Runs the docker/reg
+    // CLIs and reads Ollama's /api/tags, only when the tile asks (15s cache;
+    // ?refresh=1 skips it).
+    try { json({ ok: true, ...(await devClean.overview({ refresh: urlObj.searchParams.get('refresh') === '1' })) }); }
+    catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/devclean/run' && req.method === 'POST') {
+    // { source: docker|ollama|vscode, ids: [...] } — ids from the overview,
+    // never paths or names. A background job; progress on SSE 'devclean'.
+    // In CSRF_MUTATION_PATHS.
+    try {
+      const body = JSON.parse(await readBody(req) || '{}');
+      json(await devClean.runClean(String(body.source || ''), body.ids));
+    } catch (e) { err500(e.message); }
+
+  } else if (reqPath === '/api/devclean/compact' && req.method === 'POST') {
+    // Compact one WSL/Docker .vhdx (Windows). Starts compact-vhdx.ps1, which
+    // raises the UAC prompt and re-validates the disk itself; the item id is
+    // the only input. In CSRF_MUTATION_PATHS + REMOTE_ADMIN: never from a
+    // paired device.
+    try {
+      const body = JSON.parse(await readBody(req) || '{}');
+      json(await devClean.compact(String(body.id || '')));
+    } catch (e) { err500(e.message); }
 
   } else if (reqPath === '/api/transfer/upload' && req.method === 'POST') {
     // Like /media/local/import, stream this large request body straight to disk.
@@ -19559,7 +20952,9 @@ const handleRequest = async (req, res) => {
     // the same reason the YouTube search is.
     try {
       const body = JSON.parse(await readBody(req) || '{}');
-      json(await streamTwitch.searchChannels(body.q));
+      // The dashboard's language picks which live streams are read for title and
+      // tag matches (see searchChannels); it is re-validated there.
+      json(await streamTwitch.searchChannels(body.q, { language: body.lang }));
     } catch (e) { err500(e.message); }
 
   } else if (reqPath === '/stream/twitch/chat/send' && req.method === 'POST') {
@@ -20951,7 +22346,8 @@ const handleRequest = async (req, res) => {
     refreshWinNotifWatch();
     refreshWakeWordWatch();
     refreshAudioLevelsWatch();
-    req.on('close', () => { sseClients.delete(res); if (sseClients.size === 0) obsLocalWanted = false; _syncFpsMonitor(); refreshObsWatch(); refreshDiscordWatch(); refreshHaWatch(); refreshSbWatch(); refreshWlWatch(); refreshVoicemeeterWatch(); refreshUnifiEventsWatch(); refreshWinNotifWatch(); refreshWakeWordWatch(); refreshAudioLevelsWatch(); });
+    _syncCodexDemand();
+    req.on('close', () => { sseClients.delete(res); if (sseClients.size === 0) obsLocalWanted = false; _syncFpsMonitor(); refreshObsWatch(); refreshDiscordWatch(); refreshHaWatch(); refreshSbWatch(); refreshWlWatch(); refreshVoicemeeterWatch(); refreshUnifiEventsWatch(); refreshWinNotifWatch(); refreshWakeWordWatch(); refreshAudioLevelsWatch(); _syncCodexDemand(); });
 
     // A dashboard is open, which is what "a day of use" means — see noteUsageDay.
     noteUsageDay();
@@ -21002,7 +22398,11 @@ const handleRequest = async (req, res) => {
     // so without this it sits on "Looking for devices…" for up to a minute and a
     // half after every reload. getDevices() is TTL-cached and dedups concurrent
     // callers, so several surfaces connecting at once still cost one read.
-    batteryMonitor.getDevices().then((payload) => { try { res.write(`event: battery\ndata: ${JSON.stringify(payload)}\n\n`); } catch (e) { /* ignore */ } }).catch(() => {});
+    // Gated like the tick: nothing that shows a battery, nothing to seed.
+    batteryWanted()
+      .then((wanted) => (wanted ? batteryMonitor.getDevices() : null))
+      .then((payload) => { if (payload) { try { res.write(`event: battery\ndata: ${JSON.stringify(payload)}\n\n`); } catch (e) { /* ignore */ } } })
+      .catch(() => {});
     // Seed the current stock quotes (paint immediately), then kick a refresh if
     // the cache is empty/stale so a freshly opened dashboard fills in fast.
     try { if (_stocksCache.quotes.length) res.write(`event: stocks\ndata: ${JSON.stringify(_stocksCache)}\n\n`); } catch (e) { /* ignore */ }
@@ -21018,6 +22418,9 @@ const handleRequest = async (req, res) => {
     // (display-only feed: only when the widget is on the dashboard).
     try { res.write(`event: claude\ndata: ${JSON.stringify(_claudeFresh())}\n\n`); } catch (e) { /* ignore */ }
     if (_feedWidgetInUse('claude') && (!_claudeCache.data || Date.now() - _claudeCache.refreshedAt > 5 * 60 * 1000)) refreshClaude().catch(() => {});
+    // Seed the Codex state (live approvals included, so a card waiting before this
+    // dashboard opened is drawn at once).
+    try { res.write(`event: codex\ndata: ${JSON.stringify(_codexPayload())}\n\n`); } catch (e) { /* ignore */ }
     // Seed the SDK data-only streams (tasks/notes/agenda) for custom widgets.
     // Unlike system/media/audio/status these are broadcast ONLY on change, so a
     // sandboxed widget subscribing to one (it can't fetch) would paint nothing
@@ -21434,6 +22837,7 @@ async function refreshStartupTaskState() {
 }
 
 const HELPER_CHECK_MARKER = path.join(DATA_DIR, 'helper-checked.txt');
+let _helperInstall = null;   // one Settings install at a time; a second tap waits on the first
 const HELPER_REFRESH_MAX_TRIES = 6;             // in-session retries before falling back to next boot
 const HELPER_REFRESH_RETRY_MS = 3 * 60 * 1000;  // 3 min apart → ~15 min of coverage after the first try
 function ensureHelperUpToDate(attempt = 1) {
@@ -21527,6 +22931,9 @@ function _startListen(host) {
     // Refresh an outdated native helper left behind by an in-app self-update. Delayed
     // and fire-and-forget so it never competes with boot; runs at most once per version.
     setTimeout(() => { try { ensureHelperUpToDate(); } catch { /* ignore */ } }, 8000);
+    // Its first look is two minutes in: the dashboard's own startup comes first.
+    autoUpdater.start().catch((e) => console.warn('[auto-update] start failed:', e && e.message));
+    widgetAutoUpdater.start().catch((e) => console.warn('[widget-auto-update] start failed:', e && e.message));
     // The logon task that opens the dashboard in a browser outlives the script it
     // points at, and a stale one greets the user with a wscript error box at every
     // sign-in (see reconcileBrowserAutoOpenTask). Delayed and fire-and-forget: it
@@ -21954,10 +23361,24 @@ async function _systemTick() {
 // Peripheral battery moves on a minutes scale and its sources are relatively
 // expensive (iCUE SDK round-trips + a Bluetooth PnP scan), so it gets its own
 // slow tick with a change-dedup instead of riding the 7s system broadcast.
+// Each read is a PowerShell spawn sweeping every PnP device (~2 s of CPU) plus iCUE
+// round-trips, so it runs only while something can show the result: the Battery
+// widget on the dashboard, a Deck key bound to `battery:<device>`, or a widget
+// granted the `battery` stream. GET /api/battery and the AI tool still read on
+// demand. Like _feedWidgetInUse, any unexpected shape fails OPEN.
+async function batteryWanted() {
+  if (_feedWidgetInUse('battery') || sdkStreamGranted('battery')) return true;
+  try {
+    const store = await readDeckStore();
+    return JSON.stringify(store.configs).includes('"battery:');
+  } catch { return true; }
+}
+
 let _lastBatteryJson = '';
 setInterval(async () => {
   if (sseClients.size === 0) return;
   try {
+    if (!(await batteryWanted())) return;
     const payload = await batteryMonitor.getDevices();
     const j = JSON.stringify(payload);
     if (j === _lastBatteryJson) return;
@@ -21992,13 +23413,7 @@ const AUDIO_WATCH_WINDOW_MS = 120000;
 let _audioWatchedAt = 0;
 function _noteAudioWatched() { _audioWatchedAt = Date.now(); }
 function audioPollWanted() {
-  const sw = _serverHubSettings && _serverHubSettings.sdkWidgets;
-  const grants = sw && sw.grants && typeof sw.grants === 'object' ? sw.grants : null;
-  if (grants) {
-    for (const pkgId of Object.keys(grants)) {
-      if (sdkGrantsFor(pkgId).streams.includes('audio')) return true;
-    }
-  }
+  if (sdkStreamGranted('audio')) return true;
   return Date.now() - _audioWatchedAt < AUDIO_WATCH_WINDOW_MS;
 }
 let _lastAudioJson = '';
@@ -22081,6 +23496,9 @@ process.on('uncaughtException', (err) => {
 // exiting. A 3-second safety timeout force-exits if connections drain slowly.
 function _gracefulShutdown() {
   _shuttingDown = true;
+  // No countdown or install may start while this process is going away.
+  try { autoUpdater.stop(); } catch {}
+  try { widgetAutoUpdater.stop(); } catch {}
   // Flush a pending (debounced) lighting persist so the last change survives.
   // The promise is awaited by the exit path below — firing it and exiting
   // immediately could kill the process mid write-fsync-rename.
@@ -22094,6 +23512,10 @@ function _gracefulShutdown() {
   // tokens are already on disk — but a shutdown should not lose the last hour
   // of "when did my phone last connect".
   try { shutdownFlush = shutdownFlush.then(() => remoteAccess.flush()).catch(() => {}); } catch {}
+  // Write the debounced lyrics cache now rather than lose the last few songs.
+  try { shutdownFlush = shutdownFlush.then(() => lyricsCache.flush()).catch(() => {}); } catch {}
+  try { shutdownFlush = shutdownFlush.then(() => lyricsOffsets.flush()).catch(() => {}); } catch {}
+  try { shutdownFlush = shutdownFlush.then(() => lyricsTranslator.flush()).catch(() => {}); } catch {}
   // The T2 listener holds its own sockets — including SSE streams, which never
   // end on their own — and the process would not exit with them open.
   try { shutdownFlush = shutdownFlush.then(() => remoteHttps.stop()).catch(() => {}); } catch {}
@@ -22136,12 +23558,21 @@ function _gracefulShutdown() {
   // Settle every pending Claude Code permission request. These are HTTP requests
   // the `claude` process is actively blocked on — exiting without answering would
   // leave each of them hanging until their own 600s hook timeout expires.
+  // The mod's held inbox requests too, for the same reason.
+  try { _claudeInbox.stop(); } catch {}
   try { _claudeBridge.stop(); } catch {}
   try { if (_claudeRegistryTimer) { clearInterval(_claudeRegistryTimer); _claudeRegistryTimer = null; } } catch {}
   // Runs the dashboard started are children with no job object: exiting without
   // this orphans a `claude` process (and the tool processes it spawned) with no
   // terminal attached to stop it.
   try { _claudeRunner.stopAll(); } catch {}
+  // Codex: settle every approval codex-hook.js is blocked on (each would
+  // otherwise hold Codex for the rest of its hook timeout), and stop the
+  // app-server child, which has no job object to die with us.
+  try { _codexBridge.stop(); } catch {}
+  try { _codexApp.stop(); } catch {}
+  // Ask ChatGPT turns are codex children with no job object: kill them.
+  try { _chatgptAsker.stopAll(); } catch {}
   // Kill any in-flight STT recorder: unlike the other children it has no stop
   // module, so Ctrl+C mid-recording would orphan an ffmpeg that keeps the mic
   // device open — blocking the wake word after restart.
@@ -22182,6 +23613,7 @@ function _gracefulShutdown() {
   try { shutdownFlush = Promise.all([shutdownFlush, Promise.resolve(fileSearch.stop()).catch(() => {})]); } catch {}
   // Stop a running disk scan (the helper child has no job object).
   try { diskSpace.stop(); } catch {}
+  try { devClean.stop(); } catch {}
   // Stop the Living Index host (in-RAM index + watchers).
   try { livingIndex.stop(); } catch {}
   // Unregister the global Spotlight hotkey (and cancel a pending respawn, so a

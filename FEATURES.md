@@ -27,6 +27,7 @@ The complete guide to everything Xenon can do. For installation see **[README.md
 - [Notes](#notes)
 - [Local search (Spotlight)](#local-search-spotlight)
 - [Disk space](#disk-space)
+- [Developer cleanup](#developer-cleanup)
 - [Phone access (Accesso dal telefono)](#phone-access-accesso-dal-telefono)
 - [Phone (Telefono)](#phone-telefono)
 - [File transfer (Trasferimento file)](#file-transfer-trasferimento-file)
@@ -35,7 +36,9 @@ The complete guide to everything Xenon can do. For installation see **[README.md
 - [Weather](#weather)
 - [Stocks (Borsa)](#stocks-borsa)
 - [Football (Calcio)](#football-calcio)
-- [Claude Code usage](#claude-code-usage)
+- [Claude Code](#claude-code)
+- [Codex](#codex)
+- [Ask ChatGPT](#ask-chatgpt)
 - [News](#news)
 - [Vitals](#vitals)
 - [Ambient mode (screensaver)](#ambient-mode-screensaver)
@@ -153,7 +156,7 @@ Customization goes deeper too: the individual **System cards** (CPU, GPU, RAM, D
 The dashboard is now a **platform**: third parties (and you) can build widgets for it. A widget is just a small folder — a `manifest.json` plus an HTML page — dropped into `server/data/widgets`.
 
 - **Make your own — no code required.** A **"Create a widget"** wizard builds a real widget from a template without writing anything: pick **Clock**, **System monitor** (CPU/RAM/GPU as bars or rings), **Now playing**, **Label** or **Countdown**, adjust a few options (title, colour, font, which metrics…), watch a **live preview** update as you go, and install it with one tap. Widgets you make can be reopened and re-tweaked later. You're only filling in options, so there's no arbitrary code — the created widget runs under the exact same sandbox and permission rules as any other.
-- **Add one in seconds.** Enable the feature in **Settings → Widgets & sharing**, add the **Custom widget** tile from the "+" palette, and pick which installed widget it shows. You can add several Custom widget tiles, each hosting a different community widget. A built-in **"Install example"** button sets up a working reference widget (live clock, CPU/GPU/RAM readout, media keys) with one tap.
+- **Add one in seconds.** Every installed widget is an item of its own in the "+" panel and in "Add as tab", with its name and icon, in its group (Productivity, Media, System, Streaming) and under the **Installed** filter. Pick it and it is on the page; its permissions are asked the first time. Installing a widget also offers **Add to this page** right away. You can add the same widget more than once, and several different ones. Under **Installed** the panel also lists the bundled examples you have not installed yet, including the reference widget (live clock, CPU/GPU/RAM readout, media keys): one tap installs it and puts it on the page.
 - **Sandboxed and permission-gated by design.** Community widgets run in an isolated sandbox with **no network access and no reach into the dashboard** — they can't call the internet, read your settings, or touch anything outside their own tile. Everything goes through a small, versioned **message bridge**: a widget only *sees* the data streams you approve (system sensors, now playing, volume, status) and can only *do* the low-risk actions you allow (media keys, volume, mic mute, lighting, open a link), each re-checked by the server like a Deck key. Before a widget first renders, a clear **permission dialog** shows exactly what it requested — with a reminder to only install widgets from people you trust. Everything is off by default.
 - **Artwork a widget keeps, instead of re-downloading.** Widgets that show album covers, game art or video thumbnails can hand them to a picture element directly, and Xenon keeps the ones worth keeping on disk so they are still there after a restart. The address must be one the widget declared and you approved, exactly as before — this changes where an image is kept, never what a widget may reach. It stays a cache and not a hoard: bounded per widget and in total, oldest-unused thrown out first and really deleted, re-checked after a week, and removed entirely when you uninstall the widget.
 - **The numbers a monitoring widget actually needs.** The system data a widget can be granted carries the **CPU clock**, the **GPU core and memory clocks** and the **frames per second** in the game you are playing, alongside the temperatures, fan RPM, power draw and load it already had. Requested by a widget author who had run out of readings to draw. No extra permission: a widget you have already allowed to see system data gets them, one you have not still sees nothing. They cost nothing either — each rides a reading Xenon was already taking on the same tick, so a dashboard showing them does no more work than one that does not.
@@ -567,6 +570,20 @@ Know what is eating your drive — live, with **no scan button**. Add the **Disk
 
 ---
 
+## Developer cleanup
+
+For supporters. On a development PC most of a full drive is not in your files, and the Disk space tile cannot see it: Docker images and build cache, local AI models, editor folders for projects deleted long ago, and the WSL and Docker virtual disks, which grow and never shrink by themselves. Add **Developer cleanup** from the **"+" → System** palette.
+
+- **Unlocked once with your supporter pass, for good.** The tile uses the supporter pass saved in Settings; once unlocked it stays unlocked on that PC, even after the pass ends. Without it the tile says what it does and how to unlock it. The lock is enforced by the server, not only by the tile.
+- **Docker.** Shows images and build cache from `docker system df` and removes what no container uses with Docker's own `image prune -a` and `builder prune`. Images in use, containers and volumes are not touched. If Docker is not installed or its engine is off, the card says so.
+- **Ollama models.** Lists the installed models to pick from and removes them through Ollama itself. The model Xenon's own AI uses, and its fallback, are shown but cannot be selected.
+- **Editor folders.** VS Code, VS Code Insiders, Cursor and VSCodium keep a folder of local state for every project ever opened. Only the folders whose project no longer exists on disk are offered (a remote, WSL or SSH project, a network path or a drive that is not plugged in is never counted as deleted), and they go to the Recycle Bin or Trash.
+- **Virtual disks (Windows).** Lists Docker's `docker_data.vhdx` and each WSL distribution's `ext4.vhdx` with their size. A disk of 10 GB or more gets **Compact**: Windows asks for administrator permission, Xenon closes Docker and WSL and shrinks the file with diskpart, then reports how much came back. Declining the prompt cancels it and nothing changes. It is not available from a paired phone.
+- **Widgets get the numbers, never the actions.** The `devStorage` SDK stream carries how much space each source holds and how much could be freed, with no names or paths, and it is open to every widget. Nothing in the SDK can delete or compact.
+- Fully localised in all 11 languages.
+
+---
+
 ## Phone access (Accesso dal telefono)
 
 > **Beta in v4.11.0.** It works, and it is new. Settings says so where you turn it on.
@@ -698,16 +715,41 @@ Follow your football clubs right on the dashboard. Add the **Calcio** tile from 
 - **Ask Xenon** — "how did Napoli do", "when does Inter play next", "read me the Serie A table", by voice or text.
 - Deliberately light: no new dependencies, crests loaded lazily with an initials fallback, data fetched only while a dashboard is open and streamed over the live channel. The tile adapts to its own size (the hero steps aside on a short layout, the form column on a narrow one), so it works on a phone and on the Edge. Fully localised (EN/IT/KO/JA/ZH/NL).
 
-## Claude Code usage
+## Claude Code
 
-If you use **Claude Code** on your PC, this tile turns your token consumption into a living reactor. Add the **Claude Code** tile from the **"+" → System** palette.
+If you use **Claude Code** on your PC, this tile shows what your sessions are doing, answers them, and keeps your quota in view. Add the **Claude Code** tile from the **"+" → System** palette, then press **Connect Claude Code** on it. Token counts work before you connect; the real quota, exact session state, approvals and questions need the connection.
 
-- **A model-tinted plasma reactor** — a glowing core that takes the colour of the model you're running right now (Opus, Sonnet, Haiku or a frontier model), with particles streaming into it and a live pulse while Claude is actually working.
-- **The numbers that matter** — tokens used **today** and **this week**, your **cache-hit rate** (how much of your input was served cheaply from cache), and the **equivalent API value** of everything you've run.
-- **Every running session, live** — if several Claude Code sessions are open at once, each shows as its own row with the project · git branch, the model, and **what it's working on** (its last prompt). Particles in the reactor take each session's model colour, so several instances feeding the core show as several colours.
-- **A weekly budget you set** — there is no official way to query a plan's remaining quota, so the reactor's "remaining" ring is one you choose: tap the reactor and pick a plan estimate (**Pro / Max 5× / Max 20×**) or type your own weekly token ceiling; leave it on **Auto** to instead charge the core with the week's activity against its own recent peak. It's an estimate you can tune any time.
-- **Grows with the tile** — small, it's the reactor and four headline numbers; taller, it fills in a **30-day history** (cache-served tokens stacked under fresh ones), a **per-project split** and a **per-model split**.
-- **100% local & private** — read straight from Claude Code's own session files (`~/.claude`): no account, no API key, nothing ever leaves your PC, and it works on every plan even offline. The reading is throttled and only re-scans the active session, and the reactor pauses its animation off-screen and respects "reduce motion". No new dependencies. Fully localised (EN/IT/KO/JA/ZH).
+- **Requests first** — when Claude Code asks permission to run a command or change a file, the card sits at the top of the tile with the exact command and **Allow** / **Deny**, and says what the request would reach: publishing your work (`git push`, `npm publish`), the network, a file outside the project folder, or something that cannot be undone. Those last ones take over the screen at once and are allowed by **holding** the button. Any request left for 25 seconds takes over the screen too; nothing is approved for you, and after nine minutes it goes back to the terminal.
+- **Questions from Claude** — a multiple-choice question appears with its options as buttons; your pick reaches the session and Claude carries on. **In the terminal** hands it back.
+- **Live** — a row for each session: its state (working, waiting for you, idle), the step it is on and for how long, its tool calls over the last ten minutes, its own plan, how full its context is, the sub-agents running and the lines it changed. Tap a row to read the conversation or send a follow-up.
+- **The real quota** — the 5-hour and 7-day windows of a Pro or Max plan, each with a countdown to its reset, a mark where an even pace would be now, and one sentence saying where the current pace ends. On an API key the tile measures a weekly budget you set instead.
+- **Usage** — the last 30 days: today, since Monday, the total, the share read from cache and the value at API list prices, a column for each day, and the split by project and by model.
+- **Ask and Deck keys** — start Claude Code in one of your projects from the tile or from a Deck key, and stop a run from the dashboard.
+- **The Xenon mod** — pressing **Connect Claude Code** also asks Claude Code to install a small mod from this project's GitHub page, at its next start. It adds each sub-agent's model to the tile, updates the context gauge and the limits the moment they change, and gives Claude Code a `/xenon` command that says whether Xenon hears the session, without using tokens. Under the prompt a line appears only when something needs you: Xenon closed or not linked, or an approval waiting on the dashboard. It sends numbers, model names and agent ids, never what you type or the content of your files. An option, off by default, also shows permission requests as cards on the dashboard for a wait you set (30 seconds unless changed); with no tap the terminal asks as usual, and a command longer than 800 characters is never sent. It needs a Claude Code that supports mods. To install by hand: `/plugin install xenon --marketplace marcimastro98/Xenon`. Disconnecting removes it.
+- **Local** — usage is read from Claude Code's own session files in `~/.claude`; live state arrives from Claude Code's hooks and status line on `127.0.0.1`, each report carrying a key Xenon created. Connecting backs up your `settings.json` first and keeps a status line you already had. Fully localised (11 languages).
+
+---
+
+## Codex
+
+If you use **OpenAI Codex**, in the ChatGPT desktop app, the Codex extension for your editor or the `codex` command, this tile shows your plan and the sessions working on this PC. Add the **Codex** tile from the **"+" → System** palette. The plan side works as soon as Codex is installed and signed in; sessions and approvals need **Codex → Connect** on the tile, then trusting the Xenon hooks once in Codex with `/hooks`.
+
+- **Requests first** — when a Codex session asks to run a command or change files, the card sits at the top of the tile with the command, or the list of files with the deletes marked, and **Allow**, **Deny** or **Answer in Codex**. It says what makes the request unusual (the network, publishing, outside the project, more access than the session has, or something that cannot be undone); a request that cannot be undone is allowed by **holding** the key. A request left for 25 seconds takes over the screen. While it waits here Codex shows no prompt of its own, so after 90 seconds it goes back to Codex (Settings → Codex). Nothing is approved for you.
+- **Plan usage** — the usage windows Codex reports for your plan, labelled by their real length (5 hours and a week on a paid plan, one 30-day window on Free), each with the time to its reset and a mark where an even pace would be now, plus credits when your plan has them.
+- **Live** — a row for each session the hooks report (what you asked, the model, working or waiting for you) and the conversations Codex lists, with where they ran: the ChatGPT app, the terminal or the editor.
+- **Usage** — tokens today, over 7 and 30 days and in total, and a column for each of the last 30 days. The numbers are your whole account's, as Codex reports them.
+- **How it works** — the plan side comes from `codex app-server`, the program the ChatGPT app and the editor extension use to talk to Codex, which Xenon runs only while the tile is on a dashboard and closes when it is not needed. The live side comes from five hooks in `~/.codex/hooks.json`, which run a small script on this PC and report to `127.0.0.1` with a key Xenon created. Connecting backs up `hooks.json` first and leaves your own hooks as they are; Xenon never marks a hook trusted for you. Fully localised (11 languages).
+
+---
+
+## Ask ChatGPT
+
+A chat tile answered by your own **ChatGPT plan**, without an API key. Add **Ask ChatGPT** from the **"+" → Media** palette.
+
+- **How it answers** — ChatGPT has no way for another app to read or continue your chats, so the tile asks through OpenAI's **Codex** on this PC, signed in with your ChatGPT account: the official program, read-only, with no tools and no files. It needs Codex installed and signed in (the ChatGPT app, the Codex extension for your editor or the `codex` command) and says so when it is not.
+- **Conversations** — follow-ups carry the conversation so far. **Chats** lists them, opens one or deletes it, and holds the model picker (the list comes from Codex). Up to 40 conversations are kept on this PC; they do not appear in your ChatGPT history.
+- **While it thinks** — a line counts the seconds, with **Stop**. The answer arrives on every screen showing the tile, so you can ask from the phone and read on the Edge.
+- **The plan** — the header shows the busiest usage window of your plan (the same numbers as the Codex tile), since these answers count against it. Fully localised (11 languages).
 
 ---
 

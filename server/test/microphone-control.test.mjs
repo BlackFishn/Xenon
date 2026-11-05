@@ -49,6 +49,8 @@ test('microphone picker validates and confirms the requested default device', ()
 
   assert.ok(start >= 0 && end > start);
   assert.match(body, /before\.mics\.find\(mic => mic\.id === wanted\)/);
-  assert.match(body, /await svvExec\(\['\/SetDefault', wanted, 'all'\]\)/);
+  // Through the role-aware helper, so "also switch the communication device"
+  // applies to a microphone picked here too.
+  assert.match(body, /await setDefaultAudioDevice\(wanted\)/);
   assert.match(body, /after\.mic\.id !== wanted/);
 });

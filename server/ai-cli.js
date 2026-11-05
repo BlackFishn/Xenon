@@ -72,6 +72,19 @@ function sanitizeModel(v) {
 
 // ── locating the programs ───────────────────────────────────────────────────
 let codexCache = null;
+const POSIX_CODEX_DIRS = (home) => [
+  '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin',
+  path.join(home, '.local', 'bin'), path.join(home, '.npm-global', 'bin'),
+  path.join(home, '.volta', 'bin'), path.join(home, '.bun', 'bin'),
+];
+// An npm install on macOS/Linux puts a symlink to a node script on PATH, run
+// through `#!/usr/bin/env node` — which fails under a login service whose PATH
+// has no node. Running the script under the node that runs Xenon avoids that.
+async function asLaunch(file) {
+  let real = file;
+  try { real = await fsp.realpath(file); } catch { /* keep the link */ }
+  return /\.[cm]?js$/i.test(real) ? { cmd: process.execPath, pre: [real] } : { cmd: file, pre: [] };
+}
 async function isFile(p) {
   try { return (await fsp.stat(p)).isFile(); } catch { return false; }
 }
@@ -96,6 +109,12 @@ async function newestCodexCopy() {
     }
   };
   if (win && process.env.LOCALAPPDATA) await scan(path.join(process.env.LOCALAPPDATA, 'OpenAI', 'Codex', 'bin'), 1);
+  // macOS and Linux: the backend runs as a login service whose PATH is the
+  // system's bare default (/usr/bin:/bin:...), so a Homebrew, npm or per-user
+  // install is not on it even though the user's terminal finds it. These are
+  // the places those installers write to; a folder that does not exist costs
+  // one failed readdir.
+  if (!win) for (const dir of POSIX_CODEX_DIRS(home)) await scan(dir, 0);
   for (const editor of ['.vscode', '.vscode-insiders', '.cursor']) {
     const ext = path.join(home, editor, 'extensions');
     let names = [];
@@ -114,7 +133,7 @@ async function resolveCodex() {
   for (const hit of await claudeRun.whichRaw('codex')) {
     const low = hit.toLowerCase();
     if (win ? low.endsWith('.exe') : !low.endsWith('.cmd') && !low.endsWith('.ps1')) {
-      return (codexCache = { cmd: hit, pre: [] });
+      return (codexCache = win ? { cmd: hit, pre: [] } : await asLaunch(hit));
     }
     // npm's Windows shim needs a shell; run the package's entry under node
     // instead, like claude-run.js does for Claude Code.
@@ -122,7 +141,7 @@ async function resolveCodex() {
     if (await isFile(js)) return (codexCache = { cmd: process.execPath, pre: [js] });
   }
   const copy = await newestCodexCopy();
-  return copy ? (codexCache = { cmd: copy, pre: [] }) : null;
+  return copy ? (codexCache = win ? { cmd: copy, pre: [] } : await asLaunch(copy)) : null;
 }
 function resolveExe(provider) {
   return provider === 'claudecode' ? claudeRun.resolveExecutable() : resolveCodex();
@@ -150,8 +169,11 @@ async function workDir() {
 
 // `abortOn`: a pattern in the output that means waiting longer is pointless.
 // Codex, offline, retries "waiting for network" for as long as it is let.
-function run(exe, args, { input = '', timeoutMs = TIMEOUT_MS, env, cwd, abortOn = null } = {}) {
+// `signal`: an AbortSignal; the user pressed Cancel, so the child is killed and
+// the result says `cancelled` rather than looking like a failure.
+function run(exe, args, { input = '', timeoutMs = TIMEOUT_MS, env, cwd, abortOn = null, signal = null } = {}) {
   return new Promise((resolve) => {
+    if (signal && signal.aborted) { resolve({ code: -1, stdout: '', stderr: '', timedOut: false, aborted: false, cancelled: true }); return; }
     let child;
     try {
       child = spawn(exe.cmd, exe.pre.concat(args), { cwd, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -159,9 +181,16 @@ function run(exe, args, { input = '', timeoutMs = TIMEOUT_MS, env, cwd, abortOn 
       resolve({ code: -1, stdout: '', stderr: String((e && e.message) || e), timedOut: false });
       return;
     }
-    let stdout = '', stderr = '', timedOut = false, aborted = false, done = false;
-    const finish = (code) => { if (done) return; done = true; clearTimeout(timer); resolve({ code, stdout, stderr, timedOut, aborted }); };
+    let stdout = '', stderr = '', timedOut = false, aborted = false, cancelled = false, done = false;
+    const onAbort = () => { cancelled = true; try { child.kill(); } catch { /* gone */ } };
+    const finish = (code) => {
+      if (done) return;
+      done = true; clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onAbort);
+      resolve({ code, stdout, stderr, timedOut, aborted, cancelled });
+    };
     const timer = setTimeout(() => { timedOut = true; try { child.kill(); } catch { /* gone */ } }, timeoutMs);
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
     child.stdout.on('data', (d) => {
       if (stdout.length < MAX_STDOUT) stdout += d;
       if (abortOn && !aborted && abortOn.test(String(d))) { aborted = true; try { child.kill(); } catch { /* gone */ } }
@@ -331,30 +360,81 @@ async function models(provider, { fresh = false } = {}) {
   if (list.length) codexModels = { at: Date.now(), list };
   return list;
 }
+// Codex names its models freely (luna, terra…) but describes the small one
+// ("Fast and affordable model for easier tasks"). Claude Code has an alias.
+const LIGHT_RE = /\b(affordable|efficient|mini|lite|small|cheap)\b/i;
+
 function parseCodexModels(out) {
   let j;
   try { j = JSON.parse(String(out || '')); } catch { return []; }
   const arr = j && Array.isArray(j.models) ? j.models : [];
   return arr
     .filter((m) => m && typeof m.slug === 'string' && MODEL_RE.test(m.slug) && m.visibility === 'list')
-    .map((m) => ({ id: m.slug, label: String(m.display_name || m.slug).slice(0, 60) }))
+    .map((m) => ({ id: m.slug, label: String(m.display_name || m.slug).slice(0, 60), light: LIGHT_RE.test(String(m.description || '')) }))
     .slice(0, 40);
+}
+
+// The plan's small model, for automatic work that should use as little of the
+// plan's allowance as possible: Haiku on Claude Code, the newest model Codex
+// describes as light (it lists newest first), else the program's own default.
+async function lightModel(provider) {
+  if (provider === 'claudecode') return 'haiku';
+  if (provider !== 'codex') return 'default';
+  const hit = (await models('codex').catch(() => [])).find((m) => m.light);
+  return hit ? hit.id : 'default';
 }
 
 // ── the conversation as one prompt ──────────────────────────────────────────
 // Each turn is a fresh run of the program with nothing saved, so the thread so
 // far travels in the prompt. Xenon's history is Gemini-shaped; only the words
 // are carried, and an attachment is named rather than silently dropped.
-function partText(p) {
+function partText(p, forwarded) {
   if (!p || typeof p !== 'object') return '';
   if (typeof p.text === 'string') return p.text;
+  if (forwarded && forwarded.has(p)) return '[an image is attached to this message]';
   if (p.inlineData) return /^image\//.test(String(p.inlineData.mimeType || '')) ? '[an image was attached, which this assistant cannot see]' : '[an attachment was included, which this assistant cannot read]';
   return '';
 }
-function buildPrompt(history) {
+// Images of the message being answered travel to the program for real (Claude
+// Code over its stream-json input, Codex as --image files); earlier turns keep
+// the placeholder, as the history is only words. Capped so one paste cannot
+// flood the child: type, count and size are checked here, where it enters.
+const IMAGE_MIME_RE = /^image\/(?:png|jpeg|gif|webp)$/;
+const MAX_IMAGES = 4;
+const MAX_IMAGE_B64 = 10 * 1024 * 1024;
+const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+function latestImages(history) {
+  const last = Array.isArray(history) ? history[history.length - 1] : null;
+  if (!last || last.role === 'model' || !Array.isArray(last.parts)) return [];
+  const out = [];
+  for (const p of last.parts) {
+    const d = p && p.inlineData;
+    if (!d || !IMAGE_MIME_RE.test(String(d.mimeType || '')) || typeof d.data !== 'string') continue;
+    if (!d.data || d.data.length > MAX_IMAGE_B64 || !B64_RE.test(d.data)) continue;
+    out.push({ part: p, mimeType: d.mimeType, data: d.data });
+    if (out.length >= MAX_IMAGES) break;
+  }
+  return out;
+}
+function claudeImageInput(prompt, images) {
+  const content = images.map((i) => ({ type: 'image', source: { type: 'base64', media_type: i.mimeType, data: i.data } }));
+  content.push({ type: 'text', text: prompt });
+  return JSON.stringify({ type: 'user', message: { role: 'user', content } }) + '\n';
+}
+async function writeCodexImages(dir, images) {
+  const base = path.join(dir, 'img-' + crypto.randomBytes(6).toString('hex'));
+  const files = [];
+  for (const [n, i] of images.entries()) {
+    const f = base + '-' + n + '.' + (i.mimeType.split('/')[1] === 'jpeg' ? 'jpg' : i.mimeType.split('/')[1]);
+    await fsp.writeFile(f, Buffer.from(i.data, 'base64'));
+    files.push(f);
+  }
+  return files;
+}
+function buildPrompt(history, forwarded) {
   const turns = (Array.isArray(history) ? history : [])
     .filter((m) => m && Array.isArray(m.parts))
-    .map((m) => ({ role: m.role === 'model' ? 'Assistant' : 'User', text: m.parts.map(partText).filter(Boolean).join('\n').trim() }))
+    .map((m) => ({ role: m.role === 'model' ? 'Assistant' : 'User', text: m.parts.map((p) => partText(p, forwarded)).filter(Boolean).join('\n').trim() }))
     .filter((t) => t.text);
   if (!turns.length) return '';
   const last = turns[turns.length - 1];
@@ -451,8 +531,11 @@ const NOT_LOGGED_RE = /not logged in|please run \/login|log ?in (?:first|require
 // keeps their CLAUDE.md out of Xenon's chat, and skills and every other MCP
 // server stay out too.
 const CLAUDE_QUIET = JSON.stringify({ disableAllHooks: true, claudeMdExcludes: ['**/CLAUDE.md', '**/CLAUDE.local.md'] });
-function claudeArgs(systemText, model, skip, token) {
-  const a = ['-p', '--output-format', 'json', '--tools', ''];
+function claudeArgs(systemText, model, skip, token, withImages = false) {
+  // Images only ride on the stream-json input, which wants stream-json out.
+  const a = withImages
+    ? ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--tools', '']
+    : ['-p', '--output-format', 'json', '--tools', ''];
   if (!token && !skip.has('--safe-mode')) a.push('--safe-mode');
   if (!skip.has('--no-session-persistence')) a.push('--no-session-persistence');
   if (!skip.has('--permission-prompts')) a.push('--permission-prompts', 'none');
@@ -471,12 +554,18 @@ function claudeArgs(systemText, model, skip, token) {
 function parseClaude(r) {
   let j = null;
   const lines = String(r.stdout || '').trim().split(/\r?\n/);
-  for (let i = lines.length - 1; i >= 0 && !j; i--) { try { j = JSON.parse(lines[i]); } catch { /* not the result line */ } }
+  // stream-json ends with housekeeping events after the result: prefer the result.
+  for (let i = lines.length - 1; i >= 0 && !(j && j.type === 'result'); i--) {
+    try { const e = JSON.parse(lines[i]); if (!j || (e && e.type === 'result')) j = e; } catch { /* not the result line */ }
+  }
   if (j && j.type === 'result') {
     const text = typeof j.result === 'string' ? j.result.trim() : '';
     if (j.is_error || j.subtype !== 'success') throw new CliError(NOT_LOGGED_RE.test(text) ? 'cli_not_logged_in' : 'cli_failed', text || String(j.subtype || 'error'));
     const used = j.modelUsage && typeof j.modelUsage === 'object' ? Object.keys(j.modelUsage)[0] || '' : '';
-    return { text, model: used };
+    const u = j.usage || {};
+    // Cache reads and writes are input too: they count toward the plan.
+    const input = ['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'].reduce((n, k) => n + (Number(u[k]) || 0), 0);
+    return { text, model: used, usage: { input, output: Number(u.output_tokens) || 0 } };
   }
   const why = (String(r.stderr || '').trim() || String(r.stdout || '').trim()).slice(-400);
   throw new CliError(NOT_LOGGED_RE.test(why) ? 'cli_not_logged_in' : 'cli_failed', why || 'no answer');
@@ -486,8 +575,11 @@ function parseClaude(r) {
 // there (a `--disable` of an unknown feature is a hard error), so an older or
 // newer Codex that renamed one still runs, just with that switch ignored.
 const CODEX_OFF = Object.freeze(['shell_tool', 'unified_exec', 'apps', 'plugins', 'browser_use', 'computer_use', 'image_generation', 'hooks']);
-function codexArgs(systemText, model, dir, skip, token) {
-  const a = ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'read-only', '-C', dir];
+function codexArgs(systemText, model, dir, skip, token, imageFiles = [], effort = '') {
+  // --image takes a list, so it goes first and a flag ends it before the prompt.
+  const a = ['exec'];
+  for (const f of imageFiles) a.push('--image', f);
+  a.push('--json', '--skip-git-repo-check', '--sandbox', 'read-only', '-C', dir);
   for (const f of ['--ephemeral', '--ignore-user-config', '--ignore-rules']) if (!skip.has(f)) a.push(f);
   // -c values are TOML; a JSON string literal is a valid TOML basic string, so
   // the instructions arrive as one string whatever they contain.
@@ -508,22 +600,29 @@ function codexArgs(systemText, model, dir, skip, token) {
     a.push('-c', 'approval_policy="never"');
   }
   if (model !== 'default') a.push('-m', model);
+  if (effort === 'low') a.push('-c', 'model_reasoning_effort="low"');
   a.push('-');   // the prompt comes on stdin
   return a;
 }
 function parseCodex(r) {
   const texts = [];
   let failed = '', lastError = '';
+  const usage = { input: 0, output: 0 };
   for (const line of String(r.stdout || '').split(/\r?\n/)) {
     let e;
     try { e = JSON.parse(line); } catch { continue; }
     if (!e || typeof e !== 'object') continue;
+    if (e.type === 'turn.completed' && e.usage) {
+      // input_tokens already includes the cached part.
+      usage.input += Number(e.usage.input_tokens) || 0;
+      usage.output += Number(e.usage.output_tokens) || 0;
+    }
     if (e.type === 'item.completed' && e.item && e.item.type === 'agent_message' && typeof e.item.text === 'string') texts.push(e.item.text);
     else if (e.type === 'turn.failed') failed = String((e.error && e.error.message) || 'turn failed');
     else if (e.type === 'error' && typeof e.message === 'string' && !/^Reconnecting/i.test(e.message)) lastError = e.message;
   }
   const text = texts.join('\n\n').trim();
-  if (text && !failed) return { text, model: '' };
+  if (text && !failed) return { text, model: '', usage };
   const why = (failed || lastError || String(r.stderr || '').trim()).slice(-400);
   throw new CliError(NOT_LOGGED_RE.test(why) ? 'cli_not_logged_in' : 'cli_failed', why || 'no answer');
 }
@@ -531,9 +630,11 @@ function parseCodex(r) {
 let active = 0;
 // `tools` (Gemini-style declarations) + `executeTool` give the model Xenon's
 // tools for this turn; without them it is a plain answer, as for a summary.
-async function chat({ provider, model, systemText, history, tools, executeTool }) {
+// `effort: 'low'` keeps Codex's reasoning short, for small automatic jobs.
+async function chat({ provider, model, systemText, history, tools, executeTool, signal = null, effort = '' }) {
   if (!isCliProvider(provider)) throw new CliError('cli_bad_provider');
-  const prompt = buildPrompt(history);
+  const images = latestImages(history);
+  const prompt = buildPrompt(history, new Set(images.map((i) => i.part)));
   if (!prompt) throw new CliError('cli_empty');
   const exe = await resolveExe(provider);
   if (!exe) throw new CliError('cli_not_installed');
@@ -546,34 +647,43 @@ async function chat({ provider, model, systemText, history, tools, executeTool }
   active++;
   const mcpTools = (mcpUrl && typeof executeTool === 'function') ? geminiToolsToMcp(tools) : [];
   const token = mcpTools.length ? openToolSession(mcpTools, executeTool) : '';
+  let imageFiles = [];
   try {
     const m = sanitizeModel(model);
     const sys = String(systemText || '');
     const dir = await workDir();
-    const opts = { input: prompt, env: childEnv(provider), cwd: dir, timeoutMs: token ? TOOL_TIMEOUT_MS : TIMEOUT_MS, abortOn: provider === 'codex' ? /waiting for network/i : null };
+    if (provider === 'codex' && images.length) imageFiles = await writeCodexImages(dir, images);
+    const withImages = provider === 'claudecode' && images.length > 0;
+    const opts = { input: withImages ? claudeImageInput(prompt, images) : prompt, env: childEnv(provider), cwd: dir, timeoutMs: token ? TOOL_TIMEOUT_MS : TIMEOUT_MS, abortOn: provider === 'codex' ? /waiting for network/i : null, signal };
     const r = provider === 'claudecode'
-      ? await runWithOptional(exe, (skip) => claudeArgs(sys, m, skip, token), ['--safe-mode', '--no-session-persistence', '--permission-prompts', '--disable-slash-commands'], opts)
-      : await runWithOptional(exe, (skip) => codexArgs(sys, m, dir, skip, token), ['--ephemeral', '--ignore-user-config', '--ignore-rules'], opts);
+      ? await runWithOptional(exe, (skip) => claudeArgs(sys, m, skip, token, withImages), ['--safe-mode', '--no-session-persistence', '--permission-prompts', '--disable-slash-commands'], opts)
+      : await runWithOptional(exe, (skip) => codexArgs(sys, m, dir, skip, token, imageFiles, effort), ['--ephemeral', '--ignore-user-config', '--ignore-rules'], opts);
+    if (r.cancelled) throw new CliError('cli_cancelled');
     if (r.timedOut) throw new CliError('cli_timeout');
     if (r.aborted) throw new CliError('cli_offline');
     const out = provider === 'claudecode' ? parseClaude(r) : parseCodex(r);
     const clientActions = token ? toolSessions.get(token).clientActions.slice() : [];
-    return { text: out.text, model: out.model, clientActions, newContent: { role: 'model', parts: [{ text: out.text }] } };
+    return { text: out.text, model: out.model, usage: out.usage, clientActions, newContent: { role: 'model', parts: [{ text: out.text }] } };
   } finally {
     if (token) toolSessions.delete(token);
+    for (const f of imageFiles) fsp.unlink(f).catch(() => { /* already gone */ });
     active--;
   }
 }
 
-async function oneShot({ provider, model, systemText, userText }) {
-  const r = await chat({ provider, model, systemText, history: [{ role: 'user', parts: [{ text: String(userText || '') }] }] });
+// `onUsage(totalTokens, { input, output })`, when given, hears what the run used.
+async function oneShot({ provider, model, systemText, userText, effort, onUsage }) {
+  const r = await chat({ provider, model, systemText, effort, history: [{ role: 'user', parts: [{ text: String(userText || '') }] }] });
+  const u = r.usage;
+  if (typeof onUsage === 'function' && u && (u.input + u.output) > 0) onUsage(u.input + u.output, u);
   return r.text;
 }
 
 module.exports = {
   PROVIDERS, CLAUDE_MODELS, TIMEOUT_MS,
-  isCliProvider, sanitizeModel, status, models, chat, oneShot, CliError,
+  isCliProvider, sanitizeModel, status, models, lightModel, chat, oneShot, CliError,
+  resolveCodex, childEnv, workDir,
   configure, handleMcp,
   // exposed for unit tests
-  _internal: { buildPrompt, claudeArgs, codexArgs, parseClaude, parseCodex, parseClaudeAuth, parseClaudeInit, parseCodexLogin, parseCodexModels, statusCache, childEnv, runWithOptional, UNKNOWN_FLAG_RE, geminiToolsToMcp, openToolSession, toolSessions, BRIDGE },
+  _internal: { run, buildPrompt, latestImages, claudeImageInput, claudeArgs, codexArgs, parseClaude, parseCodex, parseClaudeAuth, parseClaudeInit, parseCodexLogin, parseCodexModels, statusCache, childEnv, runWithOptional, UNKNOWN_FLAG_RE, geminiToolsToMcp, openToolSession, toolSessions, BRIDGE },
 };

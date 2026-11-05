@@ -8,7 +8,8 @@
 //    its shell switched off. Xenon's tools arrive over MCP instead, through a
 //    bridge whose token lives for one turn;
 //  - no API key by accident: the key variables never reach the child;
-//  - background features never spend the subscription.
+//  - background features never spend the subscription, except lyrics
+//    translation: a supporter's opt-in, capped, on the plan's small model.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
@@ -58,8 +59,33 @@ test("Codex's picker is its own catalog, the models it lists and nothing hidden"
     { slug: 'codex-auto-review', display_name: 'Codex Auto Review', visibility: 'hide' },
     { slug: '--evil', display_name: 'x', visibility: 'list' },
   ] });
-  assert.deepEqual(I.parseCodexModels(out), [{ id: 'gpt-6-astra', label: 'GPT-6-Astra' }, { id: 'gpt-5.5', label: 'GPT-5.5' }]);
+  assert.deepEqual(I.parseCodexModels(out), [{ id: 'gpt-6-astra', label: 'GPT-6-Astra', light: false }, { id: 'gpt-5.5', label: 'GPT-5.5', light: false }]);
   assert.deepEqual(I.parseCodexModels('not json'), []);
+});
+
+test("Codex's small model is found by what Codex says about it, not by its name", () => {
+  const out = JSON.stringify({ models: [
+    { slug: 'gpt-6-luna', display_name: 'GPT-6-Luna', visibility: 'list', description: 'Fast and affordable model for easier tasks.' },
+    { slug: 'gpt-5.6-terra', display_name: 'GPT-5.6-Terra', visibility: 'list', description: 'Older balanced model for straightforward work.' },
+  ] });
+  assert.deepEqual(I.parseCodexModels(out).map((m) => m.light), [true, false]);
+});
+
+test('a plan run reports what it used, input and output', () => {
+  const claude = I.parseClaude({ stdout: JSON.stringify({ type: 'result', subtype: 'success', result: 'ok', usage: { input_tokens: 10, cache_read_input_tokens: 1000, cache_creation_input_tokens: 5, output_tokens: 40 } }) });
+  assert.deepEqual(claude.usage, { input: 1015, output: 40 });
+  const codex = I.parseCodex({ stdout: [
+    JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'ok' } }),
+    JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 13000, cached_input_tokens: 12000, output_tokens: 61 } }),
+  ].join('\n') });
+  assert.deepEqual(codex.usage, { input: 13000, output: 61 });
+});
+
+test('low effort reaches Codex as a config key, and only when asked', () => {
+  const low = I.codexArgs('', 'gpt-6-luna', '/tmp/x', new Set(), '', [], 'low');
+  assert.ok(low.includes('model_reasoning_effort="low"'));
+  assert.equal(low[low.length - 1], '-');
+  assert.ok(!I.codexArgs('', 'gpt-6-luna', '/tmp/x', new Set()).some((x) => x.startsWith('model_reasoning_effort')));
 });
 
 // ── signed in or not ──────────────────────────────────────────────────────
@@ -166,7 +192,7 @@ test('an unknown flag that is not optional is not silently dropped', async () =>
 
 test("Claude Code's answer, its model, and its errors", () => {
   const ok = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Ciao', modelUsage: { 'claude-haiku-4-5': {} } });
-  assert.deepEqual(I.parseClaude({ stdout: ok }), { text: 'Ciao', model: 'claude-haiku-4-5' });
+  assert.deepEqual(I.parseClaude({ stdout: ok }), { text: 'Ciao', model: 'claude-haiku-4-5', usage: { input: 0, output: 0 } });
   const notLogged = JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'Not logged in · Please run /login' });
   assert.throws(() => I.parseClaude({ stdout: notLogged }), (e) => e.code === 'cli_not_logged_in');
   const limit = JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: '5-hour limit reached · resets 3pm' });
@@ -184,7 +210,7 @@ test("Codex's answer is its agent messages; retries and warnings are not errors"
     { type: 'item.completed', item: { id: 'i2', type: 'agent_message', text: 'Ciao!' } },
     { type: 'turn.completed', usage: {} },
   ].map((l) => JSON.stringify(l)).join('\n');
-  assert.deepEqual(I.parseCodex({ stdout: lines }), { text: 'Ciao!', model: '' });
+  assert.deepEqual(I.parseCodex({ stdout: lines }), { text: 'Ciao!', model: '', usage: { input: 0, output: 0 } });
   const failed = [{ type: 'turn.failed', error: { message: 'You have hit your usage limit' } }].map((l) => JSON.stringify(l)).join('\n');
   assert.throws(() => I.parseCodex({ stdout: failed }), (e) => e.code === 'cli_failed' && /usage limit/.test(e.message));
   const unauth = [{ type: 'error', message: '401 Unauthorized' }].map((l) => JSON.stringify(l)).join('\n');
@@ -220,6 +246,46 @@ test('an attachment is named, not silently dropped', () => {
   assert.match(p, /an image was attached, which this assistant cannot see/);
 });
 
+test('the image of the message being answered is forwarded, earlier ones stay a name', () => {
+  const png = { inlineData: { mimeType: 'image/png', data: 'AAAA' } };
+  const old = { inlineData: { mimeType: 'image/png', data: 'BBBB' } };
+  const h = [
+    { role: 'user', parts: [{ text: 'prima' }, old] },
+    { role: 'model', parts: [{ text: 'ok' }] },
+    { role: 'user', parts: [{ text: 'spiega la carta' }, png] },
+  ];
+  const imgs = I.latestImages(h);
+  assert.deepEqual(imgs.map((i) => i.data), ['AAAA']);
+  const p = I.buildPrompt(h, new Set(imgs.map((i) => i.part)));
+  assert.match(p, /spiega la carta\n\[an image is attached to this message\]/);
+  assert.match(p, /an image was attached, which this assistant cannot see/, 'the older one is still only named');
+  const line = JSON.parse(I.claudeImageInput('ciao', imgs));
+  assert.equal(line.type, 'user');
+  assert.deepEqual(line.message.content[0], { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } });
+  assert.deepEqual(line.message.content[1], { type: 'text', text: 'ciao' });
+});
+
+test('only real, small images are forwarded', () => {
+  const mk = (mimeType, data) => [{ role: 'user', parts: [{ inlineData: { mimeType, data } }] }];
+  assert.equal(I.latestImages(mk('image/svg+xml', 'AAAA')).length, 0);
+  assert.equal(I.latestImages(mk('application/pdf', 'AAAA')).length, 0);
+  assert.equal(I.latestImages(mk('image/png', 'not base64!')).length, 0);
+  assert.equal(I.latestImages(mk('image/png', 'A'.repeat(10 * 1024 * 1024 + 4))).length, 0);
+  assert.equal(I.latestImages([{ role: 'model', parts: [{ inlineData: { mimeType: 'image/png', data: 'AAAA' } }] }]).length, 0);
+});
+
+test('images change how each program is started, and the result is still found', () => {
+  const c = I.claudeArgs('', 'default', new Set(), '', true);
+  assert.deepEqual(c.slice(0, 6), ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']);
+  assert.ok(c.includes('--tools'), 'tools stay off');
+  const x = I.codexArgs('', 'default', '/tmp/x', new Set(), '', ['/tmp/a.png', '/tmp/b.jpg']);
+  assert.deepEqual(x.slice(0, 6), ['exec', '--image', '/tmp/a.png', '--image', '/tmp/b.jpg', '--json']);
+  assert.equal(x[x.length - 1], '-', 'the prompt is still on stdin');
+  const out = [{ type: 'system', subtype: 'init' }, { type: 'result', subtype: 'success', is_error: false, result: 'Una carta', modelUsage: {} }, { type: 'system', subtype: 'ui_invalidate' }]
+    .map((l) => JSON.stringify(l)).join('\n');
+  assert.equal(I.parseClaude({ stdout: out }).text, 'Una carta', 'trailing events do not hide the result');
+});
+
 // ── the server and the page ───────────────────────────────────────────────
 
 test('the chat route gives these providers Xenon\'s tools, run by the same executeAiTool', () => {
@@ -249,6 +315,13 @@ test("Bit's automatic lines never spend the subscription; what the user starts m
     assert.ok(at > 0, route);
     assert.match(S.slice(at, at + 12000), /cliOneShot\(provider,/, route + ' uses the subscription when chosen');
   }
+});
+
+test('lyrics translation, the one automatic use of a plan, runs on its small model at low effort', () => {
+  const S = read('../server.js');
+  const fn = S.slice(S.indexOf('async function completeLyricsTranslation('), S.indexOf('async function lyricsTranslateBlocker('));
+  assert.match(fn, /aiCli\.oneShot\(\{\s*provider, model: await lyricsTranslationModel\(provider, settings\), effort: 'low'/);
+  assert.match(S, /if \(aiCli\.isCliProvider\(provider\)\) return aiCli\.lightModel\(provider\);/);
 });
 
 test('voice stays local and free: nothing quietly needs a Gemini key', () => {
@@ -495,4 +568,31 @@ test('Codex is also found inside its desktop app and the VS Code / Cursor extens
   assert.match(src, /\['\.vscode', '\.vscode-insiders', '\.cursor'\]/);
   assert.match(src, /\/\^openai\\.chatgpt-\/i/);
   assert.match(src, /const copy = await newestCodexCopy\(\);/, 'after PATH, never instead of it');
+});
+
+// Cancel: the "Ask ChatGPT" tile hands chat() an AbortSignal so a Cancel tap
+// kills the program instead of leaving it to run out its three minutes.
+test('run(): an AbortSignal kills the child and reports cancelled, not a failure', async () => {
+  const { run } = cli._internal;
+  const ac = new AbortController();
+  const exe = { cmd: process.execPath, pre: ['-e', 'setTimeout(() => {}, 20000)'] };
+  const t0 = Date.now();
+  setTimeout(() => ac.abort(), 100);
+  const r = await run(exe, [], { signal: ac.signal, timeoutMs: 15000 });
+  assert.equal(r.cancelled, true);
+  assert.equal(r.timedOut, false);
+  assert.ok(Date.now() - t0 < 10000, 'killed, not waited out');
+  const pre = await run(exe, [], { signal: AbortSignal.abort() });
+  assert.equal(pre.cancelled, true);
+});
+
+test('resolveCodex is exported for the Codex tile, with childEnv stripping the API keys', () => {
+  assert.equal(typeof cli.resolveCodex, 'function');
+  process.env.OPENAI_API_KEY = 'sk-test';
+  process.env.CODEX_API_KEY = 'x';
+  try {
+    const env = cli.childEnv('codex');
+    assert.equal(env.OPENAI_API_KEY, undefined);
+    assert.equal(env.CODEX_API_KEY, undefined);
+  } finally { delete process.env.OPENAI_API_KEY; delete process.env.CODEX_API_KEY; }
 });

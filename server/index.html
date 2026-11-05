@@ -103,6 +103,8 @@
 <link rel="stylesheet" href="components/FootballWidget/FootballWidget.css">
 <link rel="stylesheet" href="components/ClaudeWidget/ClaudeWidget.css">
 <link rel="stylesheet" href="components/AIUsageWidget/AIUsageWidget.css">
+<link rel="stylesheet" href="components/CodexWidget/CodexWidget.css">
+<link rel="stylesheet" href="components/ChatGPTWidget/ChatGPTWidget.css">
 <link rel="stylesheet" href="components/NewsWidget/NewsWidget.css">
 <link rel="stylesheet" href="components/FansWidget/FansWidget.css">
 <link rel="stylesheet" href="components/PowerWidget/PowerWidget.css">
@@ -120,10 +122,14 @@
 <link rel="stylesheet" href="components/UnifiPanel/UnifiPanel.css">
 <link rel="stylesheet" href="components/DiscordInvite/DiscordInvite.css">
 <link rel="stylesheet" href="components/SupportAsk/SupportAsk.css">
+<link rel="stylesheet" href="components/SupportGoal/SupportGoal.css">
 <link rel="stylesheet" href="components/ShareNudge/ShareNudge.css">
 <link rel="stylesheet" href="components/Spotlight/Spotlight.css">
 <link rel="stylesheet" href="components/SearchWidget/SearchWidget.css">
 <link rel="stylesheet" href="components/DiskWidget/DiskWidget.css">
+<link rel="stylesheet" href="components/DevClean/DevClean.css">
+<link rel="stylesheet" href="components/LyricsView/LyricsView.css">
+<link rel="stylesheet" href="components/LyricsWidget/LyricsWidget.css">
 <link rel="stylesheet" href="components/TransferWidget/TransferWidget.css">
 <link rel="stylesheet" href="components/PhoneWidget/PhoneWidget.css">
 <!-- App-wide control styling: scrollbars, selects, checkboxes -->
@@ -232,6 +238,9 @@
              inside .clock for the same free minimal-topbar reparenting as the
              two above, so it is present in both the full and minimal bars. -->
         <span class="clock-claude" id="clock-claude" hidden></span>
+        <!-- OpenAI Codex marker: a Codex session working, or one waiting on an
+             approval. Populated by js/codex-widget.js; same island rules. -->
+        <span class="clock-codex" id="clock-codex" hidden></span>
       </div>
     </div>
 
@@ -598,6 +607,20 @@
         <div class="claude-widget-mount"></div>
       </section>
 
+      <!-- OpenAI Codex: plan windows and usage (from `codex app-server`), live
+           sessions and approval cards (from the hooks codex-link.js installs).
+           Fed over SSE ('codex'); hidden by default, added from the "+" palette. -->
+      <section class="panel codex-panel dashboard-widget" data-dashboard-widget="openaicodex" data-dashboard-size="normal" data-dashboard-order="38" data-dashboard-hidden="true">
+        <div class="codex-widget-mount"></div>
+      </section>
+
+      <!-- Ask ChatGPT: conversations answered on the user's ChatGPT plan through
+           OpenAI Codex (server/chatgpt-ask.js). Fed over SSE ('chatgpt'); hidden
+           by default, added from the "+" palette. -->
+      <section class="panel chatgpt-panel dashboard-widget" data-dashboard-widget="chatgpt" data-dashboard-size="normal" data-dashboard-order="39" data-dashboard-hidden="true">
+        <div class="chatgpt-widget-mount"></div>
+      </section>
+
       <!-- News — merged headline stream from followed outlets and topics.
            Fed over SSE ('news'); hidden by default, added from the "+" palette. -->
       <section class="panel news-panel dashboard-widget" data-dashboard-widget="news" data-dashboard-size="normal" data-dashboard-order="27" data-dashboard-hidden="true">
@@ -629,6 +652,20 @@
            while one runs. Hidden by default. -->
       <section class="panel disk-panel dashboard-widget" data-dashboard-widget="disk" data-dashboard-size="normal" data-dashboard-order="35" data-dashboard-hidden="true">
         <div class="disk-widget-mount"></div>
+      </section>
+
+      <!-- Dev cleanup — supporter-only: Docker, Ollama models, stale editor
+           workspace storage, WSL/Docker virtual disks. Reads only when shown;
+           the server refuses every route until the feature is unlocked. -->
+      <section class="panel devclean-panel dashboard-widget" data-dashboard-widget="devclean" data-dashboard-size="normal" data-dashboard-order="35" data-dashboard-hidden="true">
+        <div class="devclean-widget-mount"></div>
+      </section>
+
+      <!-- Lyrics — supporter-only: the lyrics of whatever is playing, large.
+           The lyrics themselves are free (Media tile button); the server only
+           gates the unlock. Times and fetches nothing while off screen. -->
+      <section class="panel lyrics-panel dashboard-widget" data-dashboard-widget="lyrics" data-dashboard-size="normal" data-dashboard-order="35" data-dashboard-hidden="true">
+        <div class="lyrics-widget-mount"></div>
       </section>
 
       <section class="panel transfer-panel dashboard-widget" data-dashboard-widget="transfer" data-dashboard-size="normal" data-dashboard-order="36" data-dashboard-hidden="true">
@@ -684,7 +721,7 @@
             </button>
           </div>
           <div class="system-tabs-right">
-            <button type="button" class="sys-optimize-btn" id="sys-optimize-btn" onclick="showPowerPlanPicker(event)" data-i18n-title="sys_powerplan" title="Piano di alimentazione">
+            <button type="button" class="sys-optimize-btn" id="sys-optimize-btn" onclick="showPowerPlanPicker(event)" data-powerplan="1" data-i18n-title="sys_powerplan" title="Piano di alimentazione">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/></svg>
               <span data-i18n="sys_powerplan_short">Piano energia</span>
             </button>
@@ -996,6 +1033,12 @@
     </div>
     <div class="settings-body">
       <nav class="settings-nav" id="settings-nav" aria-label="Categorie impostazioni">
+        <!-- Settings search (js/settings-search.js). Above the category list and
+             outside it, so on a phone it stays visible while the list is folded. -->
+        <div class="settings-search" role="search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="7"/><path d="m16 16 5 5"/></svg>
+          <input type="search" id="settings-search-input" class="settings-search-input settings-text-input" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" role="combobox" aria-expanded="false" aria-controls="settings-search-results" aria-autocomplete="list" data-i18n-placeholder="settings_search_placeholder" data-i18n-aria-label="settings_search_placeholder" placeholder="Cerca nelle impostazioni" aria-label="Cerca nelle impostazioni">
+        </div>
         <div class="settings-nav-scroll" id="settings-nav-scroll">
         <button type="button" class="settings-nav-btn" data-settings-cat="general" onclick="settingsSetCategory('general')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 12h4M12 12h8M4 17h13M20 17h.01"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18.5" cy="17" r="2"/></svg><span data-i18n="settings_cat_general">Generale</span></button>
         <button type="button" class="settings-nav-btn active" data-settings-cat="appearance" onclick="settingsSetCategory('appearance')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13.5" cy="6.5" r="2.5"/><circle cx="6.5" cy="11.5" r="2.5"/><circle cx="17" cy="14" r="2.5"/><circle cx="9.5" cy="18" r="2.5"/></svg><span data-i18n="settings_cat_appearance">Aspetto</span></button>
@@ -1010,6 +1053,7 @@
         <button type="button" class="settings-nav-btn" data-settings-cat="stocks" onclick="settingsSetCategory('stocks')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="m7 14 3-3 3 3 5-6"/><path d="M17 8h4v4"/></svg><span data-i18n="settings_cat_feeds">Borsa, Calcio e News</span></button>
         <button type="button" class="settings-nav-btn" data-settings-cat="slideshow" onclick="settingsSetCategory('slideshow')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="m4 17 4.5-4 3.5 2.5 3-2.5L20 17"/></svg><span data-i18n="settings_cat_slideshow">Slideshow</span></button>
         <button type="button" class="settings-nav-btn" data-settings-cat="claude" onclick="settingsSetCategory('claude')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 9-3 3 3 3"/><path d="m16 9 3 3-3 3"/><path d="M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"/></svg><span data-i18n="settings_cat_claude">Claude Code</span></button>
+        <button type="button" class="settings-nav-btn" data-settings-cat="codex" onclick="settingsSetCategory('codex')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="16" rx="2.5"/><path d="m7 9.5 3 2.5-3 2.5"/><path d="M12.5 15h4.5"/></svg><span data-i18n="settings_cat_codex">Codex</span></button>
         <div class="settings-nav-label" id="settings-nav-label-integrations" data-i18n="settings_nav_integrations" aria-hidden="true">Integrazioni</div>
         <button type="button" class="settings-nav-btn" data-settings-cat="ai" onclick="settingsSetCategory('ai')"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M12 0 C12.7 6.1 17.9 11.3 24 12 C17.9 12.7 12.7 17.9 12 24 C11.3 17.9 6.1 12.7 0 12 C6.1 11.3 11.3 6.1 12 0 Z M12 9 L15 12 L12 15 L9 12 Z"/></svg><span data-i18n="settings_ai">Xenon AI</span></button>
         <button type="button" class="settings-nav-btn" data-settings-cat="lighting" onclick="settingsSetCategory('lighting')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1h6c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2Z"/></svg><span data-i18n="settings_cat_lighting">Illuminazione</span></button>
@@ -1056,6 +1100,7 @@
         </div>
       </nav>
       <div class="settings-content" id="settings-content">
+      <div class="settings-search-results" id="settings-search-results" aria-live="polite" hidden></div>
       <div class="settings-preview settings-span-all" aria-hidden="true" data-settings-cat="appearance">
         <div class="settings-preview-card">
           <div class="settings-preview-kicker" data-i18n="settings_preview_kicker">Anteprima live</div>
@@ -1253,7 +1298,7 @@
           </label>
           <label class="settings-row">
             <span class="settings-label-line"><span data-i18n="settings_panel_shadow">Ombra pannelli</span><span class="settings-value" id="settings-panel-shadow-value">100%</span></span>
-            <input class="settings-range" id="settings-panel-shadow" type="range" min="0" max="2" step="0.05" oninput="updateSettingsRange('panelShadowStrength', this.value)">
+            <input class="settings-range" id="settings-panel-shadow" type="range" min="0" max="2" step="0.05" oninput="updateSettingsRange('tileShadowStrength', this.value)">
           </label>
           <label class="settings-row">
             <span class="settings-label-line"><span data-i18n="settings_roundness">Raggio angoli</span><span class="settings-value" id="settings-roundness-value">100%</span></span>
@@ -1351,8 +1396,16 @@
             <button class="settings-media-viz settings-segment-btn" type="button" data-media-viz="wave" onclick="updateMediaVisualizer('wave')" aria-pressed="false" data-i18n="settings_media_viz_wave">Onda</button>
           </div>
           <span class="settings-hint settings-media-viz-status" id="settings-media-viz-status" role="status" aria-live="polite" hidden></span>
+          <button class="settings-btn settings-media-viz-install" id="settings-media-viz-install" type="button" onclick="installXenonHelper()" data-i18n="settings_media_viz_install" hidden>Installa Xenon Helper</button>
           <span class="settings-note" data-i18n="settings_media_viz_note">Disegna il suono che l'app sta davvero producendo, con i colori della copertina. Non cambia nulla del riquadro: si aggiunge sotto, e con Nessuna non viene disegnato niente. Minimal è una riga sottile che respira, Onda è la versione piena. Serve Windows con Xenon Helper installato: senza di lui il livello audio non si può misurare e non esiste un ripiego. La misurazione parte solo quando scegli Minimal o Onda.</span>
         </div>
+        <label class="settings-toggle-row">
+          <input class="settings-check" id="settings-media-lyrics" type="checkbox" onchange="updateMediaLyrics(this.checked)">
+          <span class="settings-label-line">
+            <span data-i18n="settings_media_lyrics">Testi delle canzoni</span>
+            <span class="settings-hint" data-i18n="settings_media_lyrics_hint">cerca il testo su LRCLIB (invia titolo e artista)</span>
+          </span>
+        </label>
       </div>
 
       <div class="settings-group settings-behavior-group" data-settings-cat="island">
@@ -1438,6 +1491,13 @@
           <span class="settings-hint" data-i18n="settings_updates_hint">Xenon controlla già se esiste una versione più recente</span>
         </div>
         <label class="settings-toggle-row full">
+          <input class="settings-check" id="settings-auto-update" type="checkbox" onchange="updateAutoUpdate(this.checked)">
+          <span class="settings-label-line">
+            <span data-i18n="settings_auto_update">Aggiorna Xenon da solo</span>
+            <span class="settings-hint" data-i18n="settings_auto_update_hint">scarica e installa le nuove versioni in automatico, quando non stai usando il PC. Spenta, Xenon avvisa comunque quando ce n'è una, ma aspetta che tu prema Aggiorna</span>
+          </span>
+        </label>
+        <label class="settings-toggle-row full">
           <input class="settings-check" id="settings-version-ping" type="checkbox" onchange="updateVersionPing(this.checked)">
           <span class="settings-label-line">
             <span data-i18n="settings_version_ping">Conta questa installazione, in forma anonima</span>
@@ -1466,10 +1526,10 @@
           </span>
         </label>
         <label class="settings-toggle-row full">
-          <input class="settings-check" id="settings-catalog-drops" type="checkbox" onchange="updateCatalogDrops(this.checked)">
+          <input class="settings-check" id="settings-monthly-drops" type="checkbox" onchange="updateMonthlyDrops(this.checked)">
           <span class="settings-label-line">
-            <span data-i18n="settings_catalog_drops">Segnala nuove edizioni limitate e contenuti per sostenitori</span>
-            <span class="settings-hint" data-i18n="settings_catalog_drops_hint">la scheda che compare quando esce una copia numerata o un pacchetto per sostenitori</span>
+            <span data-i18n="settings_monthly_drops">Drop del mese</span>
+            <span class="settings-hint" data-i18n="settings_monthly_drops_hint">a ogni avvio, una finestra con i contenuti per sostenitori e le edizioni limitate usciti negli ultimi 30 giorni che non hai ancora</span>
           </span>
         </label>
       </div>
@@ -1516,9 +1576,9 @@
           <span data-i18n="settings_native_zoom">Scala interfaccia</span>
           <span class="settings-hint" data-i18n="settings_native_zoom_hint">zoom della dashboard</span>
         </div>
-        <label class="settings-row full">
+        <label class="settings-row full" data-search-kw="settings_native_zoom_kw">
           <span class="settings-label-line"><span data-i18n="settings_native_zoom_label">Zoom</span><span class="settings-value" id="settings-native-zoom-value">100%</span></span>
-          <input class="settings-range" id="settings-native-zoom" type="range" min="0.6" max="1.6" step="0.05" oninput="updateNativeZoom(this.value)">
+          <input class="settings-range" id="settings-native-zoom" type="range" min="0.6" max="2.5" step="0.05" oninput="updateNativeZoom(this.value)">
           <span class="settings-note" data-i18n="settings_native_zoom_note">Ingrandisci o rimpicciolisci tutta la dashboard, indipendentemente dalla scala di Windows. Puoi anche usare Ctrl + rotellina del mouse.</span>
           <span class="settings-note" id="settings-native-zoom-remote" data-i18n="settings_native_zoom_remote" hidden>Vale per l'app Xenon, non per questa finestra: qui usa lo zoom del browser. Puoi regolarla da qui mentre guardi l'Edge.</span>
         </label>
@@ -1535,6 +1595,21 @@
           <span class="settings-label-line">
             <span data-i18n="settings_swipe_home">Scorri in alto per il desktop</span>
             <span class="settings-hint" data-i18n="settings_swipe_home_hint">come su iPhone: uno scorrimento veloce verso l'alto dal fondo dello schermo riduce Xenon a una barra e mostra il desktop di Windows</span>
+          </span>
+        </label>
+      </div>
+
+      <!-- Windows only: syncAudioCommsControl() hides it elsewhere (one default per direction there). -->
+      <div class="settings-group settings-behavior-group" data-settings-cat="general" id="settings-audio-comms-row" hidden>
+        <div class="settings-group-head">
+          <span data-i18n="settings_audio_head">Audio</span>
+          <span class="settings-hint" data-i18n="settings_audio_hint">cambio di altoparlanti e microfono</span>
+        </div>
+        <label class="settings-toggle-row">
+          <input class="settings-check" id="settings-audio-comms" type="checkbox" checked onchange="updateAudioSetCommunications(this.checked)">
+          <span class="settings-label-line">
+            <span data-i18n="settings_audio_comms">Cambia anche il dispositivo di comunicazione</span>
+            <span class="settings-hint" data-i18n="settings_audio_comms_desc">quando Xenon cambia altoparlanti o microfono, dal riquadro Volume, da un tasto del Deck o dall'assistente, sposta anche quello che usano Discord, Teams e le app di chiamata. Disattivalo per cambiare solo il dispositivo predefinito e lasciare le chiamate dove sono</span>
           </span>
         </label>
       </div>
@@ -2127,11 +2202,19 @@
               <option value="7" data-i18n="settings_weather_days_7">7 giorni</option>
             </select>
           </label>
-          <div class="settings-row full">
+          <div class="settings-row full" data-search-kw="settings_temp_unit_kw">
             <span class="settings-label-line"><span data-i18n="settings_temp_unit">Unità temperatura</span></span>
             <div class="settings-segmented" role="group" aria-label="Unità temperatura">
               <button class="settings-temp-unit settings-segment-btn" type="button" data-temp-unit="c" onclick="updateTempUnit('c')" aria-pressed="true">°C</button>
               <button class="settings-temp-unit settings-segment-btn" type="button" data-temp-unit="f" onclick="updateTempUnit('f')" aria-pressed="false">°F</button>
+            </div>
+          </div>
+          <div class="settings-row full" data-search-kw="settings_temp_unit_kw">
+            <span class="settings-label-line"><span data-i18n="settings_hw_temp_unit">Temperature hardware</span><span class="settings-hint" data-i18n="settings_hw_temp_unit_hint">CPU, GPU e avvisi</span></span>
+            <div class="settings-segmented" role="group" aria-label="Temperature hardware" data-i18n-aria-label="settings_hw_temp_unit">
+              <button class="settings-hw-temp-unit settings-segment-btn" type="button" data-hw-temp-unit="auto" onclick="updateHwTempUnit('auto')" aria-pressed="true" data-i18n="settings_hw_temp_unit_auto">Come il meteo</button>
+              <button class="settings-hw-temp-unit settings-segment-btn" type="button" data-hw-temp-unit="c" onclick="updateHwTempUnit('c')" aria-pressed="false">°C</button>
+              <button class="settings-hw-temp-unit settings-segment-btn" type="button" data-hw-temp-unit="f" onclick="updateHwTempUnit('f')" aria-pressed="false">°F</button>
             </div>
           </div>
           <div class="settings-row full">
@@ -2471,6 +2554,31 @@
         </label>
       </div>
 
+      <!-- OpenAI Codex: what may appear while you are looking elsewhere (the
+           approval cards) and how long a card waits. Linking, trust and plan
+           usage live in the tile itself. -->
+      <div class="settings-group" data-settings-cat="codex">
+        <div class="settings-group-head">
+          <span data-i18n="settings_cat_codex">Codex</span>
+          <span class="settings-hint" data-i18n="settings_codex_hint">Il widget “Codex” si aggiunge dal pulsante “+” della dashboard. Qui decidi solo cosa può comparire quando il widget non è sullo schermo.</span>
+        </div>
+        <label class="settings-toggle-row full">
+          <input class="settings-check" id="settings-codex-approvals" type="checkbox" onchange="updateCodexWidgetCfg({ approvals: this.checked })">
+          <span class="settings-label-line"><span data-i18n="settings_codex_approvals">Chiedi i permessi su questo schermo</span><span class="settings-hint" data-i18n="settings_codex_approvals_hint">quando Codex chiede di eseguire un comando o di modificare dei file, la richiesta compare qui. Se disattivi, risponde Codex come prima</span></span>
+        </label>
+        <div class="settings-row full">
+          <span class="settings-label-line"><span data-i18n="settings_codex_wait">Quanto aspetta una richiesta</span><span class="settings-hint" data-i18n="settings_codex_wait_hint">mentre la richiesta è qui, Codex non mostra la sua. Allo scadere torna a Codex, che la chiede come sempre</span></span>
+          <select class="settings-select" id="settings-codex-wait" onchange="updateCodexWidgetCfg({ waitSec: Number(this.value) })">
+            <option value="30">30 s</option>
+            <option value="60">1 min</option>
+            <option value="90">1 min 30 s</option>
+            <option value="180">3 min</option>
+            <option value="300">5 min</option>
+            <option value="540">9 min</option>
+          </select>
+        </div>
+      </div>
+
       <!-- Hardware sensors. The WHOLE section is built by js/sensor-access.js →
            initSettings(), heading included, and only when there is something to
            repair. It used to be a static .settings-group with the heading in
@@ -2613,7 +2721,7 @@
           <span class="settings-hint" data-i18n="settings_gamemode_hint">Sospende gli effetti animati durante i giochi</span>
         </div>
         <div class="settings-grid">
-          <label class="settings-toggle-row full">
+          <label class="settings-toggle-row full" data-search-kw="settings_gamemode_kw">
             <input class="settings-check" id="settings-gamemode-enabled" type="checkbox" onchange="updateGameMode(this.checked)">
             <span data-i18n="settings_fx_enable">Attiva</span>
           </label>
@@ -3125,6 +3233,13 @@
         </label>
         <p class="settings-note" id="settings-search-index-status" hidden></p>
         <label class="settings-toggle-row">
+          <input class="settings-check" id="settings-search-recent-tile" type="checkbox" onchange="updateSearchSettings({ recentInTile: this.checked })">
+          <span class="settings-label-line">
+            <span data-i18n="settings_search_recent_tile">File recenti nel widget Ricerca</span>
+            <span class="settings-hint" data-i18n="settings_search_recent_tile_hint">a ricerca vuota mostra i file aperti di recente da Xenon; si vedono anche da un telefono abbinato</span>
+          </span>
+        </label>
+        <label class="settings-toggle-row">
           <input class="settings-check" id="settings-search-aibrain" type="checkbox" onchange="updateSearchSettings({ aiFullContext: this.checked })">
           <span class="settings-label-line">
             <span data-i18n="settings_search_aibrain">Cervello completo per ricerca e pulizia AI</span>
@@ -3195,6 +3310,14 @@
                 <span class="settings-hint" data-i18n="settings_safe_mode_hint">mette in pausa widget di terze parti, tema personalizzato e sfondi importati e torna all'aspetto di fabbrica. Non disinstalla niente: togli la spunta e tutto torna come prima. Utile per capire se un contenuto installato causa problemi</span>
               </span>
             </label>
+            <label class="settings-toggle-row">
+              <input class="settings-check" id="settings-auto-update-widgets" type="checkbox" onchange="updateAutoUpdateWidgets(this.checked)">
+              <span class="settings-label-line">
+                <span data-i18n="settings_widget_auto_update">Aggiorna i widget da solo</span>
+                <span class="settings-hint" data-i18n="settings_widget_auto_update_hint">installa da solo le nuove versioni dei widget dello Store. Non aggiorna mai un widget che chiede permessi nuovi: quello resta a te. Spenta, gli aggiornamenti restano a portata di tap in Gestisci gli installati</span>
+              </span>
+            </label>
+            <p class="settings-note" id="settings-auto-update-widgets-line" hidden></p>
             <div class="settings-share-buttons">
               <button type="button" class="settings-btn" onclick="if(window.CommunityGallery)CommunityGallery.open('__installed')" data-i18n="settings_sdk_manage">Gestisci gli installati…</button>
             </div>
@@ -3231,6 +3354,7 @@
               </span>
             </div>
             <div class="settings-supporter-row">
+              <span class="settings-supporter-saved" id="settings-supporter-saved" data-i18n="settings_supporter_stored" hidden>Codice salvato</span>
               <input type="text" class="settings-supporter-field" id="settings-supporter-code"
                      autocomplete="off" spellcheck="false" placeholder="XS-XXXX-XXXX-XXXX"
                      data-i18n-placeholder="preset_redeem_placeholder">
@@ -3268,10 +3392,24 @@
           </div>
           <div class="support-hero-title" data-i18n="support_title">Ti piace Xenon?</div>
           <p class="support-hero-lead" data-i18n="support_lead">Xenon è gratuito, senza pubblicità e sviluppato da una persona sola nel tempo libero. Se lo usi ogni giorno, un caffè è il modo migliore per dire grazie e tenere vivo il progetto.</p>
-          <a class="support-cta support-cta-coffee" href="https://www.buymeacoffee.com/marcimastro98" target="_blank" rel="noopener noreferrer">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 8h1a4 4 0 1 1 0 8h-1"/><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4Z"/><path d="M6 2v2M10 2v2M14 2v2"/></svg>
-            <span data-i18n="support_coffee_btn">Offrimi un caffè</span>
-          </a>
+          <!-- Monthly first: recurring support is what keeps the project running.
+               Both links go through the hub's counter (supportUrl in @xenon/core). -->
+          <div class="support-cta-row">
+            <a class="support-cta support-cta-coffee" href="https://xenon-supporter-hub.xenonedge.workers.dev/go/support?s=settings" target="_blank" rel="noopener noreferrer">
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+              <span data-i18n="support_ask_monthly">Sostieni ogni mese</span>
+            </a>
+            <a class="support-cta support-cta-once" href="https://xenon-supporter-hub.xenonedge.workers.dev/go/support?s=settings&amp;p=once" target="_blank" rel="noopener noreferrer">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 8h1a4 4 0 1 1 0 8h-1"/><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4Z"/><path d="M6 2v2M10 2v2M14 2v2"/></svg>
+              <span data-i18n="support_coffee_btn">Offrimi un caffè</span>
+            </a>
+          </div>
+          <!-- Filled from the supporter hub when the pane opens (js/support-goal.js);
+               stays hidden when the count cannot be read. -->
+          <div class="support-goal" id="settings-support-goal" hidden>
+            <p class="support-goal-line"></p>
+            <progress class="support-goal-bar" max="1" value="0"></progress>
+          </div>
         </div>
         <div class="support-card support-card-discord">
           <div class="support-card-ico" aria-hidden="true">
@@ -4188,6 +4326,7 @@
 <script src="js/status.js"></script>
 <script src="js/i18n.js"></script>
 <script src="js/native-bridge.js"></script>
+<script src="js/icue-host.js"></script>
 <script src="js/edge-preview.js"></script>
 <script src="js/audio-feedback.js"></script>
 <script src="js/clock.js"></script>
@@ -4196,6 +4335,11 @@
 <script src="js/album-theme.js"></script>
 <script src="js/media.js"></script>
 <script src="js/media-spotify.js"></script>
+<script src="js/lyrics-core.js"></script>
+<script src="js/lyrics-view.js"></script>
+<script src="js/lyrics-translation.js"></script>
+<script src="js/lyrics-stage.js"></script>
+<script src="js/media-lyrics.js"></script>
 <script src="js/calendar.js"></script>
 <script src="js/system.js"></script>
 <script src="js/network.js"></script>
@@ -4211,11 +4355,15 @@
 <script src="js/discord-invite.js"></script>
 <script src="js/support-card.js"></script>
 <script src="js/share-nudge.js"></script>
+<script src="js/support-goal.js"></script>
+<script src="js/support-appeal.js"></script>
 <script src="js/custom-bg.js"></script>
 <script src="js/slideshow-widget.js"></script>
 <script src="js/theme-palette.js"></script>
 <script src="js/content-installs.js"></script>
+<script src="js/fuzzy-find.js"></script>
 <script src="js/settings.js"></script>
+<script src="js/settings-search.js"></script>
 <script src="js/performance.js"></script>
 <script src="js/tile-decor-presets.js"></script>
 <script src="js/tile-shape-presets.js"></script>
@@ -4241,6 +4389,7 @@
 <script src="js/dashboard-grid.js"></script>
 <script src="js/dashboard-tabgroups.js"></script>
 <script src="js/dashboard-pages.js"></script>
+<script src="js/palette-model.js"></script>
 <script src="js/dashboard-palette.js"></script>
 <script src="js/dashboard-presets.js"></script>
 <script src="js/genesis.js"></script>
@@ -4265,6 +4414,7 @@
 <script src="js/spotify-settings.js"></script>
 <script src="js/obs-widget.js"></script>
 <script src="js/local-video-player.js"></script>
+<script src="js/watch-view.js"></script>
 <script src="js/youtube-widget.js"></script>
 <script src="js/youtubelive-widget.js"></script>
 <script src="js/twitchwatch-widget.js"></script>
@@ -4276,8 +4426,17 @@
 <script src="js/call-modal.js"></script>
 <script src="js/stock-widget.js"></script>
 <script src="js/football-widget.js"></script>
+<script src="js/claude-history.js"></script>
+<script src="js/claude-thread.js"></script>
+<script src="js/claude-ident.js"></script>
+<script src="js/claude-clawd.js"></script>
+<script src="js/claude-rail.js"></script>
+<script src="js/claude-console.js"></script>
 <script src="js/claude-widget.js"></script>
 <script src="js/ai-usage-widget.js"></script>
+<script src="js/approval-keys.js"></script>
+<script src="js/codex-widget.js"></script>
+<script src="js/chatgpt-widget.js"></script>
 <script src="js/news-widget.js"></script>
 <script src="js/sensor-access.js"></script>
 <script src="js/fans-widget.js"></script>
@@ -4285,6 +4444,10 @@
 <script src="js/search-widget.js"></script>
 <script src="js/disk-intelligence.js"></script>
 <script src="js/disk-widget.js"></script>
+<script src="js/devclean-pitch.js"></script>
+<script src="js/devclean-widget.js"></script>
+<script src="js/lyrics-widget-options.js"></script>
+<script src="js/lyrics-widget.js"></script>
 <!-- Says why search and the disk map went empty on a Mac. Self-gating: it acts
      only on the flag the server sets, which exists only on macOS. -->
 <script src="js/macos-fda.js"></script>

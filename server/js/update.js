@@ -13,6 +13,14 @@
   const DISMISS_KEY = 'xenon.update.dismissed'; // last version the user dismissed
   const RESULT_ACK_KEY = 'xenon.update.resultAck'; // last apply failure already shown as a toast
   const SHELL_ERR_KEY = 'xenon.update.shellErrPending'; // shell update failed right before a reload
+  const SHELL_TRIED_KEY = 'xenon.update.shellTried'; // last app version an update of the shell was started for
+  const SHELL_PENDING_KEY = 'xenon.update.shellPending'; // an update tapped by hand still owes the app its half
+  // How long after that tap the app half may still start on its own (see
+  // shellCatchUpPlan).
+  const SHELL_RESUME_MS = 15 * 60 * 1000;
+  // How often a waiting app update asks whether this is a quiet moment.
+  const SHELL_QUIET_FIRST_MS = 2 * 60 * 1000;
+  const SHELL_QUIET_EVERY_MS = 10 * 60 * 1000;
 
   function tr(key, fallback) {
     return (typeof window.t === 'function' && window.t(key)) || fallback;
@@ -365,7 +373,12 @@
     title.textContent = tr('update_title', 'Aggiornamento disponibile');
     const ver = document.createElement('div');
     ver.className = 'upd-ver';
-    ver.textContent = 'v' + stripV(info.latest) + (info.current ? '  ·  ' + tr('update_from', 'dalla v') + stripV(info.current) : '');
+    // With the dashboard current, what is being updated is the app: say which
+    // version it comes from, not "from v4.11.13 to v4.11.13".
+    const from = !info.updateAvailable && shellBehind(info)
+      ? (window.__XENON_NATIVE_CAPS__ || {}).shellVersion
+      : info.current;
+    ver.textContent = 'v' + stripV(info.latest) + (from ? '  ·  ' + tr('update_from', 'dalla v') + stripV(from) : '');
     headText.appendChild(title);
     headText.appendChild(ver);
     head.appendChild(headText);
@@ -633,8 +646,9 @@
   // update the shell over a broken dashboard); shell failures are non-fatal
   // (the dashboard is already updated — the shell re-offers at next launch).
   let nativeFlowActive = false; // double-tap guard: two flows = two appliers racing
+  let shellPhaseRunning = false; // the shell's own update has started in this page (runShellPhase)
   async function nativeUpdateFlow(info) {
-    if (nativeFlowActive) return;
+    if (nativeFlowActive || shellPhaseRunning) return;
     nativeFlowActive = true;
     try { await nativeUpdateFlowInner(info); } finally { nativeFlowActive = false; }
   }
@@ -644,7 +658,10 @@
     const latest = stripV(info && info.latest);
     // Unknown shell version (older shell without the caps injection) ⇒ assume
     // the shell is outdated and let its own updater decide (it no-ops when current).
-    const shellOutdated = caps.shellVersion ? semverNewer(latest, caps.shellVersion) : true;
+    // A shell that cannot replace itself (an Arch package: pacman owns it) is
+    // never "outdated" here; asking it to update would only report a failure.
+    const shellOutdated = caps.shellSelfUpdate === false ? false
+      : caps.shellVersion ? semverNewer(latest, caps.shellVersion) : true;
     const backendOutdated = !!(info && info.updateAvailable);
     const st = await fetchSelfStatus();
     const ctrl = showUpdatingOverlay();
@@ -681,6 +698,7 @@
 
     if (backendOutdated && st && st.supported) {
       ctrl.setTitle(tr('update_native_backend_phase', 'Aggiorno la dashboard…'));
+      if (shellOutdated) rememberShellPending(latest);
       const staged = !!(st.staged && stripV(String(st.staged.version || '')) === latest);
       if (!staged) {
         ctrl.setSub(tr('update_preparing', 'Scarico e preparo… (può richiedere un minuto)'));
@@ -710,15 +728,17 @@
         applyStartedAt,
         // Don't reload on success: the shell phase (if any) chains from here,
         // and ITS restart/reload is what boots the freshly served dashboard.
+        // On macOS this page usually never gets here: the applier relaunches
+        // the whole app, and the next page finishes the job (shellCatchUpPlan).
         onSuccess: () => {},
       });
       if (!ok) return; // failure/timeout already on screen
-      if (shellOutdated) { runShellPhase(ctrl, caps); return; }
+      if (shellOutdated) { runShellPhase(ctrl, caps, latest); return; }
       location.reload();
       return;
     }
 
-    if (shellOutdated) { runShellPhase(ctrl, caps); return; }
+    if (shellOutdated) { runShellPhase(ctrl, caps, latest); return; }
     // Nothing left to do (both current) — a plain reload clears the overlay.
     location.reload();
   }
@@ -727,7 +747,15 @@
   // errors through XenonNative.onShellUpdateEvent (evaled by the Rust side);
   // old shells are fire-and-forget, so a grace timer reloads the dashboard
   // whether or not the shell managed to restart itself.
-  function runShellPhase(ctrl, caps) {
+  //
+  // Once per page: the shell has no guard of its own, and a second
+  // `xenon-update:install` (the shell's toast tapped while an automatic update
+  // runs) would start a second download racing the first. The version it goes
+  // for is remembered, so no automatic path starts it again (shellCatchUpPlan).
+  function runShellPhase(ctrl, caps, target) {
+    if (shellPhaseRunning) return;
+    shellPhaseRunning = true;
+    rememberShellTried(target);
     ctrl.setTitle(tr('update_native_shell_phase', 'Aggiorno l’app…'));
     ctrl.setSub(tr('native_update_installing_hint', 'The app will restart when it is done.'));
 
@@ -777,13 +805,141 @@
     try { window.location.href = 'xenon-update:install'; } catch { /* not native */ }
   }
 
+  // ── The app catching up with its dashboard ───────────────────────────────────
+  // The app is two pieces: the shell the OS launches and the dashboard behind
+  // it. The dashboard updates itself, by hand or on its own; the shell only
+  // through its own signed updater. A shell left behind keeps every fix that
+  // lives in it (window placement, wake from sleep, GPU) away from the user
+  // while Settings reads "up to date". Reported from a Mac on 4.11.12 whose
+  // crash log still said v4.11.7 on every line.
+
+  // null = this browser cannot remember anything, which closes every automatic
+  // path: without the record of a try, a failing update would be tried forever.
+  function readShellTried() {
+    try { return stripV(localStorage.getItem(SHELL_TRIED_KEY) || ''); } catch { return null; }
+  }
+  function rememberShellTried(version) {
+    if (!version) return;
+    try { localStorage.setItem(SHELL_TRIED_KEY, stripV(version)); } catch { /* readShellTried() is null then */ }
+  }
+
+  // Written when the user taps Update and both halves are due, before anything
+  // restarts. Read once by the next page and dropped: it only speaks for that
+  // start. The applier's own result is no help here, it is written after the
+  // relaunched app is already asking.
+  function rememberShellPending(version) {
+    try {
+      localStorage.setItem(SHELL_PENDING_KEY, JSON.stringify({ to: stripV(version), at: Date.now() }));
+    } catch { /* the pill still offers the app half */ }
+  }
+  function takeShellPending() {
+    try {
+      const raw = localStorage.getItem(SHELL_PENDING_KEY);
+      if (raw === null) return null;
+      localStorage.removeItem(SHELL_PENDING_KEY);
+      const p = JSON.parse(raw);
+      return p && typeof p === 'object' ? { to: stripV(p.to), at: Number(p.at) } : null;
+    } catch { return null; }
+  }
+
+  // This shell is older than the dashboard it shows, and can replace itself (an
+  // Arch package cannot: pacman owns it). An older shell without the caps says
+  // nothing about its version, so nothing is assumed here.
+  function shellBehind(info) {
+    if (!isNativeShell() || !info || !info.current) return false;
+    const caps = window.__XENON_NATIVE_CAPS__ || {};
+    if (caps.shellSelfUpdate === false || !caps.shellVersion) return false;
+    return semverNewer(info.current, caps.shellVersion);
+  }
+
+  // What to do about a shell that is behind, from plain values so it can be
+  // tested on its own:
+  //   'now'    the user tapped Update a moment ago, the dashboard half is done
+  //            and the app half never ran. On macOS that is every such update:
+  //            the applier ends by relaunching the whole app (the backend is
+  //            its child), which closes the page that was about to start the
+  //            shell's update. This finishes what they asked for.
+  //   'quiet'  the dashboard is current, so the app can follow it at a quiet
+  //            moment, if updates are automatic here (catchUpShell asks).
+  //   ''       nothing automatic; the pill and the shell's own toast offer it.
+  // The dashboard always goes first, and each version is tried once: a try
+  // that failed waits for a tap instead of restarting the app over and over.
+  function shellCatchUpPlan(s) {
+    if (!s || !s.behind || s.updateAvailable) return '';
+    const target = stripV(s.current);
+    if (!target || s.tried === null || s.tried === target) return '';
+    const p = s.pending;
+    const at = p ? Number(p.at) : NaN;
+    if (p && stripV(p.to) === target && Number.isFinite(at)
+      && s.now >= at && s.now - at <= SHELL_RESUME_MS) return 'now';
+    // The shell's updater installs the newest release, so only follow when that
+    // IS the dashboard's version: never land the app on a release the dashboard
+    // has not taken yet (it waits a day for a reason). A skipped version stays
+    // skipped.
+    if (!s.skipped && s.latest && stripV(s.latest) === target) return 'quiet';
+    return '';
+  }
+
+  // Run the plan once per page load. 'quiet' asks the server, which knows the
+  // switch, a postponed update, the idle time and whether this shell can update
+  // with nobody there to answer a password prompt (only Windows can). It stops
+  // for good on any no that waiting cannot change, or when a newer release
+  // turns up (the dashboard goes first again), and otherwise looks again every
+  // ten minutes.
+  let shellCatchUpTimer = null;
+  function catchUpShell(info) {
+    const pending = takeShellPending();
+    if (!shellBehind(info) || info.updateAvailable) return;
+    const target = stripV(info.current);
+    const plan = shellCatchUpPlan({
+      behind: true,
+      updateAvailable: false,
+      current: target,
+      latest: info.latest,
+      tried: readShellTried(),
+      pending,
+      skipped: isVersionSkipped(target),
+      now: Date.now(),
+    });
+    const caps = window.__XENON_NATIVE_CAPS__ || {};
+    if (plan === 'now') {
+      runShellPhase(showUpdatingOverlay(), caps, target);
+      return;
+    }
+    if (plan !== 'quiet' || shellCatchUpTimer) return;
+    const lookAgain = () => { shellCatchUpTimer = setTimeout(look, SHELL_QUIET_EVERY_MS); };
+    const look = async () => {
+      shellCatchUpTimer = null;
+      if (shellPhaseRunning || nativeFlowActive) return;
+      let a = null;
+      try { a = await (await fetch('/update/auto-status?safe=1')).json(); } catch { a = null; }
+      if (!a) { lookAgain(); return; }
+      if (!a.enabled || a.shellSilent !== true) return;
+      if (a.latest && stripV(a.latest) !== target) return;
+      const tried = readShellTried();
+      if (tried === null || tried === target) return;   // tapped meanwhile, or nothing can be remembered
+      if (a.safeNow === true && !(a.postponedUntil > 0)) {
+        runShellPhase(showUpdatingOverlay(), caps, target);
+        return;
+      }
+      lookAgain();
+    };
+    shellCatchUpTimer = setTimeout(look, SHELL_QUIET_FIRST_MS);
+  }
+
   // ── Indicators (red dot + footer pill / check button) ───────────────────────
   // Single source of truth: when an update is available, show the red dot on the
   // topbar Settings button + a pill in the Settings footer, and HIDE the now-
   // redundant "Check for updates" button. When up to date, do the opposite.
   // After an update the next check reports nothing new, so the dot clears itself.
+  // An app left behind its dashboard counts too (shellBehind): the dashboard
+  // reading "up to date" was exactly how a stale shell went unnoticed.
+  function hasUpdate(info) {
+    return !!(info && (info.updateAvailable || (info.latest && shellBehind(info))));
+  }
+
   function refreshIndicators(info) {
-    const available = !!(info && info.updateAvailable);
+    const available = hasUpdate(info);
 
     const dot = document.getElementById('settings-update-dot');
     if (dot) dot.hidden = !available;
@@ -807,7 +963,7 @@
         a.target = '_blank';
         a.rel = 'noopener noreferrer';
       }
-      a.textContent = tr('update_available', 'Update available') + ' · v' + info.latest;
+      a.textContent = tr('update_available', 'Update available') + ' · v' + stripV(info.latest);
       a.addEventListener('click', (e) => { e.preventDefault(); openModal(info); });
       out.insertAdjacentElement('beforebegin', a);
       if (checkBtn) checkBtn.hidden = true;
@@ -819,9 +975,15 @@
   // ── What's New (curated highlights for the running version) ──────────────────
   // A separate modal from the "update available" one above: it announces the
   // headline features of the version the user is ALREADY on, from the curated,
-  // build-shipped server/whatsnew.json. It reappears at every startup until the
-  // user taps "Don't show again" for that release's id, and only comes back when
-  // a later build ships a new id (a bugfix release keeps the old id → no re-nag).
+  // build-shipped server/whatsnew.json. It opens ONCE per release id: the moment
+  // it is actually put on screen the id is remembered, however it is closed
+  // afterwards, and it only comes back when a later build ships a new id (a
+  // bugfix release keeps the old id → no re-nag). Someone who wants to read it
+  // again taps the version number at the bottom of Settings.
+  //
+  // It used to be remembered only by a "Don't show again" button, so anyone who
+  // simply closed it saw it at every startup, and every other popup that waits
+  // behind it (the paid drops window) waited behind it too.
   //
   // The dismissal is stored in hub settings (a file on the PC) since v4.11.6,
   // with the pre-v4.11.6 localStorage key kept in step as a per-device fallback.
@@ -964,13 +1126,6 @@
       actions.appendChild(allBtn);
     }
 
-    const dismissBtn = document.createElement('button');
-    dismissBtn.type = 'button';
-    dismissBtn.className = 'upd-btn ghost';
-    dismissBtn.textContent = tr('update_dismiss', 'Non mostrare più');
-    dismissBtn.addEventListener('click', () => { rememberWhatsNew(wn.id); closeModal(); });
-    actions.appendChild(dismissBtn);
-
     card.appendChild(actions);
     overlay.appendChild(card);
     document.body.appendChild(overlay);
@@ -983,8 +1138,8 @@
   // At startup, curated "What's New" for the running version takes precedence over
   // the "update available" nudge (you can only act on one popup at a time, and the
   // update dot/pill stays visible either way). Whichever doesn't auto-open is still
-  // reachable — the update modal from the Settings pill, and What's New reappears
-  // next startup until dismissed.
+  // reachable — the update modal from the Settings pill, and What's New from the
+  // version number in Settings.
   // Failures that happened while no page was watching: an apply that rolled
   // back after the page was closed (the applier's persisted result), or a shell
   // update that errored right before the reload (flag set by runShellPhase).
@@ -1093,18 +1248,43 @@
     refreshIndicators(info);
     surfacePendingUpdateNotices(info); // fire-and-forget; only ever shows toasts
     surfaceStartupTaskNotice();        // same: silent on a healthy install
+    catchUpShell(info);                // native only, and only with the app behind its dashboard
     // Re-read the dismissed flag HERE, after the awaits: on a first run
     // settings.js marks this release as seen while those fetches are still in
     // flight, and reading it before them would show the modal it just suppressed.
     const wnPending = !!(wn && wn.id && !dismissedWhatsNew(wn.id)
       && Array.isArray(wn.highlights) && wn.highlights.length);
     const updatePending = !!(info && info.updateAvailable && !isVersionSkipped(info.latest));
-    if (wnPending) whenNothingElseIsUp(() => { if (!dismissedWhatsNew(wn.id)) openWhatsNew(wn); });
+    // Remembered when it is really shown, not when it is queued: if the screen
+    // stays busy and the queue gives up, the modal has not been seen yet.
+    if (wnPending) whenNothingElseIsUp(() => {
+      if (dismissedWhatsNew(wn.id)) return;
+      rememberWhatsNew(wn.id);
+      openWhatsNew(wn);
+    });
     // On the native app, don't auto-pop this web modal: the shell shows its own
     // in-app "update available — tap to install" toast (native-bridge.js), and
     // two competing popups is exactly how a user ended up on the GitHub page.
     // The Settings pill still opens this modal on demand (now native-aware).
     else if (updatePending && !isNativeShell()) whenNothingElseIsUp(() => openModal(info));
+  }
+
+  // The version number at the bottom of Settings re-opens What's New for the
+  // running build, the only way back to it once it has been seen.
+  function wireVersionLabel() {
+    const el = document.getElementById('settings-version');
+    if (!el) return;
+    const open = async () => {
+      const wn = await loadWhatsNew();
+      if (wn) openWhatsNew(wn);
+    };
+    el.setAttribute('role', 'button');
+    el.tabIndex = 0;
+    el.title = tr('whatsnew_sub', 'Scopri cosa è cambiato in questa versione');
+    el.addEventListener('click', open);
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+    });
   }
 
   // Manual "Check for updates" button (forces a fresh probe).
@@ -1114,7 +1294,7 @@
     const info = await check(true);
     if (btn) { btn.disabled = false; btn.textContent = original; }
     refreshIndicators(info);
-    if (info && info.updateAvailable) {
+    if (hasUpdate(info)) {
       openModal(info);
     } else if (window.XenonToast) {
       window.XenonToast.show({
@@ -1142,5 +1322,6 @@
   };
   window.XenonWhatsNew = { load: loadWhatsNew, open: openWhatsNew, suppressForFreshInstall };
 
+  document.addEventListener('DOMContentLoaded', wireVersionLabel, { once: true });
   document.addEventListener('DOMContentLoaded', boot, { once: true });
 })();

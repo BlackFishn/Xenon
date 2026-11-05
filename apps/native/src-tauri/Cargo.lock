@@ -5204,8 +5204,10 @@ dependencies = [
 
 [[package]]
 name = "xenon-native"
-version = "4.11.10"
+version = "4.11.13"
 dependencies = [
+ "gdk",
+ "gtk",
  "serde",
  "serde_json",
  "tauri",

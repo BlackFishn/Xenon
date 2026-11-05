@@ -16,8 +16,13 @@
     if (typeof showHubToast === 'function') showHubToast('Genesis', message, '');
   }
 
+  // The ids Genesis may place: every built-in widget except the Store widgets'
+  // host tile. Placed on its own, 'custom' is an empty tile asking which widget
+  // to show; a Store widget is added by name from the "+" panel instead.
+  const genesisWidgetIds = () => (typeof DASHBOARD_WIDGET_IDS !== 'undefined' ? DASHBOARD_WIDGET_IDS : []).filter(id => id !== 'custom');
+
   function validWidgetIds(list) {
-    const known = new Set(typeof DASHBOARD_WIDGET_IDS !== 'undefined' ? DASHBOARD_WIDGET_IDS : []);
+    const known = new Set(genesisWidgetIds());
     const seen = new Set();
     const out = [];
     (Array.isArray(list) ? list : []).forEach(w => {
@@ -116,7 +121,7 @@
         widgets: DASHBOARD_WIDGET_IDS.filter(w =>
           layout.widgets[w] && layout.widgets[w].visible && layout.widgets[w].page === p.id),
       }));
-      return { pages, availableWidgets: DASHBOARD_WIDGET_IDS.slice(), maxPages: DASHBOARD_PAGES_MAX };
+      return { pages, availableWidgets: genesisWidgetIds(), maxPages: DASHBOARD_PAGES_MAX };
     } catch {
       return null;
     }
@@ -256,6 +261,16 @@
     open_url: (v) => (v ? { type: 'openUrl', url: v } : null),
     hotkey: (v) => (v ? { type: 'hotkey', keys: v } : null),
     webhook: (v) => (v ? { type: 'webhook', url: v, method: 'POST', body: '' } : null),
+    // The model knows pages by NAME; the key stores the id, so resolve it here.
+    dashboard_page: (v) => {
+      const want = String(v || '').trim();
+      if (!want) return null;
+      const low = want.toLowerCase();
+      if (low === 'next' || low === 'prev' || low === 'back') return { type: 'dashboardPage', page: low };
+      const pages = (window.DashboardPages && window.DashboardPages.list) ? window.DashboardPages.list() : [];
+      const hit = pages.find((pg) => pg.id === want) || pages.find((pg) => String(pg.label).toLowerCase() === low);
+      return { type: 'dashboardPage', page: hit ? hit.id : want };
+    },
     // obs
     obs_record: () => ({ type: 'obsRecord', mode: 'toggle' }),
     obs_stream: () => ({ type: 'obsStream', mode: 'toggle' }),

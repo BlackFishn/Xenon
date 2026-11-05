@@ -19,7 +19,7 @@ const SETTINGS_FONT_EXTENSIONS = Object.freeze(new Set(['woff2', 'woff', 'ttf', 
 // comes from the @font-face src, so the family label never needs to match the file.
 const USER_FONT_FAMILY = 'XenonUserFont';
 
-const DASHBOARD_WIDGET_IDS = Object.freeze(['media', 'agenda', 'mic', 'audio', 'system', 'notes', 'tasks', 'calendar', 'timer', 'chat', 'deck', 'remote', 'twitch', 'twitchwatch', 'obs', 'youtube', 'youtubelive', 'discord', 'spotify', 'browser', 'secondscreen', 'weather', 'smarthome', 'tcl-ac', 'streamerbot', 'wavelink', 'lighting', 'notifications', 'stocks', 'football', 'news', 'claude', 'aiusage', 'vitals', 'unifi', 'slideshow', 'fans', 'power', 'battery', 'search', 'disk', 'transfer', 'phone', 'custom']);
+const DASHBOARD_WIDGET_IDS = Object.freeze(['media', 'agenda', 'mic', 'audio', 'system', 'notes', 'tasks', 'calendar', 'timer', 'chat', 'deck', 'remote', 'twitch', 'twitchwatch', 'obs', 'youtube', 'youtubelive', 'discord', 'spotify', 'browser', 'secondscreen', 'weather', 'smarthome', 'tcl-ac', 'streamerbot', 'wavelink', 'lighting', 'notifications', 'stocks', 'football', 'news', 'claude', 'openaicodex', 'chatgpt', 'vitals', 'unifi', 'slideshow', 'fans', 'power', 'battery', 'search', 'disk', 'devclean', 'lyrics', 'transfer', 'phone', 'custom', 'aiusage']);
 // Selectable stock-data providers + chart ranges (mirrors server/stocks.js).
 const STOCK_PROVIDER_IDS = Object.freeze(['auto', 'yahoo', 'twelvedata', 'finnhub']);
 const STOCK_RANGE_IDS = Object.freeze(['1d', '1w', '1m', '1y']);
@@ -125,6 +125,8 @@ const DEFAULT_DASHBOARD_LAYOUT = Object.freeze({
     news:     Object.freeze({ x: 0, y: 38, w: 8, h: 10, visible: false, page: 'dashboard' }),
     claude:   Object.freeze({ x: 16, y: 28, w: 8, h: 10, visible: false, page: 'dashboard' }),
     aiusage:  Object.freeze({ x: 0, y: 0, w: 8, h: 16, visible: false, page: 'dashboard' }),
+    openaicodex: Object.freeze({ x: 16, y: 38, w: 8, h: 10, visible: false, page: 'dashboard' }),
+    chatgpt:  Object.freeze({ x: 16, y: 48, w: 8, h: 12, visible: false, page: 'dashboard' }),
     vitals:   Object.freeze({ x: 8, y: 38, w: 8, h: 8, visible: false, page: 'dashboard' }),
     unifi:    Object.freeze({ x: 8, y: 18, w: 8, h: 8, visible: false, page: 'dashboard' }),
     slideshow: Object.freeze({ x: 0, y: 48, w: 8, h: 8, visible: false, page: 'dashboard' }),
@@ -133,6 +135,8 @@ const DEFAULT_DASHBOARD_LAYOUT = Object.freeze({
     battery:  Object.freeze({ x: 0, y: 56, w: 8, h: 8, visible: false, page: 'dashboard' }),
     search:   Object.freeze({ x: 8, y: 56, w: 8, h: 8, visible: false, page: 'dashboard' }),
     disk:     Object.freeze({ x: 16, y: 54, w: 8, h: 10, visible: false, page: 'dashboard' }),
+    devclean: Object.freeze({ x: 0, y: 64, w: 8, h: 10, visible: false, page: 'dashboard' }),
+    lyrics: Object.freeze({ x: 8, y: 64, w: 6, h: 10, visible: false, page: 'dashboard' }),
     transfer: Object.freeze({ x: 8, y: 64, w: 8, h: 10, visible: false, page: 'dashboard' }),
     // Mirrors the server's entry, key for key: normalizeDashboardLayout runs on
     // both sides and reads a default per id, so an id present on one side only
@@ -261,6 +265,7 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
       { id: 'dots', hidden: false },
       { id: 'badges', hidden: false },
       { id: 'claude', hidden: false },
+      { id: 'codex', hidden: false },
     ],
     // The BUTTONS of the chrome, as opposed to the clock contents above. Order
     // and side apply in both chromes (quickbar/top-actions in Full become the
@@ -303,7 +308,8 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   swipeNavigation: true, // drag / finger-swipe to change dashboard page (touchscreen-friendly)
   swipeHomeGesture: true, // native app: swipe up from the bottom → Windows desktop (native-bridge.js)
   hideOnRdp: false, // native app: hide the kiosk during a Windows Remote Desktop session (opt-in; native-bridge.js)
-  nativeZoom: 1, // native app: WebView2 interface scale, 0.5–3 (Settings slider; native-bridge.js)
+  audioSetCommunications: true, // Windows: switching a device also moves the calls default (server setDefaultAudioDevice)
+  nativeZoom: 1, // native app: interface scale, 0.6–2.5 (Settings slider; native-bridge.js)
   accent: '#1ed760',
   dynamicAlbumTheme: true, // tint the accent from the now-playing album art
   background: '#070808',
@@ -353,7 +359,14 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   glassBlur: 22, // --glass-blur px, 0..40
   glassSaturate: 160, // --glass-saturate %, 100..220
   panelBorderStrength: 1, // multiplier on the derived panel-border alpha, 0..2
-  panelShadowStrength: 1, // multiplier on the derived panel-shadow alpha, 0..2
+  // Multiplier on the derived panel-shadow alpha, 0..2. Off: since v4.11.9 every tile
+  // cast a soft drop shadow, which on a dark wallpaper reads as a dark strip under each
+  // card (and a "card behind the cards" under a transparent one). The key used to be
+  // panelShadowStrength, and every install that ever saved its settings stored 1 there,
+  // theme cards and shared theme codes too. Renaming it is what turns the shadow off
+  // for them as well: the old key is simply no longer read. The slider is still there
+  // for whoever wants one. Never read panelShadowStrength again.
+  tileShadowStrength: 0,
   mutedText: null, // optional secondary-text colour (#rrggbb) or null = auto
   lineColor: null, // optional divider/border colour (#rrggbb) or null = auto
   backgroundMedia: null,
@@ -380,6 +393,9 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
     tile: Object.freeze({ hero: 'full', metrics: true, hourly: true, forecast: true, fields: WEATHER_FIELDS_ALL_ON }),
   }),
   tempUnit: 'c', // 'c' | 'f' — weather temperature display unit
+  // 'auto' | 'c' | 'f' — CPU/GPU temperatures, Guardian and briefing lines.
+  // 'auto' follows tempUnit, which is what everyone had before it existed.
+  hwTempUnit: 'auto',
   // The Media tile's waveform: 'off' | 'minimal' | 'wave'. An ADDITION to that
   // tile, so it defaults to off and has a quiet setting as well as a full one —
   // nobody gets a busier Media tile than the one they already had. Off is also
@@ -387,6 +403,16 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   // the cost follows the choice, the same rule the SDK `audioLevels` grant
   // follows, which until now was the only thing that could start it.
   mediaVisualizer: 'off',
+  // Song lyrics from LRCLIB (title + artist leave the PC; see the privacy page).
+  mediaLyrics: true,
+  // Lyrics widget timing nudge in ms, -3000..3000 in 100 ms steps.
+  lyricsOffsetMs: 0,
+  // Supporter Lyrics widget: translation through the user's own AI provider
+  // (off until turned on, capped per month), ja/ko/zh reading, stage mode.
+  lyricsTranslate: false,
+  lyricsReading: true,
+  lyricsTranslateCap: 200,
+  lyricsStage: false,
   // Open the dashboard in the default browser at Windows logon (default on).
   // Only reconciled into a real scheduled task from a standalone browser view —
   // never from inside the Xeneon Edge iframe (see reconcileAutoOpenBrowser).
@@ -403,11 +429,17 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   // users read "off unless you turn it on" and left it alone, which is a choice.
   // Do not "simplify" that test to `!== false`: it would flip exactly those people.
   versionPing: true,
+  autoUpdate: true,
+  // Store widgets update themselves (server/widget-auto-update.js). On unless switched off.
+  autoUpdateWidgets: true,
   // Announcements and the paid-drop card. ON by default, and normalized with
   // `!== false` — the opposite of versionPing above, deliberately: this is a
   // preference about being interrupted, not a data opt-in.
   hubMessages: true,
   catalogDrops: true,
+  // The month's paid drops, shown once per session (js/catalog-drop.js). A new
+  // key on purpose: it starts on for everybody, whatever catalogDrops said.
+  monthlyDrops: true,
   // `=== true` like versionPing, not `!== false`: a new outbound report starts
   // on for fresh installs only, never switched on under an existing user.
   catalogStats: true,
@@ -595,7 +627,7 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   // search dead while Settings displayed a configured folder. Leaving the key
   // absent is what lets the SERVER supply the platform's default, which is
   // where that decision already belongs (see normalizeSearchSettings).
-  searchSettings: Object.freeze({ hotkeyEnabled: false, hotkeyCombo: 'alt+space', aiFullContext: false }),
+  searchSettings: Object.freeze({ hotkeyEnabled: false, hotkeyCombo: 'alt+space', aiFullContext: false, recentInTile: false }),
   pageHotkeys: Object.freeze([]),
   diskSettings: Object.freeze({ devFolders: Object.freeze([]), installerAgeDays: 30 }),
   // Third-party widget SDK (the Custom widget tile). OFF by default — community
@@ -624,6 +656,11 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   // / question cards (with their fullscreen escalation) and the topbar marker.
   // Both on by default; see js/claude-widget.js.
   claudeWidget: Object.freeze({ approvals: true, questions: true, topbar: true }),
+  // OpenAI Codex widget: the approval cards (Settings → Codex) and how long one
+  // waits before the decision goes back to Codex. See js/codex-widget.js.
+  codexWidget: Object.freeze({ approvals: true, waitSec: 90 }),
+  // "Ask ChatGPT" tile: the model Codex answers with. See js/chatgpt-widget.js.
+  chatgptWidget: Object.freeze({ model: 'default' }),
   gameMode: true, // auto-pause ambient FX while a game / intensive app is running
   // Performance Mode (opt-in, off by default). Broader than gameMode: a
   // user-triggered / suggested profile that pauses dashboard animations and
@@ -802,7 +839,7 @@ const THEME_SETTING_KEYS = Object.freeze([
   'successColor', 'warningColor', 'dangerColor', 'infoColor', 'contrastGuard',
   'paletteVariants',
   'dynamicAlbumTheme',
-  'panelAlpha', 'panelBorderStrength', 'panelShadowStrength',
+  'panelAlpha', 'panelBorderStrength', 'tileShadowStrength',
   'uiRoundness', 'glassBlur', 'glassSaturate',
   'bgDim', 'bgBlur', 'bgAurora', 'bgGrid', 'bgStatic', 'bgCustom',
   'uiFont',
@@ -897,7 +934,7 @@ const NEWS_DEFAULT_TOPIC = Object.freeze({
 // — a grant carrying a stream/action the server allows but this list omits gets
 // silently stripped on save, so the widget is granted a capability it can never
 // use. server/test/sdk-grant-cats-sync guards that half.
-const SDK_WIDGET_STREAMS = Object.freeze(['status', 'system', 'network', 'diskIo', 'media', 'audio', 'audioLevels', 'wavelink', 'voicemeeter', 'stocks', 'football', 'news', 'claude', 'obs', 'discord', 'discordChannels', 'discordSoundboard', 'discordNotifications', 'streamerbot', 'homeassistant', 'twitchWatch', 'twitchChat', 'youtubeLive', 'youtube', 'tasks', 'notes', 'agenda', 'weather', 'battery', 'processes', 'spotify', 'scriptStates']);
+const SDK_WIDGET_STREAMS = Object.freeze(['status', 'system', 'network', 'diskIo', 'devStorage', 'media', 'audio', 'audioLevels', 'wavelink', 'voicemeeter', 'stocks', 'football', 'news', 'claude', 'codex', 'obs', 'discord', 'discordChannels', 'discordSoundboard', 'discordNotifications', 'streamerbot', 'homeassistant', 'twitchWatch', 'twitchChat', 'youtubeLive', 'youtube', 'tasks', 'notes', 'agenda', 'weather', 'battery', 'processes', 'spotify', 'scriptStates']);
 const SDK_WIDGET_ACTION_CATS = Object.freeze(['media', 'volume', 'audioDevice', 'mic', 'lighting', 'chroma', 'wavelink', 'voicemeeter', 'spotify', 'steam', 'obs', 'discord', 'homeassistant', 'twitch', 'youtube', 'youtubePlayer', 'streamerbot', 'url', 'tasks', 'soundboard', 'browser', 'watch', 'pages']);
 const SDK_PACKAGE_ID_RE = /^[a-z0-9][a-z0-9-]{1,40}$/;
 // Grant-side mirrors of the server manifest rules (sdk-widgets.js is the
@@ -1136,6 +1173,21 @@ function normalizeClaudeWidget(value) {
   // `questions` is separate from `approvals` on purpose: one decides whether
   // something runs on this PC, the other only picks how Claude proceeds.
   return { approvals: v.approvals !== false, questions: v.questions !== false, topbar: v.topbar !== false };
+}
+
+// OpenAI Codex widget. Mirrored by normalizeCodexWidget on the server, which
+// also reads `approvals` to answer Codex at once when the cards are off.
+function normalizeCodexWidget(value) {
+  const v = value && typeof value === 'object' ? value : {};
+  const w = Math.round(Number(v.waitSec));
+  return { approvals: v.approvals !== false, waitSec: Number.isFinite(w) ? Math.max(30, Math.min(540, w)) : 90 };
+}
+
+// "Ask ChatGPT" tile. Same model-name rule as ai-cli.js sanitizeModel on the
+// server: 'default', or a name that starts with a letter or digit.
+function normalizeChatgptWidget(value) {
+  const m = String((value && value.model) || '').trim();
+  return { model: m && m !== 'default' && /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,63}$/.test(m) ? m : 'default' };
 }
 
 function cloneDashboardLayout(value) {
@@ -1423,7 +1475,7 @@ function normalizeTopbarRails(value) {
 // is inlined (not a module const) because normalizeSettings runs at load time,
 // before a top-level const would be initialised — a TDZ crash otherwise.
 function normalizeTopbarClock(value, legacyRoot) {
-  const canonical = ['time', 'date', 'weather', 'media', 'vitals', 'dots', 'badges', 'claude'];
+  const canonical = ['time', 'date', 'weather', 'media', 'vitals', 'dots', 'badges', 'claude', 'codex'];
   const v = value && typeof value === 'object' ? value : {};
   const legacy = legacyRoot && typeof legacyRoot === 'object' ? legacyRoot : {};
   const version = Number(v.version) || 0;
@@ -1574,7 +1626,7 @@ function normalizeCustomThemes(list) {
       dynamicAlbumTheme: raw.dynamicAlbumTheme !== false,
       panelAlpha: clampNumber(raw.panelAlpha, SETTINGS_MIN_PANEL_ALPHA, 1, D.panelAlpha),
       panelBorderStrength: clampNumber(raw.panelBorderStrength, 0, 2, D.panelBorderStrength),
-      panelShadowStrength: clampNumber(raw.panelShadowStrength, 0, 2, D.panelShadowStrength),
+      tileShadowStrength: clampNumber(raw.tileShadowStrength, 0, 2, D.tileShadowStrength),
       uiRoundness: clampNumber(raw.uiRoundness, 0, 2, D.uiRoundness),
       glassBlur: clampNumber(raw.glassBlur, 0, 40, D.glassBlur),
       glassSaturate: clampNumber(raw.glassSaturate, 100, 220, D.glassSaturate),
@@ -1694,7 +1746,8 @@ function normalizeSettings(source) {
     swipeNavigation: value.swipeNavigation !== false,
     swipeHomeGesture: value.swipeHomeGesture !== false,
     hideOnRdp: value.hideOnRdp === true,
-    nativeZoom: clampNumber(value.nativeZoom, 0.6, 1.6, DEFAULT_HUB_SETTINGS.nativeZoom),
+    audioSetCommunications: value.audioSetCommunications !== false,
+    nativeZoom: clampNumber(value.nativeZoom, 0.6, 2.5, DEFAULT_HUB_SETTINGS.nativeZoom),
     accent: normalizeHex(value.accent, DEFAULT_HUB_SETTINGS.accent),
     dynamicAlbumTheme: value.dynamicAlbumTheme !== false,
     background: normalizeHex(value.background, DEFAULT_HUB_SETTINGS.background),
@@ -1723,7 +1776,7 @@ function normalizeSettings(source) {
     glassBlur: clampNumber(value.glassBlur, 0, 40, DEFAULT_HUB_SETTINGS.glassBlur),
     glassSaturate: clampNumber(value.glassSaturate, 100, 220, DEFAULT_HUB_SETTINGS.glassSaturate),
     panelBorderStrength: clampNumber(value.panelBorderStrength, 0, 2, DEFAULT_HUB_SETTINGS.panelBorderStrength),
-    panelShadowStrength: clampNumber(value.panelShadowStrength, 0, 2, DEFAULT_HUB_SETTINGS.panelShadowStrength),
+    tileShadowStrength: clampNumber(value.tileShadowStrength, 0, 2, DEFAULT_HUB_SETTINGS.tileShadowStrength),
     mutedText: normalizeHex(value.mutedText, null),
     lineColor: normalizeHex(value.lineColor, null),
     backgroundMedia: sanitizeBackgroundMedia(value.backgroundMedia),
@@ -1733,11 +1786,22 @@ function normalizeSettings(source) {
     ambientScenes: normalizeAmbientScenes(value.ambientScenes),
     weather: normalizeWeatherSettings(value.weather),
     tempUnit: value.tempUnit === 'f' ? 'f' : 'c',
+    hwTempUnit: ['auto', 'c', 'f'].includes(value.hwTempUnit) ? value.hwTempUnit : 'auto',
     mediaVisualizer: ['off', 'minimal', 'wave'].includes(value.mediaVisualizer) ? value.mediaVisualizer : (value.mediaVisualizer === true ? 'wave' : 'off'),
+    mediaLyrics: value.mediaLyrics !== false,
+    lyricsOffsetMs: Math.round(clampNumber(value.lyricsOffsetMs, -3000, 3000, 0) / 100) * 100,
+    lyricsTranslate: value.lyricsTranslate === true,
+    lyricsReading: value.lyricsReading !== false,
+    lyricsTranslateCap: [50, 200, 500].includes(Number(value.lyricsTranslateCap)) ? Number(value.lyricsTranslateCap) : 200,
+    lyricsStage: value.lyricsStage === true,
     autoOpenBrowser: value.autoOpenBrowser !== false,
     versionPing: value.versionPing === true,
+    // Automatic updates: on unless the user switched them off (server/auto-update.js).
+    autoUpdate: value.autoUpdate !== false,
+    autoUpdateWidgets: value.autoUpdateWidgets !== false,
     hubMessages: value.hubMessages !== false,
     catalogDrops: value.catalogDrops !== false,
+    monthlyDrops: value.monthlyDrops !== false,
     // Mirror of normalizeHubSettings in server.js — keep in step.
     whatsNewSeen: typeof value.whatsNewSeen === 'string' ? value.whatsNewSeen.trim().slice(0, 64) : '',
     discordInviteSeen: value.discordInviteSeen === true,
@@ -1749,6 +1813,8 @@ function normalizeSettings(source) {
     lastUsageDay: typeof value.lastUsageDay === 'string' ? value.lastUsageDay.slice(0, 10) : '',
     usageDays: Math.max(0, Math.floor(Number(value.usageDays) || 0)),
     supportAskSeen: value.supportAskSeen === true,
+    supportAskSeenDay: /^\d{4}-\d{2}-\d{2}$/.test(String(value.supportAskSeenDay || '')) ? String(value.supportAskSeenDay) : '',
+    supportAppealYear: Math.min(9999, Math.max(0, Math.floor(Number(value.supportAppealYear) || 0))),
     shareNudgeSeen: value.shareNudgeSeen === true,
     discordFavChannels: normalizeSnowflakeList(value.discordFavChannels),
     discordCollapsedGuilds: normalizeSnowflakeList(value.discordCollapsedGuilds),
@@ -1836,6 +1902,8 @@ function normalizeSettings(source) {
     bgCustom: normalizeBgCustom(value.bgCustom),
     slideshow: normalizeSlideshow(value.slideshow),
     claudeWidget: normalizeClaudeWidget(value.claudeWidget),
+    codexWidget: normalizeCodexWidget(value.codexWidget),
+    chatgptWidget: normalizeChatgptWidget(value.chatgptWidget),
     gameMode: value.gameMode !== false,
     performance: normalizePerformance(value.performance),
     contextProfiles: normalizeContextProfiles(value.contextProfiles),
@@ -2221,6 +2289,8 @@ function normalizeSearchSettings(value, defaultRoot) {
     // AI full context for explicit Search + Disk Advisor calls —
     // privacy-touching, strict opt-in like the wake word.
     aiFullContext: v.aiFullContext === true,
+    // Recent files in the Search tile's empty state: off unless chosen.
+    recentInTile: v.recentInTile === true,
   };
 }
 
@@ -3818,8 +3888,32 @@ function createBackgroundImage(source) {
   return image;
 }
 
+// The wallpaper video holds still whenever the ambient does: behind a frosted
+// overlay (ambient-freeze.js, the flicker guard), while a game is in front
+// (game-mode) and under Performance mode's paused animations (perf-mode).
+// Decoding and compositing a full-screen video every frame is the largest steady
+// cost a wallpaper adds, and during a game it competes with the game for the
+// GPU. A paused video keeps its current frame: a still wallpaper, never a blank.
+const BG_VIDEO_HOLD_CLASSES = ['overlay-frozen', 'game-mode', 'perf-mode'];
+function backgroundVideoHeld() {
+  const classes = document.body.classList;
+  return BG_VIDEO_HOLD_CLASSES.some(cls => classes.contains(cls));
+}
+
+let _bgVideoWasHeld = false;
+function syncBackgroundVideoHold() {
+  const held = backgroundVideoHeld();
+  if (held === _bgVideoWasHeld) return;
+  _bgVideoWasHeld = held;
+  const video = $('user-bg-video');
+  if (!video || video.hidden) return;
+  if (held) video.pause();
+  else ensureBackgroundVideoPlayback(video);
+}
+
 function ensureBackgroundVideoPlayback(video = $('user-bg-video')) {
   if (!video || video.hidden || document.hidden) return;
+  if (backgroundVideoHeld()) { video.pause(); return; }
   video.muted = true;
   video.defaultMuted = true;
   video.playsInline = true;
@@ -4299,6 +4393,7 @@ function applyHubSettings() {
   if (window.DashboardPager && DashboardPager.refreshSwipe) DashboardPager.refreshSwipe();
   syncSwipeNavigationControl();
   syncMediaVisualizerControl();
+  syncMediaLyricsControl();
   syncSwipeHomeControl();
   syncHideRdpControl();
   const root = document.documentElement;
@@ -4306,7 +4401,7 @@ function applyHubSettings() {
   // Border/shadow strength are user multipliers (1 = stock look); caps widened so
   // a 2× still fits, but the default value is byte-for-byte the previous formula.
   const borderStrength = clampNumber(hubSettings.panelBorderStrength, 0, 2, 1);
-  const shadowStrength = clampNumber(hubSettings.panelShadowStrength, 0, 2, 1);
+  const shadowStrength = clampNumber(hubSettings.tileShadowStrength, 0, 2, DEFAULT_HUB_SETTINGS.tileShadowStrength);
   const panelBorderAlpha = Math.min(0.4, (0.045 + (hubSettings.panelAlpha * 0.08)) * borderStrength);
   const panelShadowAlpha = Math.min(0.6, (0.05 + (hubSettings.panelAlpha * 0.18)) * shadowStrength);
   const panelHighlightAlpha = Math.min(0.07, 0.012 + (hubSettings.panelAlpha * 0.04));
@@ -4925,6 +5020,11 @@ function syncSettingsControls() {
   if (claudeAppr) claudeAppr.checked = claudeCfg.approvals !== false;
   const claudeQ = $('settings-claude-questions');
   if (claudeQ) claudeQ.checked = claudeCfg.questions !== false;
+  const codexCfg = normalizeCodexWidget(hubSettings.codexWidget);
+  const codexAppr = $('settings-codex-approvals');
+  if (codexAppr) codexAppr.checked = codexCfg.approvals;
+  const codexWait = $('settings-codex-wait');
+  if (codexWait) codexWait.value = String(codexCfg.waitSec);
 
   const hybridGpuPause = $('settings-hybrid-gpu-pause');
   if (hybridGpuPause) hybridGpuPause.checked = hubSettings.hybridGpuAnimationPause !== false;
@@ -4934,10 +5034,15 @@ function syncSettingsControls() {
   }
   const versionPing = $('settings-version-ping');
   if (versionPing) versionPing.checked = hubSettings.versionPing === true;
+  const autoUpdateChk = $('settings-auto-update');
+  if (autoUpdateChk) autoUpdateChk.checked = hubSettings.autoUpdate !== false;
+  const autoUpdateWidgetsChk = $('settings-auto-update-widgets');
+  if (autoUpdateWidgetsChk) autoUpdateWidgetsChk.checked = hubSettings.autoUpdateWidgets !== false;
+  refreshWidgetAutoUpdateLine();
   const hubMsg = $('settings-hub-messages');
   if (hubMsg) hubMsg.checked = hubSettings.hubMessages !== false;
-  const catDrops = $('settings-catalog-drops');
-  if (catDrops) catDrops.checked = hubSettings.catalogDrops !== false;
+  const catDrops = $('settings-monthly-drops');
+  if (catDrops) catDrops.checked = hubSettings.monthlyDrops !== false;
   const catStats = $('settings-catalog-stats');
   if (catStats) catStats.checked = hubSettings.catalogStats === true;
 
@@ -4946,7 +5051,7 @@ function syncSettingsControls() {
     ['settings-panel-border', String(hubSettings.panelBorderStrength)],
     ['settings-clock-scale', String(hubSettings.clockScale)],
     ['settings-clock-date-scale', String(hubSettings.clockDateScale)],
-    ['settings-panel-shadow', String(hubSettings.panelShadowStrength)],
+    ['settings-panel-shadow', String(hubSettings.tileShadowStrength)],
     ['settings-roundness', String(hubSettings.uiRoundness)],
     ['settings-glass-blur', String(hubSettings.glassBlur)],
     ['settings-glass-saturate', String(hubSettings.glassSaturate)],
@@ -4966,7 +5071,7 @@ function syncSettingsControls() {
   const borderVal = $('settings-panel-border-value');
   if (borderVal) borderVal.textContent = formatPercent(hubSettings.panelBorderStrength);
   const shadowVal = $('settings-panel-shadow-value');
-  if (shadowVal) shadowVal.textContent = formatPercent(hubSettings.panelShadowStrength);
+  if (shadowVal) shadowVal.textContent = formatPercent(hubSettings.tileShadowStrength);
   const clockVal = $('settings-clock-scale-value');
   if (clockVal) clockVal.textContent = formatPercent(hubSettings.clockScale);
   const clockDateVal = $('settings-clock-date-scale-value');
@@ -5005,6 +5110,7 @@ function syncSettingsControls() {
   syncAutoOpenBrowserControl();
   syncSwipeHomeControl();
   syncHideRdpControl();
+  syncAudioCommsControl();
   syncNativeZoomControl();
   syncStackModeControls();
   syncBrowserAdblockControl();
@@ -5312,6 +5418,7 @@ function applySurfaceKind(kind, state) {
 let _settingsCat = 'appearance';
 function settingsSetCategory(cat) {
   _settingsCat = cat;
+  if (window.SettingsSearch) SettingsSearch.leave();
   if (cat === 'appearance') refreshMediaVizStatus();
   const content = document.getElementById('settings-content');
   if (content) {
@@ -5340,6 +5447,9 @@ function settingsSetCategory(cat) {
   // request, and the answer only changes when this same pane or an unlock
   // changes it.
   if (cat === 'sdk') syncSupporterCodeBox();
+  // The supporter count under the support buttons (js/support-goal.js). Cached
+  // an hour by the server, so opening the pane again costs nothing.
+  if (cat === 'support' && window.XenonSupportGoal) XenonSupportGoal.fill($('settings-support-goal'));
   packSettingsColumns();
 }
 
@@ -5401,9 +5511,17 @@ async function syncSupporterCodeBox() {
     ? t('settings_supporter_saved')
     : t('settings_supporter_none');
   forget.hidden = !saved;
-  // Never repopulate the field: there is nothing to put in it, and a masked
-  // placeholder in a text box invites the user to "fix" a value that is fine.
-  if (saved) field.value = '';
+  // A saved code is a STATE: "Code saved" and Remove, nothing to type. An empty
+  // field and a Save button beside a saved code read as "enter your code", which
+  // is exactly what a supporter who already did it was being asked. To replace
+  // it, Remove brings the field back. The field is never repopulated: the code
+  // does not come back from the server, and a masked value invites a "fix".
+  field.value = '';
+  field.hidden = saved;
+  const save = $('settings-supporter-save');
+  if (save) save.hidden = saved;
+  const savedLine = $('settings-supporter-saved');
+  if (savedLine) savedLine.hidden = !saved;
 }
 
 async function saveSupporterCode() {
@@ -5513,6 +5631,8 @@ function renderSearchDiskSettings() {
   if (folders && document.activeElement !== folders) folders.value = (s.indexRoots || []).join('\n');
   const brain = document.getElementById('settings-search-aibrain');
   if (brain) brain.checked = s.aiFullContext === true;
+  const recentTile = document.getElementById('settings-search-recent-tile');
+  if (recentTile) recentTile.checked = s.recentInTile === true;
   const dev = document.getElementById('settings-disk-devfolders');
   if (dev && document.activeElement !== dev) dev.value = (d.devFolders || []).join('\n');
   const age = document.getElementById('settings-disk-installer-age');
@@ -5633,6 +5753,7 @@ function toggleSettings() {
     if (nav) nav.classList.remove('is-open');
     renderSettingsModal();
     settingsSetCategory(_settingsCat);
+    if (window.SettingsSearch) SettingsSearch.onOpen();
   }
   else if (window.NewsWidget) NewsWidget.mountFeedManager(null);
   freezeSettingsAmbient(!overlay.hidden);
@@ -5817,7 +5938,7 @@ function applyAiCreateStyle(opts) {
     glassBlur: num(o.glass_blur, 0, 40),
     glassSaturate: num(o.glass_saturation, 100, 220),
     panelBorderStrength: num(o.border_strength, 0, 2),
-    panelShadowStrength: num(o.shadow_strength, 0, 2),
+    tileShadowStrength: num(o.shadow_strength, 0, 2),
   };
   for (const [key, val] of Object.entries(nums)) if (val != null) patch[key] = val;
   if (typeof o.contrast_guard === 'boolean') patch.contrastGuard = o.contrast_guard;
@@ -5901,7 +6022,7 @@ function onHexInput(key, rawValue) {
 }
 
 function updateSettingsRange(key, value) {
-  if (!['panelAlpha', 'bgDim', 'bgBlur', 'uiRoundness', 'glassBlur', 'glassSaturate', 'panelBorderStrength', 'panelShadowStrength', 'clockScale', 'clockDateScale'].includes(key)) return;
+  if (!['panelAlpha', 'bgDim', 'bgBlur', 'uiRoundness', 'glassBlur', 'glassSaturate', 'panelBorderStrength', 'tileShadowStrength', 'clockScale', 'clockDateScale'].includes(key)) return;
   hubSettings = normalizeSettings({ ...hubSettings, [key]: value });
   saveHubSettings();
   applyHubSettings();
@@ -6697,28 +6818,41 @@ function _gameModeDesired() {
   return _gamingActive && hubSettings.gameMode !== false;
 }
 
-// Apply the class immediately — used for direct user actions (toggling the
+// Two classes, two meanings. `game-mode` is the LOOK (fade the background,
+// pause effects) and honours the Game mode switch. `game-running` is the FACT
+// that a game is in front, whatever that switch says: the native shell keeps
+// the game focused off it (native-bridge.js), and that is the tray's own
+// "Keep games focused" to switch off, not a side effect of a background
+// preference. It used to follow `game-mode`, so turning Game mode off to keep
+// the background during games silently let every tap on Xenon take the game's
+// focus while the tray still showed the option ticked.
+function _applyGameClasses() {
+  document.body.classList.toggle('game-mode', _gameModeDesired());
+  document.body.classList.toggle('game-running', _gamingActive);
+}
+
+// Apply the classes immediately — used for direct user actions (toggling the
 // setting, reset, settings re-apply), which must take effect at once.
 function _evalGameModeClass() {
   if (_gameModeTimer) { clearTimeout(_gameModeTimer); _gameModeTimer = null; }
-  document.body.classList.toggle('game-mode', _gameModeDesired());
+  _applyGameClasses();
 }
 
 // Called from the SSE 'status' handler with the live gaming flag. Debounced so a
 // transient foreground change doesn't visibly fade the ambient FX in/out.
 function applyGameMode(gaming) {
   _gamingActive = !!gaming;
-  const desired = _gameModeDesired();
+  const c = document.body.classList;
   // Already in the desired state (or a pending flip would land where we already
   // are): cancel any pending change and stop — nothing to animate.
-  if (desired === document.body.classList.contains('game-mode')) {
+  if (_gameModeDesired() === c.contains('game-mode') && _gamingActive === c.contains('game-running')) {
     if (_gameModeTimer) { clearTimeout(_gameModeTimer); _gameModeTimer = null; }
     return;
   }
   if (_gameModeTimer) clearTimeout(_gameModeTimer);
   _gameModeTimer = setTimeout(() => {
     _gameModeTimer = null;
-    document.body.classList.toggle('game-mode', _gameModeDesired());
+    _applyGameClasses();
   }, GAME_MODE_DWELL_MS);
 }
 
@@ -7961,6 +8095,13 @@ function showPowerPlanPicker(ev) {
   }
 }
 
+// The System tile's button: optimize when nothing runs, restore when a session
+// does (performance.js relabels it to match).
+function togglePerformanceFromSystem() {
+  const p = normalizePerformance(hubSettings.performance);
+  if (p.active) restorePerformance(); else optimizePerformanceNow();
+}
+
 function restorePerformance() {
   if (window.PerfMode && typeof window.PerfMode.restore === 'function') window.PerfMode.restore();
 }
@@ -8542,9 +8683,43 @@ async function refreshMediaVizStatus(recheck) {
   el.textContent = key ? t(key).replace('{version}', (st && st.minVersion) || '') : '';
   el.dataset.state = state;
   el.hidden = !key;
+  // Every one of the three problems is fixed by the same verified download, so
+  // the fix sits right under the sentence that names it.
+  const btn = $('settings-media-viz-install');
+  if (btn && !btn.disabled) btn.hidden = state !== 'bad';
   // A helper too old for metering is only found out once it is started, which
   // switching the wave on has just asked for: look again in a moment.
   if (on && !recheck && st && st.available && !st.failure) setTimeout(() => refreshMediaVizStatus(true), 4000);
+}
+
+// "Install Xenon Helper": the verified download the setup does, from here. Asked
+// for on Discord by someone on the setup .exe who was told to re-run INSTALL.bat,
+// a file that install never shows anyone.
+async function installXenonHelper() {
+  const btn = $('settings-media-viz-install');
+  const el = $('settings-media-viz-status');
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  btn.textContent = t('settings_media_viz_installing');
+  let r = null;
+  try { const res = await fetch('/audio/levels/install-helper', { method: 'POST' }); r = res.ok ? await res.json() : null; } catch { r = null; }
+  btn.disabled = false;
+  btn.textContent = t('settings_media_viz_install');
+  if (r && r.ok) {
+    await refreshMediaVizStatus();
+    // With the wave off there is nothing else to say, so say this.
+    if (el && el.hidden) { el.textContent = t('settings_media_viz_st_installed'); el.dataset.state = 'ok'; el.hidden = false; }
+    return;
+  }
+  if (!el) return;
+  const code = (r && r.status) || 'no_server';
+  const key = (code === 'not-ready' || code === 'skip-not-latest') ? 'settings_media_viz_install_offline'
+    : (code === 'signature-invalid' || code === 'mismatch') ? 'settings_media_viz_install_unverified'
+    : 'settings_media_viz_install_failed';
+  el.textContent = t(key) + ' (' + code + ')';
+  el.dataset.state = 'bad';
+  el.hidden = false;
+  btn.hidden = false;
 }
 
 function updateMediaVisualizer(mode) {
@@ -8565,6 +8740,21 @@ function updateSwipeNavigation(checked) {
   saveHubSettings();
   syncSwipeNavigationControl();
   if (window.DashboardPager && DashboardPager.refreshSwipe) DashboardPager.refreshSwipe();
+}
+
+// Song lyrics (Media tile button + Lyrics widget). Off means no LRCLIB lookup
+// at all, so the views re-sync straight away instead of on the next media tick.
+function syncMediaLyricsControl() {
+  const el = $('settings-media-lyrics');
+  if (el) el.checked = hubSettings.mediaLyrics !== false;
+  if (window.MediaLyrics) window.MediaLyrics.sync();
+  if (window.LyricsCore) window.LyricsCore.sync();
+}
+
+function updateMediaLyrics(checked) {
+  hubSettings = normalizeSettings({ ...hubSettings, mediaLyrics: checked === true });
+  saveHubSettings();
+  syncMediaLyricsControl();
 }
 
 // ── Swipe-up home gesture (native app only) ─────────────────────────────────
@@ -8618,6 +8808,26 @@ function updateHideOnRdp(checked) {
   syncHideRdpControl();
 }
 
+// ── Audio: which Windows defaults a device switch moves ─────────────────────
+// Windows keeps a separate default for calls. On, a switch from the Volume
+// tile, a Deck key or the assistant moves that one too (as it always did);
+// off, it moves only the Default Device and leaves Discord and Teams where
+// they are. macOS and Linux have one default, so the row is not shown there.
+function syncAudioCommsControl() {
+  const row = $('settings-audio-comms-row');
+  const check = $('settings-audio-comms');
+  const platform = window.XenonPlatform;
+  // display (not `hidden`): the settings category switcher owns `hidden`.
+  if (row) row.style.display = (platform && platform !== 'win32') ? 'none' : '';
+  if (check) check.checked = hubSettings.audioSetCommunications !== false;
+}
+
+function updateAudioSetCommunications(checked) {
+  hubSettings = normalizeSettings({ ...hubSettings, audioSetCommunications: checked === true });
+  saveHubSettings();
+  syncAudioCommsControl();
+}
+
 // ── Interface scale / zoom (native app only) ────────────────────────────────
 // The native kiosk can scale its whole webview (WebView2 zoom factor),
 // independent of the Windows display scale. The row only shows inside the
@@ -8648,7 +8858,7 @@ function syncNativeZoomControl() {
   if (row) row.style.display = '';
   const remoteNote = $('settings-native-zoom-remote');
   if (remoteNote) remoteNote.hidden = isNativeApp;
-  const scale = clampNumber(hubSettings.nativeZoom, 0.6, 1.6, 1);
+  const scale = clampNumber(hubSettings.nativeZoom, 0.6, 2.5, 1);
   if (slider) slider.value = String(scale);
   if (valueEl) valueEl.textContent = formatPercent(scale);
   if (isNativeApp && window.XenonNative && typeof window.XenonNative.setNativeZoom === 'function') {
@@ -8730,6 +8940,17 @@ function updateAutoOpenBrowser(checked) {
 // it off, Claude Code's permission hook is answered immediately with "no
 // decision", which puts the prompt back in the terminal instead of leaving the
 // session blocked on a card that will never be drawn.
+// Settings → Codex. Both values are also read server-side: with approvals off
+// the Codex hook is answered at once with "no decision" (Codex asks itself),
+// and waitSec is how long a card waits before the decision goes back to Codex.
+function updateCodexWidgetCfg(patch) {
+  const current = (hubSettings.codexWidget && typeof hubSettings.codexWidget === 'object') ? hubSettings.codexWidget : {};
+  hubSettings = normalizeSettings({ ...hubSettings, codexWidget: { ...current, ...patch } });
+  saveHubSettings();
+  syncSettingsControls();
+  if (window.CodexWidget && typeof CodexWidget.onSettingsChanged === 'function') CodexWidget.onSettingsChanged();
+}
+
 function updateClaudeWidgetCfg(patch) {
   const current = (hubSettings.claudeWidget && typeof hubSettings.claudeWidget === 'object') ? hubSettings.claudeWidget : {};
   hubSettings = normalizeSettings({ ...hubSettings, claudeWidget: { ...current, ...patch } });
@@ -8745,6 +8966,45 @@ function updateVersionPing(checked) {
   hubSettings = normalizeSettings({ ...hubSettings, versionPing: checked === true });
   saveHubSettings();
   syncSettingsControls();
+}
+
+// Automatic self-update. On by default (server/auto-update.js). Off means Xenon
+// still checks and still shows the What’s New modal (js/update.js) — it just
+// never downloads or applies a release on its own.
+function updateAutoUpdate(checked) {
+  hubSettings = normalizeSettings({ ...hubSettings, autoUpdate: checked !== false });
+  saveHubSettings();
+  syncSettingsControls();
+}
+
+// Store widgets that update themselves. On by default (server/widget-auto-update.js).
+// Off means the update is still offered, as it always was, and waits for the user.
+function updateAutoUpdateWidgets(checked) {
+  hubSettings = normalizeSettings({ ...hubSettings, autoUpdateWidgets: checked !== false });
+  saveHubSettings();
+  syncSettingsControls();
+}
+
+// The line under that switch: what was last updated, and what is waiting for the
+// user. Read from the server; a failed read just leaves the line empty.
+async function refreshWidgetAutoUpdateLine() {
+  const line = document.getElementById('settings-auto-update-widgets-line');
+  if (!line) return;
+  try {
+    const res = await fetch(SERVER + '/api/widgets/auto-update');
+    const st = res.ok ? await res.json() : null;
+    const names = (list) => (Array.isArray(list) ? list : []).map((x) => String((x && x.name) || (x && x.id) || '').slice(0, 60)).filter(Boolean);
+    const parts = [];
+    if (st && st.last && Array.isArray(st.last.updated) && st.last.updated.length) {
+      const when = st.last.at ? new Date(st.last.at).toLocaleDateString() : '';
+      parts.push(t('settings_widget_auto_update_last').replace('{names}', names(st.last.updated).join(', ')).replace('{when}', when));
+    }
+    if (st && Array.isArray(st.waitingForYou) && st.waitingForYou.length) {
+      parts.push(t('settings_widget_auto_update_wait').replace('{names}', names(st.waitingForYou).join(', ')));
+    }
+    line.textContent = parts.join(' · ');
+    line.hidden = !parts.length;
+  } catch { line.hidden = true; }
 }
 
 // Announcements / paid-drop card. Both were localStorage-only before v4.9.0, so
@@ -8769,6 +9029,12 @@ function updateCatalogStats(checked) {
   syncSettingsControls();
 }
 function updateCatalogDrops(checked) { updateAnnouncementPref('catalogDrops', checked); }
+// The month's drops window. No legacy per-device flag: it is a new setting.
+function updateMonthlyDrops(checked) {
+  hubSettings = normalizeSettings({ ...hubSettings, monthlyDrops: checked === true });
+  saveHubSettings();
+  syncSettingsControls();
+}
 
 // ── "Don't show again" for the two startup cards ────────────────────────────
 // The What's New modal (js/update.js) and the Discord invite card
@@ -8843,10 +9109,36 @@ function supportAskDismissed() {
   return !!(hubSettings && hubSettings.supportAskSeen === true);
 }
 
+// The day rides along so the December appeal can keep a month between the two.
 function rememberSupportAskSeen() {
   if (hubSettings && hubSettings.supportAskSeen === true) return;
-  hubSettings = normalizeSettings({ ...hubSettings, supportAskSeen: true });
+  hubSettings = normalizeSettings({ ...hubSettings, supportAskSeen: true, supportAskSeenDay: toDateInputValue(new Date()) });
   saveHubSettings();
+}
+
+// The December appeal (js/support-appeal.js): the last year it was shown, and
+// the day the one-time ask went away ('' when that predates the field).
+// "I already support Xenon", on either card, is an answer for good: the year the
+// appeal stays away through becomes the last one the field can hold.
+const SUPPORT_APPEAL_NEVER = 9999;
+
+function supportAppealYear() {
+  return Math.max(0, Math.floor(Number(hubSettings && hubSettings.supportAppealYear) || 0));
+}
+
+function supportAskSeenDay() {
+  return (hubSettings && hubSettings.supportAskSeenDay) || '';
+}
+
+function rememberSupportAppeal(year) {
+  const y = Math.min(SUPPORT_APPEAL_NEVER, Math.floor(Number(year) || 0));
+  if (y <= supportAppealYear()) return;
+  hubSettings = normalizeSettings({ ...hubSettings, supportAppealYear: y });
+  saveHubSettings();
+}
+
+function silenceSupportAppeal() {
+  rememberSupportAppeal(SUPPORT_APPEAL_NEVER);
 }
 
 // The share invitation (js/share-nudge.js): same shape, same home on disk.
@@ -8935,6 +9227,10 @@ window.XenonStartupCards = {
   rememberDiscordInvite: rememberDiscordInviteSeen,
   supportAskDismissed,
   rememberSupportAsk: rememberSupportAskSeen,
+  supportAskSeenDay,
+  supportAppealYear,
+  rememberSupportAppeal,
+  silenceSupportAppeal,
   shareNudgeDismissed,
   rememberShareNudge: rememberShareNudgeSeen,
   usageHistory,
@@ -9057,6 +9353,12 @@ function syncWeatherSettingsControls() {
   const unit = hubSettings.tempUnit === 'f' ? 'f' : 'c';
   document.querySelectorAll('.settings-temp-unit[data-temp-unit]').forEach(btn => {
     const active = btn.dataset.tempUnit === unit;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', String(active));
+  });
+  const hwUnit = ['c', 'f'].includes(hubSettings.hwTempUnit) ? hubSettings.hwTempUnit : 'auto';
+  document.querySelectorAll('.settings-hw-temp-unit[data-hw-temp-unit]').forEach(btn => {
+    const active = btn.dataset.hwTempUnit === hwUnit;
     btn.classList.toggle('active', active);
     btn.setAttribute('aria-pressed', String(active));
   });
@@ -9354,7 +9656,7 @@ function updateTopbarStyle(style) {
 }
 
 // Built-in island segment id → i18n label key (editor rows).
-const TOPBAR_ISLAND_LABELS = { time: 'topbar_el_time', date: 'topbar_el_date', weather: 'topbar_el_weather', media: 'topbar_el_media', vitals: 'topbar_el_vitals', dots: 'topbar_el_dots', badges: 'topbar_el_badges', claude: 'topbar_el_claude' };
+const TOPBAR_ISLAND_LABELS = { time: 'topbar_el_time', date: 'topbar_el_date', weather: 'topbar_el_weather', media: 'topbar_el_media', vitals: 'topbar_el_vitals', dots: 'topbar_el_dots', badges: 'topbar_el_badges', claude: 'topbar_el_claude', codex: 'topbar_el_codex' };
 // Chrome-button id → i18n label key. Must stay in step with ACTION_SELECTORS in
 // js/topbar-minimal.js and with the canonical list in BOTH normalizers
 // (js/settings.js and its server.js twin) — pinned by test/topbar-island-sync.
@@ -9953,12 +10255,30 @@ function updateTempUnit(unit) {
   syncWeatherSettingsControls();
   if (typeof applyWeather === 'function') applyWeather(typeof weatherData !== 'undefined' ? weatherData : null);
   if (typeof renderLockScreen === 'function') renderLockScreen();
+  repaintTempUnits();
+  setSettingsStatus('settings_weather_saved', 'ok');
+}
+
+// The unit for hardware readings: 'auto' follows the weather unit above, 'c' and
+// 'f' pin it, for people who read the forecast in °F and their CPU in °C.
+function updateHwTempUnit(unit) {
+  if (!['auto', 'c', 'f'].includes(unit)) return;
+  hubSettings = normalizeSettings({ ...hubSettings, hwTempUnit: unit });
+  saveHubSettings();
+  syncWeatherSettingsControls();
+  repaintTempUnits();
+  setSettingsStatus('settings_saved', 'ok');
+}
+
+// Either unit can change what the CPU/GPU headers say (hardware 'auto' follows
+// the weather one), so both setters repaint them and tell installed widgets.
+function repaintTempUnits() {
+  if (typeof applySystem === 'function' && typeof lastSystemData !== 'undefined' && lastSystemData) applySystem(lastSystemData);
   // Widgets draw temperatures too (a monitor tile, a weather tile). Tell them,
   // the same way a theme or language change is told — see refreshTempUnit.
   if (window.CustomWidget && typeof window.CustomWidget.refreshTempUnit === 'function') {
     window.CustomWidget.refreshTempUnit();
   }
-  setSettingsStatus('settings_weather_saved', 'ok');
 }
 
 function updateWeatherCity(value, commit = false) {
@@ -10255,6 +10575,7 @@ function applyPlatformGating(platform) {
   // late answer is better than one wrong on Windows.
   window.XenonPlatform = platform || '';
   renderPlatformBeta(platform);
+  syncAudioCommsControl();   // a Windows-only row inside a shared pane
   if (platform === 'win32') return;
   document.querySelectorAll('[data-settings-win-only]').forEach((el) => {
     const cat = el.dataset.settingsCat || el.dataset.settingsWinOnly;
@@ -10314,12 +10635,22 @@ function renderPlatformBeta(platform) {
 // Show the running build version at the bottom of the Settings sidebar. Read
 // from the server (which sources it from package.json) so it always matches the
 // shipped build; stays empty and unobtrusive if the request fails.
+// The native app's own version, only when it differs from the dashboard's. The
+// two update through separate channels, and a bare "Xenon v4.11.12" over an app
+// still on 4.11.7 hid exactly the half that had not updated.
+function shellVersionSuffix(version) {
+  const caps = window.__XENON_NATIVE_CAPS__ || {};
+  const shell = String(caps.shellVersion || '').replace(/^v/i, '');
+  if (!shell || shell === String(version).replace(/^v/i, '')) return '';
+  return ' · ' + t('settings_version_app').replace('{v}', shell);
+}
+
 async function initSettingsVersion() {
   const out = document.getElementById('settings-version');
   if (!out) return;
   try {
     const { version, platform } = await (await fetch('/version')).json();
-    if (version) out.textContent = `Xenon v${version}`;
+    if (version) out.textContent = `Xenon v${version}${shellVersionSuffix(version)}`;
     if (platform) applyPlatformGating(platform);
   } catch { /* leave blank — no version indicator is better than a broken one */ }
   // The update pill, the red notification dots and the "Check for updates"
@@ -11693,8 +12024,10 @@ async function refreshWakeWordStatus() {
 async function wakeInstallWhisper(btn) {
   const out = $('settings-wake-status');
   if (btn) btn.disabled = true;
+  let failure = '';
   try {
     await _streamWhisperInstall(p => {
+      if (p.error) failure = String(p.error);
       if (!out) return;
       if (p.error) out.textContent = '⚠ ' + String(p.error);
       else if (p.status || typeof p.percent === 'number') {
@@ -11702,10 +12035,13 @@ async function wakeInstallWhisper(btn) {
       }
     });
   } catch (e) {
-    if (out) out.textContent = String((e && e.message) || e);
+    failure = String((e && e.message) || e);
   } finally {
     if (btn) btn.disabled = false;
-    refreshWakeWordStatus();
+    // The status refresh rewrites this line with "Whisper is needed", which used
+    // to wipe the reason a download failed the instant it appeared. Put it back.
+    await refreshWakeWordStatus();
+    if (failure && out) out.textContent = '⚠ ' + failure;
   }
 }
 
@@ -11995,3 +12331,6 @@ window.addEventListener('pagehide', sendHubSettingsBeacon);
 document.addEventListener('visibilitychange', () => ensureBackgroundVideoPlayback());
 window.addEventListener('focus', () => ensureBackgroundVideoPlayback());
 document.addEventListener('pointerdown', () => ensureBackgroundVideoPlayback(), { passive: true });
+if (typeof MutationObserver === 'function') {
+  new MutationObserver(syncBackgroundVideoHold).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+}
