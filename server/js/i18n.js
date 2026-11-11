@@ -4107,6 +4107,7 @@ greet_fact_tomorrow_many: 'Domani hai {n} eventi, il primo alle {time}',
     settings_ha_entities: 'Dispositivi da mostrare',
     settings_ha_entities_hint: 'Seleziona cosa appare nel widget Smart Home.',
     settings_ha_layout: 'Layout schede',
+    settings_ha_layout_hint: 'Personalizzato mostra ogni entità separatamente e segue il tuo ordine.',
     settings_ha_layout_rooms: 'Stanze',
     settings_ha_layout_custom: 'Personalizzato',
     settings_ha_order: 'Ordine schede',
@@ -4122,6 +4123,8 @@ greet_fact_tomorrow_many: 'Domani hai {n} eventi, il primo alle {time}',
     smarthome_section_name: 'Nome sezione',
     smarthome_remove_section: 'Rimuovi sezione',
     smarthome_unsectioned: 'Senza sezione',
+    smarthome_drop_cards: 'Trascina qui le schede',
+    smarthome_enable_custom: 'Attiva il layout personalizzato delle schede',
     smarthome_width_less: 'Più stretta',
     smarthome_width_more: 'Più larga',
     smarthome_height_less: 'Più bassa',
@@ -8531,6 +8534,7 @@ greet_fact_tomorrow_many: '{n} events tomorrow, the first at {time}',
     settings_ha_entities: 'Devices to show',
     settings_ha_entities_hint: 'Pick what appears in the Smart Home widget.',
     settings_ha_layout: 'Card layout',
+    settings_ha_layout_hint: 'Custom shows every entity separately and follows your order.',
     settings_ha_layout_rooms: 'Rooms',
     settings_ha_layout_custom: 'Custom',
     settings_ha_order: 'Card order',
@@ -8546,6 +8550,8 @@ greet_fact_tomorrow_many: '{n} events tomorrow, the first at {time}',
     smarthome_section_name: 'Section name',
     smarthome_remove_section: 'Remove section',
     smarthome_unsectioned: 'Unsectioned',
+    smarthome_drop_cards: 'Drop cards here',
+    smarthome_enable_custom: 'Enable custom card layout',
     smarthome_width_less: 'Narrower',
     smarthome_width_more: 'Wider',
     smarthome_height_less: 'Shorter',
@@ -73210,6 +73216,17 @@ Object.assign(i18n.de, { layout_widget_aiusage_desc: "Nutzung und Limits von Cla
 Object.assign(i18n.pt, { layout_widget_aiusage_desc: "Utilização e limites do Claude, Codex e Grok, lidos neste PC.", 'layout_widget_tcl-ac_desc': "O teu ar condicionado TCL através do Home Assistant: modo, ventoinha e temperatura." });
 Object.assign(i18n.ru, { layout_widget_aiusage_desc: "Использование и лимиты Claude, Codex и Grok на этом ПК.", 'layout_widget_tcl-ac_desc': "Ваш кондиционер TCL через Home Assistant: режим, вентилятор и температура." });
 Object.assign(i18n.nl, { layout_widget_aiusage_desc: "Gebruik en limieten van Claude, Codex en Grok, gelezen op deze pc.", 'layout_widget_tcl-ac_desc': "Je TCL-airco via Home Assistant: modus, ventilator en temperatuur." });
+
+// The Smart Home card layout's three phrases, in the languages that lacked them.
+Object.assign(i18n.ko, { settings_ha_layout_hint: "사용자 지정은 모든 항목을 따로 표시하고 정한 순서를 따릅니다.", smarthome_drop_cards: "카드를 여기에 놓으세요", smarthome_enable_custom: "사용자 지정 카드 레이아웃 켜기" });
+Object.assign(i18n.ja, { settings_ha_layout_hint: "カスタムはすべてのエンティティを個別に表示し、あなたの順序に従います。", smarthome_drop_cards: "ここにカードをドロップ", smarthome_enable_custom: "カスタムカードレイアウトを有効にする" });
+Object.assign(i18n.zh, { settings_ha_layout_hint: "自定义会分别显示每个实体，并按你的顺序排列。", smarthome_drop_cards: "将卡片拖放到此处", smarthome_enable_custom: "启用自定义卡片布局" });
+Object.assign(i18n.es, { settings_ha_layout_hint: "Personalizado muestra cada entidad por separado y sigue tu orden.", smarthome_drop_cards: "Suelta las tarjetas aquí", smarthome_enable_custom: "Activar el diseño de tarjetas personalizado" });
+Object.assign(i18n.fr, { settings_ha_layout_hint: "Personnalisé affiche chaque entité séparément et suit votre ordre.", smarthome_drop_cards: "Déposez les cartes ici", smarthome_enable_custom: "Activer la disposition personnalisée des cartes" });
+Object.assign(i18n.de, { settings_ha_layout_hint: "Benutzerdefiniert zeigt jede Entität einzeln und folgt deiner Reihenfolge.", smarthome_drop_cards: "Karten hier ablegen", smarthome_enable_custom: "Eigenes Kartenlayout aktivieren" });
+Object.assign(i18n.pt, { settings_ha_layout_hint: "Personalizado mostra cada entidade em separado e segue a tua ordem.", smarthome_drop_cards: "Larga os cartões aqui", smarthome_enable_custom: "Ativar o esquema de cartões personalizado" });
+Object.assign(i18n.ru, { settings_ha_layout_hint: "В режиме «Свой» каждая сущность показана отдельно и в вашем порядке.", smarthome_drop_cards: "Перетащите карточки сюда", smarthome_enable_custom: "Включить свою раскладку карточек" });
+Object.assign(i18n.nl, { settings_ha_layout_hint: "Aangepast toont elke entiteit apart en volgt jouw volgorde.", smarthome_drop_cards: "Zet kaarten hier neer", smarthome_enable_custom: "Aangepaste kaartindeling inschakelen" });
 
 function t(key) {
   // Fallback: selected language → English → key name (never silently shows Italian to non-Italian users)

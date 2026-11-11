@@ -89,7 +89,7 @@ test('TCL layouts remain opt-in and preserve resize, copies, pages, and removal 
 });
 
 test('client Smart Home normalization does not append the TCL profile', () => {
-  const helpers = functionSource(settings, 'normalizeHomeAssistant');
+  const helpers = ['normalizeHomeAssistantTileSections', 'normalizeHomeAssistantTileCards', 'normalizeHomeAssistant'].map(name => functionSource(settings, name)).join('\n');
   const normalize = new Function('normalizeCamAngles', 'window', helpers + ';return normalizeHomeAssistant;')(() => ({}), {});
   const entities = [tclAcProfile.profile.climate, 'light.desk'];
   assert.deepEqual(normalize({ entities }).entities, entities);

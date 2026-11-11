@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — Smart Home card layout on 5.0
+
+- Bring back this fork's **Custom** card layout for the Smart Home tile on top of Xenon 5.0: every entity as its own card, in your order, with your sections, subsections and card sizes. Cards are dragged, resized and grouped on the tile itself while the layout is being edited.
+- Settings → Smart Home has **Card layout** (Rooms or Custom) above 5.0's room and device order. Rooms is 5.0's tile unchanged.
+
 ## Unreleased — AI Usage providers: show, hide, reorder, real marks
 
 - Add **Providers** to the AI Usage ⋯ menu: switch each provider (Claude, Codex, Grok) on or off and move it up or down. Hidden providers also leave the ring, legend and totals. Saved per widget and device, like the layout; the last provider on stays on.
