@@ -642,14 +642,33 @@
     slot.addEventListener('pointercancel', end);
   }
 
-  function customCard(e, editing) {
+  // The name a card shows inside a section whose cards are all one device's:
+  // the device's name is dropped ("PC Current Power" → "Current Power"), since
+  // the section already says what they belong to. '' = show the full name.
+  function sharedDeviceName(items, sectionId) {
+    if (!sectionId || !items.length) return '';
+    const first = items[0];
+    if (!first.device || !first.deviceName) return '';
+    return items.every((e) => e.device === first.device) ? first.deviceName : '';
+  }
+
+  function customCard(e, editing, deviceName) {
     const cfg = tileSettings();
     const meta = cfg.cards[e.id] || { width: 1, height: 1, section: '' };
     const slot = el('div', 'sh-card-slot' + (editing ? ' is-editing' : ''));
     slot.dataset.entityId = e.id;
     slot.style.setProperty('--sh-card-w', String((Number(meta.width) || 1) * 3));
     slot.style.setProperty('--sh-card-h', String(Number(meta.height) || 1));
-    slot.appendChild(buildItem(e));
+    // Two or three rows tall: a headline reading, drawn larger (CSS).
+    if ((Number(meta.height) || 1) > 1) slot.dataset.tall = '1';
+    const item = buildItem(e);
+    const label = item.querySelector('.sh-item-name');
+    if (label) {
+      const short = deviceName ? entityShortName(e, deviceName) : '';
+      if (short && short !== label.textContent) label.textContent = short;
+      label.title = e.name || '';   // the full name, also when it is cut with an ellipsis
+    }
+    slot.appendChild(item);
 
     if (!editing) return slot;
     slot.addEventListener('click', (event) => {
@@ -702,7 +721,8 @@
   function customGrid(items, sectionId, editing) {
     const grid = el('div', 'sh-grid sh-custom-grid' + (!items.length ? ' is-empty' : ''));
     grid.dataset.sectionId = sectionId || '';
-    items.forEach((e) => grid.appendChild(customCard(e, editing)));
+    const deviceName = sharedDeviceName(items, sectionId);
+    items.forEach((e) => grid.appendChild(customCard(e, editing, deviceName)));
     if (editing && !items.length) grid.appendChild(el('div', 'sh-section-empty', t('smarthome_drop_cards', 'Drop cards here')));
     return grid;
   }
