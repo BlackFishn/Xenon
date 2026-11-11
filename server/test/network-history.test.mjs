@@ -30,6 +30,8 @@ function networkHarness() {
     currentSysTab: 'main',
     netInterval: null,
     fetchingNetwork: false,
+    lastNetworkData: null, // state.js; 5.0's Ambient scenes read the last reading
+
     SERVER: '',
     sf: (_root, name) => name.endsWith('-fill') ? { name } : null,
     setInterval(fn, ms) { timers.set(1, { fn, ms }); return 1; },

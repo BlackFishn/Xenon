@@ -19,10 +19,6 @@
   const api = apiJson; // shared fetch-JSON helper from utils.js
 
   const SVG = (p) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' + p + '</svg>';
-  const ARROW_UP = SVG('<path d="M6 14l6-6 6 6"/>');
-  const ARROW_DOWN = SVG('<path d="M6 10l6 6 6-6"/>');
-  const PLUS = SVG('<path d="M12 5v14M5 12h14"/>');
-  const TRASH = SVG('<path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/>');
   const ICONS = {
     light: SVG('<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.2 1 2.5h6c0-1.3.3-1.8 1-2.5A6 6 0 0 0 12 3Z"/>'),
     switch: SVG('<rect x="3" y="8" width="18" height="8" rx="4"/><circle cx="8" cy="12" r="2.4" fill="currentColor"/>'),
@@ -71,7 +67,18 @@
   function fmtNum(v) { const n = Number(v); return Number.isFinite(n) ? String(Math.round(n * 10) / 10) : String(v); }
 
   // Latest Home Assistant state (global — one home, shared by every tile instance).
-  let state = { configured: false, connected: false, entities: [] };
+  let state = { configured: false, connected: false, entities: [], areaOrder: [], tileView: 'auto' };
+  // The server's snapshot (SSE or the seed GET) → the tile's state, validated here.
+  function stateFrom(d) {
+    const order = window.SmartHomeOrder;
+    return {
+      configured: !!d.configured,
+      connected: !!d.connected,
+      entities: Array.isArray(d.entities) ? d.entities : [],
+      areaOrder: order.normalizeAreaOrder(d.areaOrder),
+      tileView: order.normalizeTileView(d.tileView),
+    };
+  }
   let seeded = false;
 
   // ── Shared helpers ──────────────────────────────────────────────────────────
@@ -173,21 +180,25 @@
   }
 
   async function callService(domain, service, entityId, data) {
-    return api('/api/homeassistant/service', {
+    const out = await api('/api/homeassistant/service', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ domain, service, entityId, data: data || {} }),
     });
+    // A paired phone stops at locks, alarms and doors (remote-actions.js). Said
+    // out loud, or the switch it just flipped would only fall back at the next read.
+    if (out && out.error === 'needs_pc' && typeof showHubToast === 'function') {
+      showHubToast('Xenon', (entityById(entityId) || { name: 'Home Assistant' }).name, t('smarthome_needs_pc', 'Locks, alarms and doors are controlled from the PC, or from a Deck key made there.'));
+    }
+    return out;
   }
 
   // ── Tile ─────────────────────────────────────────────────────────────────────
   // Only tiles actually placed on a dashboard page count (a hidden/never-added
   // widget sits in the pool outside any .pager-page — mirrors the Discord widget).
-  function tiles() { return Array.from(document.querySelectorAll('[data-dashboard-widget="smarthome"]')).filter((s) => s.closest('.pager-page')); }
+  function tiles() { return Array.from(document.querySelectorAll('[data-dashboard-widget="smarthome"]')).filter((s) => s.closest('.pager-page, .layer-slot')); }
 
   function openSmartHomeSettings() {
-    const overlay = document.getElementById('settings-overlay');
-    if (overlay && overlay.hidden && typeof window.toggleSettings === 'function') window.toggleSettings();
-    if (typeof window.settingsSetCategory === 'function') window.settingsSetCategory('smarthome');
+    openSettingsCategory('smarthome');
   }
 
   // A guided empty state (not configured / offline / nothing picked).
@@ -334,17 +345,37 @@
   function deviceCard(unit) {
     const pe = primaryEntity(unit.entities);
     const anyOn = unit.entities.some((x) => isOn(x));
-    const b = el('button', 'sh-item sh-item--control sh-item--device' + (anyOn ? ' is-on' : ''));
+    // A device made of sensors shows its readings instead of an entity count,
+    // on a card two columns wide so they read in full.
+    const readings = SHEET_DOMAINS.has(pe.domain) || TOGGLE_DOMAINS.has(pe.domain) ? [] : deviceReadings(unit.entities);
+    const b = el('button', 'sh-item sh-item--control sh-item--device' + (readings.length ? ' sh-item--readings' : '') + (anyOn ? ' is-on' : ''));
     b.type = 'button';
     if (anyOn && pe.domain === 'light') applyGlow(b, pe);
     const ico = el('span', 'sh-item-ico'); ico.innerHTML = iconFor(pe);   // static, trusted SVG
     const body = el('div', 'sh-item-body');
-    body.append(el('span', 'sh-item-name', unit.name), el('span', 'sh-item-sub', deviceSummary(pe)));
-    const badge = el('span', 'sh-item-badge', String(unit.entities.length));
+    const sub = el('span', 'sh-item-sub', readings.length ? '' : deviceSummary(pe));
+    readings.forEach((r) => sub.appendChild(el('span', 'sh-reading', r)));
+    if (readings.length) sub.title = readings.join(' · ');
+    body.append(el('span', 'sh-item-name', unit.name), sub);
     const go = el('span', 'sh-item-go'); go.innerHTML = SVG('<path d="M9 6l6 6-6 6"/>');
-    b.append(ico, body, badge, go);
+    b.append(ico, body);
+    if (!readings.length) b.append(el('span', 'sh-item-badge', String(unit.entities.length)));
+    b.append(go);
     b.addEventListener('click', () => openDevice(unit.id));
     return b;
+  }
+  // Up to three live readings of a device's sensors ("820 ppm · 21.8° · 55%"),
+  // so an air monitor or a weather station reads at a glance, without a tap.
+  const CARD_READINGS = 3;
+  function deviceReadings(ents) {
+    return ents
+      .filter((x) => x.domain === 'sensor' && String(x.state == null ? '' : x.state).trim() !== '' && Number.isFinite(Number(x.state)))
+      .slice(0, CARD_READINGS)
+      .map((x) => {
+        const unit = x.unit || '';
+        const tight = unit === '%' || unit.charAt(0) === '°';
+        return fmtNum(x.state) + (unit ? (tight ? '' : ' ') + unit : '');
+      });
   }
   function deviceSummary(pe) {
     if (pe.domain === 'media_player') return pe.title || (pe.state && !['off', 'unavailable', 'unknown', 'idle', ''].includes(pe.state) ? friendlyState(pe) : t('smarthome_off'));
@@ -352,11 +383,9 @@
     return friendlyState(pe);
   }
 
-  // Split an area's entities into render units. Custom layout deliberately keeps
-  // every selected entity separate; room layout preserves the established device
-  // merge. The early return is also the invariant that keeps sensor values visible.
-  function groupUnits(items, separate) {
-    if (separate) return items.map((entity) => ({ type: 'single', entity }));
+  // Split an area's entities into render units: standalone entities stay single;
+  // entities sharing a physical device merge into one device unit (order preserved).
+  function groupUnits(items) {
     const byDev = new Map();
     const order = [];
     items.forEach((e) => {
@@ -377,113 +406,21 @@
     return units;
   }
 
-  // Group entities by area, preserving first-seen order (the server already sorts
-  // them by area then name, so rooms read the same way every render).
-  function groupByArea(list) {
+  // Group entities by area: rooms in the order the user set (homeAssistant.
+  // areaOrder, js/smart-home-order.js), the rest as first met, "no area" last.
+  // Inside a room the selection's own order holds.
+  // The tile reads the order from the server's snapshot; Settings passes the
+  // saved one (the tile may not be on any page, so there may be no snapshot).
+  function groupByArea(list, areaOrder) {
     const groups = new Map();
     list.forEach((e) => {
-      const a = e.area || '~';   // sentinel sorts the "no area" bucket last-ish
+      const a = e.area || '~';
       if (!groups.has(a)) groups.set(a, []);
       groups.get(a).push(e);
     });
-    return groups;
-  }
-
-  // Custom layout is one exact, user-ordered grid. Room layout keeps area
-  // headings and only applies the saved order within each room.
-  function layoutGroups(list, custom) {
-    return custom ? new Map([['*', list]]) : groupByArea(list);
-  }
-
-  function tileLayout() {
-    const ha = window.getHomeAssistantSettings ? window.getHomeAssistantSettings() : null;
-    return ha && ha.tileLayout === 'custom' ? 'custom' : 'rooms';
-  }
-
-  function tileSettings() {
-    const ha = window.getHomeAssistantSettings ? window.getHomeAssistantSettings() : {};
-    return {
-      entities: Array.isArray(ha.entities) ? ha.entities.slice() : [],
-      cards: (ha.tileCards && typeof ha.tileCards === 'object') ? { ...ha.tileCards } : {},
-      sections: Array.isArray(ha.tileSections) ? ha.tileSections.map((s) => ({ ...s })) : [],
-    };
-  }
-
-  function isLayoutEditing() {
-    return !!(document.body && document.body.classList.contains('layout-editing'));
-  }
-
-  function saveTileLayout(patch) {
-    if (window.setHomeAssistantSettings) window.setHomeAssistantSettings(patch);
-    previewTileLayout(patch && patch.entities);
-  }
-
-  function newSectionId() {
-    return 'shs_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
-  }
-
-  function addTileSection(parent) {
-    const cfg = tileSettings();
-    cfg.sections.push({
-      id: newSectionId(),
-      title: parent ? t('smarthome_new_subsection', 'New subsection') : t('smarthome_new_section', 'New section'),
-      parent: parent || '',
-    });
-    saveTileLayout({ tileSections: cfg.sections });
-  }
-
-  function renameTileSection(id, title) {
-    const cfg = tileSettings();
-    const section = cfg.sections.find((s) => s.id === id);
-    if (!section) return;
-    section.title = String(title || '').trim().slice(0, 48) || t('smarthome_section', 'Section');
-    saveTileLayout({ tileSections: cfg.sections });
-  }
-
-  function moveTileSection(id, delta) {
-    const cfg = tileSettings();
-    const section = cfg.sections.find((s) => s.id === id);
-    if (!section) return;
-    const siblings = cfg.sections.filter((s) => (s.parent || '') === (section.parent || ''));
-    const from = siblings.findIndex((s) => s.id === id);
-    const target = siblings[from + delta];
-    if (!target) return;
-    const a = cfg.sections.findIndex((s) => s.id === id);
-    const b = cfg.sections.findIndex((s) => s.id === target.id);
-    const temp = cfg.sections[a]; cfg.sections[a] = cfg.sections[b]; cfg.sections[b] = temp;
-    saveTileLayout({ tileSections: cfg.sections });
-  }
-
-  function removeTileSection(id) {
-    const cfg = tileSettings();
-    const section = cfg.sections.find((s) => s.id === id);
-    if (!section) return;
-    const parent = section.parent || '';
-    const removed = new Set([id]);
-    cfg.sections.filter((s) => s.parent === id).forEach((s) => removed.add(s.id));
-    cfg.sections = cfg.sections.filter((s) => !removed.has(s.id));
-    Object.keys(cfg.cards).forEach((entityId) => {
-      if (removed.has(cfg.cards[entityId].section)) cfg.cards[entityId] = { ...cfg.cards[entityId], section: parent };
-    });
-    saveTileLayout({ tileSections: cfg.sections, tileCards: cfg.cards });
-  }
-
-  function resizeTileCard(id, axis, delta) {
-    const cfg = tileSettings();
-    const cur = cfg.cards[id] || { width: 1, height: 1, section: '' };
-    const limit = axis === 'width' ? 4 : 3;
-    cfg.cards[id] = { ...cur, [axis]: Math.min(limit, Math.max(1, (Number(cur[axis]) || 1) + delta)) };
-    saveTileLayout({ tileCards: cfg.cards });
-  }
-
-  function moveTileCard(id, beforeId, sectionId) {
-    const cfg = tileSettings();
-    const order = cfg.entities.filter((entityId) => entityId !== id);
-    const at = beforeId ? order.indexOf(beforeId) : -1;
-    if (at >= 0) order.splice(at, 0, id); else order.push(id);
-    const cur = cfg.cards[id] || { width: 1, height: 1, section: '' };
-    cfg.cards[id] = { ...cur, section: sectionId || '' };
-    saveTileLayout({ entities: order, tileCards: cfg.cards });
+    const sorted = new Map();
+    window.SmartHomeOrder.sortAreas(Array.from(groups.keys()), areaOrder || state.areaOrder).forEach((a) => sorted.set(a, groups.get(a)));
+    return sorted;
   }
 
   // ── Adaptive layout ──────────────────────────────────────────────────────────
@@ -542,178 +479,25 @@
 
   // How many units would become tall inline panels (devices + sheet-capable single
   // entities). Simple toggles / value cards don't count — they stay compact.
-  function countSheetUnits(custom) {
+  function countSheetUnits() {
     let n = 0;
-    layoutGroups(state.entities, custom).forEach((items) => {
-      groupUnits(items, custom).forEach((u) => { if (u.type === 'device' || SHEET_DOMAINS.has(u.entity.domain)) n++; });
+    groupByArea(state.entities).forEach((items) => {
+      groupUnits(items).forEach((u) => { if (u.type === 'device' || SHEET_DOMAINS.has(u.entity.domain)) n++; });
     });
     return n;
   }
 
-  function stopEditorEvent(event) {
-    event.preventDefault();
-    event.stopPropagation();
-  }
-
-  function cardEditorButton(label, title, onClick) {
-    const button = el('button', 'sh-card-edit-btn', label);
-    button.type = 'button';
-    button.title = title;
-    button.setAttribute('aria-label', title);
-    button.addEventListener('pointerdown', (event) => event.stopPropagation());
-    button.addEventListener('click', (event) => { stopEditorEvent(event); onClick(); });
-    return button;
-  }
-
-  // Pointer-based reorder works with both mouse and touch (native HTML drag does
-  // not work on the touch display Xenon commonly runs on). The card stays put
-  // while the destination glows, then the single settings write lands on release.
-  function beginCardPointerDrag(event, slot, entityId) {
-    if (event.button != null && event.button !== 0) return;
-    event.preventDefault(); event.stopPropagation();
-    const startX = event.clientX, startY = event.clientY;
-    let active = false;
-    let target = null;
-    const clearTarget = () => { if (target) target.classList.remove('is-drop-target'); target = null; };
-    const move = (nextEvent) => {
-      if (!active && Math.hypot(nextEvent.clientX - startX, nextEvent.clientY - startY) < 6) return;
-      active = true; slot.classList.add('is-dragging');
-      const hit = document.elementFromPoint(nextEvent.clientX, nextEvent.clientY);
-      let next = hit && hit.closest ? hit.closest('.sh-card-slot, .sh-custom-grid') : null;
-      if (next === slot || (next && next.classList.contains('sh-card-slot') && next.dataset.entityId === entityId)) next = null;
-      if (next !== target) { clearTarget(); target = next; if (target) target.classList.add('is-drop-target'); }
-    };
-    const end = (nextEvent) => {
-      slot.removeEventListener('pointermove', move);
-      slot.removeEventListener('pointerup', end);
-      slot.removeEventListener('pointercancel', end);
-      slot.classList.remove('is-dragging');
-      const destination = target;
-      clearTarget();
-      if (!active || !destination) return;
-      const targetSlot = destination.classList.contains('sh-card-slot') ? destination : null;
-      const grid = destination.classList.contains('sh-custom-grid') ? destination : destination.closest('.sh-custom-grid');
-      slot._shJustDragged = true;
-      setTimeout(() => { slot._shJustDragged = false; }, 0);
-      moveTileCard(entityId, targetSlot ? targetSlot.dataset.entityId : '', grid ? grid.dataset.sectionId : '');
-      nextEvent.preventDefault(); nextEvent.stopPropagation();
-    };
-    try { slot.setPointerCapture(event.pointerId); } catch { /* capture is best-effort */ }
-    slot.addEventListener('pointermove', move);
-    slot.addEventListener('pointerup', end);
-    slot.addEventListener('pointercancel', end);
-  }
-
-  function customCard(e, editing) {
-    const cfg = tileSettings();
-    const meta = cfg.cards[e.id] || { width: 1, height: 1, section: '' };
-    const slot = el('div', 'sh-card-slot' + (editing ? ' is-editing' : ''));
-    slot.dataset.entityId = e.id;
-    slot.style.setProperty('--sh-card-w', String((Number(meta.width) || 1) * 3));
-    slot.style.setProperty('--sh-card-h', String(Number(meta.height) || 1));
-    slot.appendChild(buildItem(e));
-
-    if (!editing) return slot;
-    slot.addEventListener('click', (event) => {
-      if (slot._shJustDragged || !event.target.closest('.sh-card-tools')) stopEditorEvent(event);
-    }, true);
-
-    const tools = el('div', 'sh-card-tools');
-    const width = Number(meta.width) || 1;
-    const height = Number(meta.height) || 1;
-    const grip = el('span', 'sh-card-grip', '⠿');
-    grip.setAttribute('role', 'button');
-    grip.setAttribute('aria-label', t('smarthome_drag_card', 'Drag card'));
-    grip.addEventListener('pointerdown', (event) => beginCardPointerDrag(event, slot, e.id));
-    tools.append(
-      grip,
-      cardEditorButton('−', t('smarthome_width_less', 'Narrower'), () => resizeTileCard(e.id, 'width', -1)),
-      el('span', 'sh-card-size', 'W' + width),
-      cardEditorButton('+', t('smarthome_width_more', 'Wider'), () => resizeTileCard(e.id, 'width', 1)),
-      cardEditorButton('−', t('smarthome_height_less', 'Shorter'), () => resizeTileCard(e.id, 'height', -1)),
-      el('span', 'sh-card-size', 'H' + height),
-      cardEditorButton('+', t('smarthome_height_more', 'Taller'), () => resizeTileCard(e.id, 'height', 1)),
-    );
-    slot.appendChild(tools);
-    return slot;
-  }
-
-  function sectionEditor(section, isChild, index, total) {
-    const head = el('div', 'sh-custom-section-head' + (isChild ? ' is-child' : ''));
-    const input = el('input', 'sh-section-name');
-    input.value = section.title;
-    input.maxLength = 48;
-    input.setAttribute('aria-label', t('smarthome_section_name', 'Section name'));
-    input.addEventListener('pointerdown', (event) => event.stopPropagation());
-    input.addEventListener('change', () => renameTileSection(section.id, input.value));
-    input.addEventListener('keydown', (event) => { if (event.key === 'Enter') input.blur(); });
-    const tools = el('div', 'sh-section-tools');
-    if (!isChild) {
-      const add = cardEditorButton('', t('smarthome_add_subsection', 'Add subsection'), () => addTileSection(section.id));
-      add.innerHTML = PLUS + '<span>' + t('smarthome_subsection', 'Subsection') + '</span>';
-      tools.appendChild(add);
-    }
-    const up = cardEditorButton('', t('settings_ha_move_up', 'Move up'), () => moveTileSection(section.id, -1)); up.innerHTML = ARROW_UP; up.disabled = index === 0;
-    const down = cardEditorButton('', t('settings_ha_move_down', 'Move down'), () => moveTileSection(section.id, 1)); down.innerHTML = ARROW_DOWN; down.disabled = index === total - 1;
-    const remove = cardEditorButton('', t('smarthome_remove_section', 'Remove section'), () => removeTileSection(section.id)); remove.innerHTML = TRASH;
-    tools.append(up, down, remove);
-    head.append(input, tools);
-    return head;
-  }
-
-  function customGrid(items, sectionId, editing) {
-    const grid = el('div', 'sh-grid sh-custom-grid' + (!items.length ? ' is-empty' : ''));
-    grid.dataset.sectionId = sectionId || '';
-    items.forEach((e) => grid.appendChild(customCard(e, editing)));
-    if (editing && !items.length) grid.appendChild(el('div', 'sh-section-empty', t('smarthome_drop_cards', 'Drop cards here')));
-    return grid;
-  }
-
-  function customSection(section, items, children, cards, editing, index, total) {
-    const node = el('section', 'sh-custom-section' + (section.parent ? ' is-subsection' : ''));
-    if (editing) node.appendChild(sectionEditor(section, !!section.parent, index, total));
-    else node.appendChild(el('div', 'sh-custom-section-title', section.title));
-    node.appendChild(customGrid(items.filter((e) => (cards[e.id] || {}).section === section.id), section.id, editing));
-    children.forEach((child, childIndex) => {
-      node.appendChild(customSection(child, items, [], cards, editing, childIndex, children.length));
-    });
-    return node;
-  }
-
-  function buildCustomBoard() {
-    const cfg = tileSettings();
-    const editing = isLayoutEditing();
-    const board = el('div', 'sh-board sh-board--custom' + (editing ? ' is-layout-editing' : ''));
-    const known = new Set(cfg.sections.map((s) => s.id));
-    const unsorted = state.entities.filter((e) => !known.has((cfg.cards[e.id] || {}).section));
-    if (unsorted.length || !cfg.sections.length) {
-      const loose = el('section', 'sh-custom-section sh-custom-section--loose');
-      if (cfg.sections.length) loose.appendChild(el('div', 'sh-custom-section-title', t('smarthome_unsectioned', 'Unsectioned')));
-      loose.appendChild(customGrid(unsorted, '', editing));
-      board.appendChild(loose);
-    }
-    const roots = cfg.sections.filter((s) => !s.parent);
-    roots.forEach((section, index) => {
-      const children = cfg.sections.filter((s) => s.parent === section.id);
-      board.appendChild(customSection(section, state.entities, children, cfg.cards, editing, index, roots.length));
-    });
-    return board;
-  }
-
-  function buildBoard(expanded, custom) {
-    if (custom) return buildCustomBoard();
-    const board = el('div', 'sh-board' + (expanded ? ' sh-board--expanded' : '') + (custom ? ' sh-board--custom' : ''));
-    layoutGroups(state.entities, custom).forEach((items, area) => {
+  function buildBoard(expanded) {
+    const board = el('div', 'sh-board' + (expanded ? ' sh-board--expanded' : ''));
+    groupByArea(state.entities).forEach((items, area) => {
       const group = el('section', 'sh-area');
-      if (!custom) {
-        const ahead = el('div', 'sh-area-head');
-        ahead.appendChild(el('span', 'sh-area-title', area === '~' ? t('smarthome_no_area', 'Other') : area));
-        const onCount = items.filter((e) => TOGGLE_DOMAINS.has(e.domain) && isOn(e)).length;
-        if (onCount) ahead.appendChild(el('span', 'sh-area-count', String(onCount)));
-        group.appendChild(ahead);
-      }
+      const ahead = el('div', 'sh-area-head');
+      ahead.appendChild(el('span', 'sh-area-title', area === '~' ? t('smarthome_no_area', 'Other') : area));
+      const onCount = items.filter((e) => TOGGLE_DOMAINS.has(e.domain) && isOn(e)).length;
+      if (onCount) ahead.appendChild(el('span', 'sh-area-count', String(onCount)));
+      group.appendChild(ahead);
       const grid = el('div', 'sh-grid' + (expanded ? ' sh-grid--stack' : ''));
-      groupUnits(items, custom).forEach((u) => grid.appendChild(expanded ? expandedUnit(u) : (u.type === 'device' ? deviceCard(u) : buildItem(u.entity))));
+      groupUnits(items).forEach((u) => grid.appendChild(expanded ? expandedUnit(u) : (u.type === 'device' ? deviceCard(u) : buildItem(u.entity))));
       group.appendChild(grid);
       board.appendChild(group);
     });
@@ -721,36 +505,18 @@
   }
 
   function buildWrap(expanded) {
-    const custom = tileLayout() === 'custom';
     const wrap = el('div', 'sh-wrap');
     const head = el('div', 'sh-head');
     const brand = el('div', 'sh-brand');
     const logo = el('span', 'sh-logo'); logo.innerHTML = ICONS.home;   // static, trusted SVG
     brand.append(logo, el('span', 'sh-title', t('smarthome_title', 'Smart Home')));
-    const headEnd = el('div', 'sh-head-end');
-    if (isLayoutEditing()) {
-      const editTools = el('div', 'sh-layout-tools');
-      if (custom) {
-        const add = cardEditorButton('', t('smarthome_add_section', 'Add section'), () => addTileSection(''));
-        add.innerHTML = PLUS + '<span>' + t('smarthome_section', 'Section') + '</span>';
-        editTools.appendChild(add);
-      } else {
-        const enable = cardEditorButton(t('settings_ha_layout_custom', 'Custom'), t('smarthome_enable_custom', 'Enable custom card layout'), () => {
-          if (window.setHomeAssistantSettings) window.setHomeAssistantSettings({ tileLayout: 'custom' });
-          previewTileLayout();
-        });
-        editTools.appendChild(enable);
-      }
-      headEnd.appendChild(editTools);
-    }
     const pill = el('span', 'sh-pill' + (state.connected ? ' on' : ''));
-    headEnd.appendChild(pill);
-    head.append(brand, headEnd);
+    head.append(brand, pill);
     wrap.appendChild(head);
     if (!state.configured) wrap.appendChild(emptyCard('smarthome_setup'));
     else if (!state.connected) wrap.appendChild(emptyCard('smarthome_offline'));
     else if (!state.entities.length) wrap.appendChild(emptyCard('smarthome_pick'));
-    else wrap.appendChild(buildBoard(expanded, custom));
+    else wrap.appendChild(buildBoard(expanded));
     return wrap;
   }
 
@@ -759,8 +525,7 @@
     syncSheet();                 // keep an open control panel in step with live state
     const list = tiles();
     if (!list.length) return;
-    const custom = tileLayout() === 'custom';
-    const sig = tileLayout() + ':' + state.entities.map((e) => e.id).join(',');
+    const sig = state.entities.map((e) => e.id).join(',') + '|' + state.tileView;
     if (sig !== lastEntitySig) { lastEntitySig = sig; renderGen++; }   // devices changed → re-try inline
     const ro = ensureTileRO();
     list.forEach((section) => {
@@ -768,12 +533,14 @@
       if (!mount) return;
       if (ro) ro.observe(mount);
       const hasBoard = state.configured && state.connected && state.entities.length > 0;
-      const mode = (section._shGen === renderGen && section._shMode) ? section._shMode : 'auto';
-      // Custom means a dense card grid: each entity is visible and occupies its
-      // own position. Rich controls still open their sheet when tapped.
-      const expanded = hasBoard && mode !== 'compact' && !custom;
+      // Settings → Smart Home → Show: 'open' and 'compact' are the user's call;
+      // only 'auto' measures the tile.
+      const view = state.tileView;
+      const mode = view === 'open' ? 'expanded' : view === 'compact' ? 'compact'
+        : (section._shGen === renderGen && section._shMode) ? section._shMode : 'auto';
+      const expanded = hasBoard && mode !== 'compact';
       mount.replaceChildren(buildWrap(expanded));
-      if (!expanded) { section._shGen = renderGen; section._shMode = hasBoard ? 'compact' : 'auto'; return; }
+      if (!expanded || view === 'open') { section._shGen = renderGen; section._shMode = !hasBoard ? 'auto' : expanded ? 'expanded' : 'compact'; return; }
       // Decide after layout. Keep the controls INLINE when there's a single device
       // (worth showing even if it has to scroll — far better than a lone card in a
       // big empty tile) or when everything fits. Fall back to compact cards only
@@ -784,7 +551,7 @@
         const avail = bd ? bd.clientHeight : 0;
         let compact = false;
         if (avail > 0) {                                   // avail 0 = not laid out yet → keep inline, re-check later
-          const units = countSheetUnits(custom);
+          const units = countSheetUnits();
           const overflow = bd.scrollHeight > avail + 4;
           compact = (avail < 180) || (overflow && units > 1);
         }
@@ -804,13 +571,13 @@
   async function seed() {
     if (seeded) return; seeded = true;
     const d = await api('/api/homeassistant/state');
-    if (d && typeof d === 'object') { state = { configured: !!d.configured, connected: !!d.connected, entities: Array.isArray(d.entities) ? d.entities : [] }; }
+    if (d && typeof d === 'object') state = stateFrom(d);
     paint();
   }
 
   function onSSE(data) {
     if (!data || typeof data !== 'object') return;
-    state = { configured: !!data.configured, connected: !!data.connected, entities: Array.isArray(data.entities) ? data.entities : [] };
+    state = stateFrom(data);
     seeded = true;
     paint();
   }
@@ -1439,44 +1206,59 @@
       renderPicker(picker, {
         key: 'energyEntities',
         filter: isEnergySource,
-        title: t('power_sources_pick', 'Power & energy sensors to show'),
-        hint: t('power_sources_hint', 'Smart plugs, solar production, home meter, UPS — shown in the Energy widget.'),
+        title: t('power_sources_title', 'Energy widget: sources'),
+        hint: t('power_sources_hint', 'Smart plugs, solar production, home meter, UPS: shown in the Energy widget.'),
         empty: t('power_sources_none', 'No power or energy sensors found in Home Assistant.'),
       });
-    } else {
-      host.appendChild(el('div', 'sh-set-hint', t('settings_ha_select_first', '')));
     }
   }
 
   function buildSettingsCard(ha) {
     const card = el('div', 'sh-set-card');
-    card.appendChild(el('div', 'sh-set-desc', t('settings_ha_desc', '')));
+    const link = el('section', 'settings-section');
+    card.appendChild(link);
+    link.appendChild(el('div', 'sh-set-desc', t('settings_ha_desc', '')));
 
     // Address + token inputs.
     const urlRow = el('label', 'sh-set-row');
     urlRow.appendChild(el('span', 'sh-set-label', t('settings_ha_url', 'Address (URL)')));
     const url = el('input', 'sh-set-input'); url.type = 'text'; url.placeholder = 'http://homeassistant.local:8123'; url.value = ha.url || '';
     urlRow.appendChild(url);
-    card.appendChild(urlRow);
+    link.appendChild(urlRow);
 
     const tokRow = el('label', 'sh-set-row');
-    tokRow.appendChild(el('span', 'sh-set-label', t('settings_ha_token', 'Access token')));
+    const tokName = el('span', 'sh-set-label', t('settings_ha_token', 'Access token'));
+    tokName.appendChild(el('span', 'sh-set-help', t('settings_ha_token_help', '')));
+    tokRow.appendChild(tokName);
     const token = el('input', 'sh-set-input'); token.type = 'password'; token.autocomplete = 'off';
     token.placeholder = ha.tokenSet ? '••••••••  ' + t('settings_ha_token_saved', 'Saved') : '';
     tokRow.appendChild(token);
-    card.appendChild(tokRow);
-    card.appendChild(el('div', 'sh-set-help', t('settings_ha_token_help', '')));
+    link.appendChild(tokRow);
 
     // Connect button + status line.
     const actions = el('div', 'sh-set-actions');
-    const connect = el('button', 'ui-btn ui-btn--primary'); connect.type = 'button'; connect.textContent = t('settings_ha_connect', 'Connect');
+    const connect = el('button', 'settings-btn primary'); connect.type = 'button'; connect.textContent = t('settings_ha_connect', 'Connect');
     const status = el('span', 'sh-set-status');
     actions.append(connect, status);
-    card.appendChild(actions);
+    link.appendChild(actions);
+
+    // How the tile shows devices: nothing to show until Home Assistant is linked.
+    const view = el('section', 'settings-section');
+    view.appendChild(buildViewRow());
+    view.hidden = !(ha.url && ha.tokenSet);
+    card.appendChild(view);
 
     // Device picker (rendered after a successful connection / when configured).
     const picker = el('div', 'sh-set-picker');
     card.appendChild(picker);
+
+    // "Home Assistant dashboard": shown once connected, built on demand.
+    const dash = el('div', 'sh-set-dash-host');
+    card.appendChild(dash);
+    const showDashboard = (haUrl) => {
+      const D = window.SmartHomeDashboardTile;
+      if (D && haUrl) dash.replaceChildren(D.build({ el, t, api, haUrl }));
+    };
 
     connect.addEventListener('click', async () => {
       connect.disabled = true; status.className = 'sh-set-status'; status.textContent = t('settings_ha_connecting', 'Connecting…');
@@ -1496,7 +1278,9 @@
         // Use the entity list returned by /test directly — the settings save is
         // debounced, so a fresh GET /entities could still read the pre-save config.
         allEntities = (Array.isArray(r.entities) && r.entities.length) ? r.entities : null;
+        view.hidden = false;
         renderPicker(picker);
+        showDashboard(url.value.trim());
         // The Energy-sources picker gates on url+tokenSet too — refresh it now
         // that the connection is saved instead of waiting for a Settings reopen.
         if (window.getHomeAssistantSettings) initEnergySettings(window.getHomeAssistantSettings());
@@ -1506,10 +1290,126 @@
     });
 
     // If already configured, show the picker straight away.
-    if (ha.url && ha.tokenSet) renderPicker(picker);
-    else picker.appendChild(el('div', 'sh-set-hint', t('settings_ha_select_first', '')));
+    if (ha.url && ha.tokenSet) { renderPicker(picker); showDashboard(ha.url); }
 
     return card;
+  }
+
+  function savedAreaOrder() {
+    const ha = window.getHomeAssistantSettings ? window.getHomeAssistantSettings() : {};
+    return window.SmartHomeOrder.normalizeAreaOrder(ha.areaOrder);
+  }
+
+  // A saved order change shows on this screen's tile at once; other screens get
+  // it with the next snapshot, which the save triggers.
+  function applyLocally(patch) {
+    state = Object.assign({}, state, patch);
+    if (tiles().length) paint();
+  }
+
+  const ARROW_UP = SVG('<path d="M6 14l6-6 6 6"/>');
+  const ARROW_DOWN = SVG('<path d="M6 10l6 6 6-6"/>');
+
+  // One row of the order list: a name and, when it can move, up/down buttons.
+  // A button with nowhere to go is kept (so the column stays aligned) but
+  // hidden. `focusKey` keeps the keyboard on the button just pressed after the
+  // list is redrawn.
+  function orderRow(label, cls, mover, focusKey) {
+    const row = el('div', 'sh-ord-row ' + cls);
+    row.appendChild(el('span', 'sh-ord-name', label));
+    if (!mover) return row;
+    const moves = el('div', 'sh-ord-moves');
+    [[-1, ARROW_UP, 'unifi_move_up', 'Move up', mover.first], [1, ARROW_DOWN, 'unifi_move_down', 'Move down', mover.last]].forEach(([d, icon, key, fb, off]) => {
+      const b = el('button', 'sh-ord-btn'); b.type = 'button';
+      b.innerHTML = icon;   // static, trusted SVG
+      b.setAttribute('aria-label', t(key, fb) + ': ' + label);
+      b.dataset.focus = focusKey + '|' + d;
+      b.disabled = off;
+      b.addEventListener('click', () => mover.move(d, b.dataset.focus));
+      moves.appendChild(b);
+    });
+    row.appendChild(moves);
+    return row;
+  }
+
+  // Settings → Smart Home: the chosen devices as the tile will show them, rooms
+  // and devices each movable up or down. Hidden until there are two things to order.
+  function buildOrderSection(items, getSelected, setSelected) {
+    const node = el('section', 'settings-section sh-set-order');
+    const byId = new Map(items.map((x) => [x.id, x]));
+    const areaOf = (id) => (byId.get(id) && byId.get(id).area) || '~';
+    const keyOf = (id) => (byId.get(id) && byId.get(id).device) || id;
+    const O = window.SmartHomeOrder;
+
+    function render(focus) {
+      node.replaceChildren();
+      const sel = getSelected().map((id) => byId.get(id)).filter(Boolean);
+      const groups = groupByArea(sel, savedAreaOrder());
+      const areas = Array.from(groups.keys());
+      const movable = areas.filter((a) => a !== '~');
+      const unitCount = Array.from(groups.values()).reduce((n, ents) => n + groupUnits(ents).length, 0);
+      node.hidden = movable.length < 2 && unitCount < 2;
+      if (node.hidden) return;
+      node.appendChild(el('div', 'settings-section-title', t('settings_ha_order', 'Order on the tile')));
+      node.appendChild(el('div', 'sh-set-hint', t('settings_ha_order_hint', 'Move rooms and devices up or down. A device you add goes to the end of its room.')));
+      const list = el('div', 'sh-ord');
+      node.appendChild(list);
+      groups.forEach((ents, area) => {
+        const ai = movable.indexOf(area);
+        list.appendChild(orderRow(area === '~' ? t('smarthome_no_area', 'Other') : area, 'sh-ord-row--room', ai < 0 ? null : {
+          first: ai === 0,
+          last: ai === movable.length - 1,
+          move: (d, key) => {
+            const next = O.moveArea(savedAreaOrder(), areas, area, d);
+            if (window.setHomeAssistantSettings) window.setHomeAssistantSettings({ areaOrder: next });
+            applyLocally({ areaOrder: next });
+            render(key);
+          },
+        }, 'a:' + area));
+        const units = groupUnits(ents);
+        units.forEach((u, i) => {
+          const id = u.type === 'device' ? u.entities[0].id : u.entity.id;
+          list.appendChild(orderRow(u.type === 'device' ? u.name : u.entity.name, 'sh-ord-row--unit', units.length < 2 ? null : {
+            first: i === 0,
+            last: i === units.length - 1,
+            move: (d, key) => { setSelected(O.moveUnit(getSelected(), id, d, keyOf, areaOf)); render(key); },
+          }, 'u:' + id));
+        });
+      });
+      if (focus) {
+        const b = Array.from(node.querySelectorAll('.sh-ord-btn')).find((x) => x.dataset.focus === focus);
+        // At the top or bottom the pressed button hides; keep focus on its pair.
+        const target = b && b.disabled ? Array.from(b.parentNode.children).find((x) => x !== b && !x.disabled) : b;
+        if (target) target.focus();
+      }
+    }
+    render();
+    return { node, render: () => render() };
+  }
+
+  // Settings → Smart Home → Show: how the tile lays out devices.
+  function buildViewRow() {
+    const row = el('div', 'sh-set-row');
+    const name = el('span', 'sh-set-label', t('settings_ha_view', 'Show devices'));
+    name.appendChild(el('span', 'sh-set-help', t('settings_ha_view_hint', 'Automatic shows each device\'s controls on the tile when they fit, and cards that open them when they don\'t.')));
+    row.appendChild(name);
+    const select = el('select', 'settings-select');
+    select.setAttribute('data-custom-select', '');
+    select.setAttribute('data-cs-fixed', '');
+    select.setAttribute('aria-label', t('settings_ha_view', 'Show devices'));
+    [['auto', 'settings_ha_view_auto', 'Automatic'], ['open', 'settings_ha_view_open', 'Always open'], ['compact', 'settings_ha_view_compact', 'Compact']].forEach(([v, key, fb]) => {
+      const o = el('option', '', t(key, fb)); o.value = v; select.appendChild(o);
+    });
+    const ha = window.getHomeAssistantSettings ? window.getHomeAssistantSettings() : {};
+    select.value = window.SmartHomeOrder.normalizeTileView(ha.tileView);
+    select.addEventListener('change', () => {
+      const v = window.SmartHomeOrder.normalizeTileView(select.value);
+      if (window.setHomeAssistantSettings) window.setHomeAssistantSettings({ tileView: v });
+      applyLocally({ tileView: v });
+    });
+    row.appendChild(select);
+    if (typeof window.initCustomSelect === 'function') window.initCustomSelect(select);
+    return row;
   }
 
   function fetchEntities() {
@@ -1530,53 +1430,6 @@
     return entitiesInflight;
   }
 
-  // Keep only still-discoverable ids while preserving the exact saved order.
-  // New selections append to this list; Home Assistant's sort never replaces it.
-  function selectedEntityOrder(items, saved) {
-    const available = new Set(items.map((e) => e.id));
-    return (Array.isArray(saved) ? saved : []).filter((id, i, list) => available.has(id) && list.indexOf(id) === i);
-  }
-
-  function previewTileLayout(order) {
-    if (Array.isArray(order)) {
-      const rank = new Map(order.map((id, i) => [id, i]));
-      state.entities = state.entities.slice().sort((a, b) => (rank.get(a.id) ?? 1e6) - (rank.get(b.id) ?? 1e6));
-    }
-    renderGen++;
-    tiles().forEach((section) => { section._shGen = -1; section._shMode = 'auto'; });
-    paint();
-  }
-
-  function appendTileLayoutControl(host, ha) {
-    const row = el('div', 'sh-set-layout');
-    const copy = el('div', 'sh-set-layout-copy');
-    copy.append(
-      el('div', 'sh-set-picker-title', t('settings_ha_layout', 'Card layout')),
-      el('div', 'sh-set-hint', t('settings_ha_layout_hint', 'Custom keeps every entity visible and follows your order.')),
-    );
-    const seg = el('div', 'sh-set-layout-seg');
-    seg.setAttribute('role', 'group');
-    seg.setAttribute('aria-label', t('settings_ha_layout', 'Card layout'));
-    const current = ha.tileLayout === 'custom' ? 'custom' : 'rooms';
-    [['rooms', 'settings_ha_layout_rooms', 'Rooms'], ['custom', 'settings_ha_layout_custom', 'Custom']].forEach(([value, key, fallback]) => {
-      const btn = el('button', 'sh-set-layout-btn' + (value === current ? ' is-active' : ''), t(key, fallback));
-      btn.type = 'button';
-      btn.setAttribute('aria-pressed', value === current ? 'true' : 'false');
-      btn.addEventListener('click', () => {
-        if (window.setHomeAssistantSettings) window.setHomeAssistantSettings({ tileLayout: value });
-        seg.querySelectorAll('.sh-set-layout-btn').forEach((b) => {
-          const active = b === btn;
-          b.classList.toggle('is-active', active);
-          b.setAttribute('aria-pressed', active ? 'true' : 'false');
-        });
-        previewTileLayout();
-      });
-      seg.appendChild(btn);
-    });
-    row.append(copy, seg);
-    host.appendChild(row);
-  }
-
   // opts (all optional — default is the Smart Home tile's device picker):
   //   key      — homeAssistant settings array the selection persists to
   //   filter   — entity predicate limiting what the list offers
@@ -1584,68 +1437,38 @@
   async function renderPicker(host, opts) {
     const cfg = opts || {};
     const key = cfg.key || 'entities';
-    host.replaceChildren(el('div', 'sh-set-hint', t('settings_ha_connecting', 'Connecting…')));
+    const wait = el('section', 'settings-section');
+    wait.appendChild(el('div', 'sh-set-hint', t('settings_ha_connecting', 'Connecting…')));
+    host.replaceChildren(wait);
     let items = await fetchEntities();
     if (cfg.filter) items = items.filter(cfg.filter);
     if (!settingsMount()) return;                // Settings closed while awaiting
-    host.replaceChildren();
-    host.appendChild(el('div', 'sh-set-picker-title', cfg.title || t('settings_ha_entities', 'Devices to show')));
-    host.appendChild(el('div', 'sh-set-hint', cfg.hint || t('settings_ha_entities_hint', '')));
-    if (!items.length) { host.appendChild(el('div', 'sh-set-hint', cfg.empty || t('settings_ha_select_first', ''))); return; }
+    const box = el('section', 'settings-section');
+    host.replaceChildren(box);
+    box.append(el('div', 'settings-section-title', cfg.title || t('settings_ha_entities', 'Devices to show')), el('div', 'sh-set-hint', cfg.hint || t('settings_ha_entities_hint', '')));
+    if (!items.length) { box.appendChild(el('div', 'sh-set-hint', cfg.empty || t('settings_ha_select_first', ''))); return; }
 
     const ha = window.getHomeAssistantSettings ? window.getHomeAssistantSettings() : { entities: [] };
-    let selectedIds = selectedEntityOrder(items, ha[key]);
-    const chosen = new Set(selectedIds);
+    // The selection array is also the order of devices inside a room.
+    let selected = (ha[key] || []).slice();
+    const chosen = new Set(selected);
+    const save = (patch) => { if (window.setHomeAssistantSettings) window.setHomeAssistantSettings(patch); };
+    // Only the tile's own picker orders rooms and devices; the Energy list doesn't.
+    const order = key === 'entities' ? buildOrderSection(items, () => selected, (next) => {
+      selected = next;
+      save({ [key]: next });
+      const pos = new Map(next.map((id, i) => [id, i]));
+      const at = (e) => (pos.has(e.id) ? pos.get(e.id) : next.length);
+      applyLocally({ entities: state.entities.slice().sort((a, b) => at(a) - at(b)) });
+    }) : null;
 
-    if (key === 'entities') {
-      appendTileLayoutControl(host, ha);
-      if (selectedIds.length) {
-        host.appendChild(el('div', 'sh-set-picker-title sh-set-order-title', t('settings_ha_order', 'Card order')));
-        host.appendChild(el('div', 'sh-set-hint', t('settings_ha_order_hint', 'Use the arrows to place cards. In Custom mode this is the exact grid order.')));
-        const orderList = el('div', 'sh-set-order-list');
-        host.appendChild(orderList);
-        const byId = new Map(items.map((e) => [e.id, e]));
-        const persistOrder = () => {
-          if (window.setHomeAssistantSettings) window.setHomeAssistantSettings({ entities: selectedIds.slice() });
-          previewTileLayout(selectedIds);
-        };
-        const renderOrder = () => {
-          orderList.replaceChildren();
-          selectedIds.forEach((id, i) => {
-            const e = byId.get(id);
-            if (!e) return;
-            const row = el('div', 'sh-set-order-row');
-            row.appendChild(el('span', 'sh-set-order-index', String(i + 1)));
-            const body = el('span', 'sh-set-order-body');
-            body.append(el('span', 'sh-set-check-name', e.name), el('span', 'sh-set-check-id', e.id));
-            const moves = el('span', 'sh-set-order-moves');
-            const move = (delta) => {
-              const j = i + delta;
-              if (j < 0 || j >= selectedIds.length) return;
-              const next = selectedIds.slice();
-              const tmp = next[i]; next[i] = next[j]; next[j] = tmp;
-              selectedIds = next;
-              renderOrder();
-              persistOrder();
-            };
-            const up = el('button', 'sh-set-order-btn'); up.type = 'button'; up.innerHTML = ARROW_UP;
-            up.disabled = i === 0; up.setAttribute('aria-label', t('settings_ha_move_up', 'Move up')); up.addEventListener('click', () => move(-1));
-            const down = el('button', 'sh-set-order-btn'); down.type = 'button'; down.innerHTML = ARROW_DOWN;
-            down.disabled = i === selectedIds.length - 1; down.setAttribute('aria-label', t('settings_ha_move_down', 'Move down')); down.addEventListener('click', () => move(1));
-            moves.append(up, down);
-            row.append(body, moves);
-            orderList.appendChild(row);
-          });
-        };
-        renderOrder();
-      }
-    }
-
+    // The order of what is already chosen comes first, above the long list.
+    if (order) host.insertBefore(order.node, box);
     const search = el('input', 'sh-set-input'); search.type = 'search'; search.placeholder = t('settings_ha_search', 'Search…');
-    host.appendChild(search);
+    box.appendChild(search);
 
     const listWrap = el('div', 'sh-set-list');
-    host.appendChild(listWrap);
+    box.appendChild(listWrap);
 
     const rows = [];
     // A row = checkbox + name + a TYPE badge (Media player / Remote / Button…) so
@@ -1654,21 +1477,12 @@
       const row = el('label', 'sh-set-check');
       const cb = el('input'); cb.type = 'checkbox'; cb.checked = chosen.has(e.id);
       cb.addEventListener('change', () => {
-        if (cb.checked) {
-          chosen.add(e.id);
-          if (key === 'entities' && !selectedIds.includes(e.id)) selectedIds.push(e.id);
-        } else {
-          chosen.delete(e.id);
-          if (key === 'entities') selectedIds = selectedIds.filter((id) => id !== e.id);
-        }
-        // The Smart Home selection is also its user-controlled card order. Other
-        // pickers retain their natural entity order.
-        const ordered = key === 'entities' ? selectedIds.slice() : items.filter((x) => chosen.has(x.id)).map((x) => x.id);
-        if (window.setHomeAssistantSettings) window.setHomeAssistantSettings({ [key]: ordered });
-        if (key === 'entities') {
-          previewTileLayout(ordered);
-          renderPicker(host, cfg);
-        }
+        if (cb.checked) chosen.add(e.id); else chosen.delete(e.id);
+        // A new device goes to the end of its room; the rest keep their place.
+        selected = selected.filter((id) => chosen.has(id));
+        if (cb.checked && !selected.includes(e.id)) selected.push(e.id);
+        save({ [key]: selected });
+        if (order) order.render();
       });
       row.append(cb, el('span', 'sh-set-check-name', shortName || e.name), el('span', 'sh-set-check-type', domainLabel(e)), el('span', 'sh-set-check-id', e.id));
       row._match = (e.name + ' ' + e.id + ' ' + (e.area || '') + ' ' + domainLabel(e)).toLowerCase();
@@ -1677,7 +1491,7 @@
 
     // Group by area, then by physical device inside each area — so the four
     // "BRAVIA XR-55A80J" entities read as ONE device with its parts listed under it.
-    const byArea = groupByArea(items);
+    const byArea = groupByArea(items, savedAreaOrder());
     byArea.forEach((ents, area) => {
       listWrap.appendChild(el('div', 'sh-set-group', area === '~' ? t('smarthome_no_area', 'Other') : area));
       groupUnits(ents).forEach((u) => {
@@ -1726,15 +1540,6 @@
       requestAnimationFrame(() => { queued = false; scan(); });
     });
     obs.observe(document.body, { childList: true, subtree: true });
-    let editing = isLayoutEditing();
-    const editObs = new MutationObserver(() => {
-      const next = isLayoutEditing();
-      if (next === editing) return;
-      editing = next;
-      renderGen++;
-      paint();
-    });
-    editObs.observe(document.body, { attributes: true, attributeFilter: ['class'] });
     scan();
   }
 

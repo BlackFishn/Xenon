@@ -123,7 +123,7 @@
 .crosshair-dialog:not([open]){display:none}
 #xenon-crosshair-studio .xc-panel{display:flex;flex-direction:column;max-height:calc(100dvh - 24px)}
 #xenon-crosshair-studio .xc-header,#xenon-crosshair-studio .xc-footer{flex:none}
-#xenon-crosshair-studio .xc-body{overflow:auto;min-height:0;overscroll-behavior:contain;scrollbar-width:thin}
+#xenon-crosshair-studio .xc-body{overflow:auto;min-height:0;overscroll-behavior-y:contain;scrollbar-width:thin}
 #xenon-crosshair-studio [data-file-error]{overflow-wrap:anywhere}
 #xenon-crosshair-studio [data-preview-name]{max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .qbtn-crosshair{position:relative}

@@ -57,7 +57,7 @@ test('YouTube links accept supported forms and preserve timestamp while rejectin
   assert.equal(parse(`https://youtu.be/${A}?t=1h2m3s`).start, 3723);
   assert.equal(parse(`https://youtube.com/watch?v=${A}#t=90`).start, 90);
   assert.equal(parse(`https://youtu.be/${A}?start=55`).start, 55);
-  for (const link of [`https://youtube.com.evil.test/watch?v=${A}`, `https://evil.test/?v=${A}`, `https://user@youtube.com/watch?v=${A}`, `https://youtu.be:8443/${A}`, `https://youtu.be/${A}/extra`, 'javascript:alert(1)', 'https://youtube.com/playlist?list=test', 'file:///video', `https://youtu.be/${A.slice(1)}`, 'x'.repeat(2049), null, {}]) assert.equal(parse(link), null, String(link));
+  for (const link of [`https://youtube.com.evil.test/watch?v=${A}`, `https://evil.test/?v=${A}`, `https://user:pw@youtube.com/watch?v=${A}`, `https://youtu.be:8443/${A}`, `https://youtu.be/${A}/extra`, 'javascript:alert(1)', 'https://youtube.com/playlist?list=test', 'file:///video', `https://youtu.be/${A.slice(1)}`, 'x'.repeat(2049), null, {}]) assert.equal(parse(link), null, String(link));
 });
 
 test('saved lists are validated, deduplicated and bounded without trusting saved images', () => {

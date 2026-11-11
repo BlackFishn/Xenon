@@ -79,7 +79,7 @@ test('pasted links reject alternate hosts, credentials, types and path injection
     'spotify:album:Track123', 'spotify:track:../../me', 'spotify:track:Track123?x=1',
     'https://open.spotify.com.evil.test/track/Track123',
     'https://open.spotify.com@evil.test/track/Track123',
-    'https://user@open.spotify.com/track/Track123',
+    'https://user:pw@open.spotify.com/track/Track123',
     'https://open.spotify.com:8443/track/Track123',
     'http://open.spotify.com/track/Track123',
     'https://open.spotify.com/album/Track123',
@@ -169,9 +169,13 @@ test('invalid offset or missing context retries the same chosen track once', asy
       ? { status, data: { error: { message: 'Invalid offset or context' } } }
       : { status: 204 });
     assert.deepEqual(await p.playUri(TRACK.uri, 'spotify:playlist:List123'), { ok: true });
-    assert.equal(calls.length, 2);
-    assert.deepEqual(calls[0].body, { context_uri: 'spotify:playlist:List123', offset: { uri: TRACK.uri } });
-    assert.deepEqual(calls[1].body, { uris: [TRACK.uri] });
+    // 5.0 looks up the track's album first (it plays there when it has one);
+    // this fixture has none, so the track plays alone, once.
+    const plays = calls.filter(c => c.method === 'PUT');
+    assert.equal(plays.length, 2);
+    assert.deepEqual(plays[0].body, { context_uri: 'spotify:playlist:List123', offset: { uri: TRACK.uri } });
+    assert.deepEqual(plays[1].body, { uris: [TRACK.uri] });
+    assert.equal(calls.length, 3);
   }
 });
 

@@ -5,6 +5,8 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const DashboardInstances = require('../js/dashboard-instances.js');
+// 5.0's portrait layout rules, shared by the client and the server normalizer.
+const DashboardPortrait = require('../js/dashboard-portrait.js');
 const { nextSettingsRev } = require('../settings-rev.js');
 const read = (name) => readFileSync(new URL(name, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const SERVER = read('../server.js');
@@ -18,7 +20,7 @@ function between(source, start, end, from = 0) {
 }
 
 function layoutNormalizer(source) {
-  const names = ['DASHBOARD_WIDGET_IDS', 'DASHBOARD_TAB_IDS', 'CALENDAR_TAB_IDS', 'MEDIA_VIEW_IDS', 'DASHBOARD_CARD_IDS', 'DASHBOARD_CARD_SIZES', 'DASHBOARD_GRID_COLUMNS', 'DASHBOARD_GRID_MAX_ROW', 'DEFAULT_DASHBOARD_LAYOUT'];
+  const names = ['DASHBOARD_WIDGET_IDS', 'DASHBOARD_TAB_IDS', 'CALENDAR_TAB_IDS', 'MEDIA_VIEW_IDS', 'DASHBOARD_CARD_IDS', 'DASHBOARD_CARD_SIZES', 'DASHBOARD_GRID_COLUMNS', 'DASHBOARD_GRID_MAX_ROW', 'DEFAULT_DASHBOARD_LAYOUT', 'LEGACY_SEEDED_GROUPS'];
   const constants = names.map(name => {
     const at = source.indexOf('const ' + name + ' =');
     assert.ok(at >= 0, name);
@@ -29,7 +31,7 @@ function layoutNormalizer(source) {
   const layoutAt = source.indexOf('function normalizeDashboardLayout(');
   const end = source.indexOf('\n}', layoutAt) + 2;
   const helpers = source.slice(source.indexOf('function cloneDashboardLayout('), end);
-  return new Function('DashboardInstances', constants.join('\n') + '\n' + helpers + '; return normalizeDashboardLayout;')(DashboardInstances);
+  return new Function('DashboardInstances', 'DashboardPortrait', constants.join('\n') + '\n' + helpers + '; return normalizeDashboardLayout;')(DashboardInstances, DashboardPortrait);
 }
 
 const normalizeServerLayout = layoutNormalizer(SERVER);

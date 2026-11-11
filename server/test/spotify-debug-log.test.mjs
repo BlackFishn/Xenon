@@ -76,8 +76,9 @@ test('API diagnostics never include credentials, music data, IDs, query strings 
   assert.doesNotMatch(raw, /SECRET_|SECRETALBUMID|SECRETARTISTID|SECRETPLAYLISTID|SECRETTRACKID|PRIVATE_LOGIN|Bearer|Authorization|\?/);
   const starts = x.lines().filter(r => r.event === 'request_start');
   const ends = x.lines().filter(r => r.event === 'request_end');
-  assert.equal(starts.length, 5);
-  assert.equal(ends.length, 5);
+  // 5.0's playUri reads a lone track's album first, so it plays in that album.
+  assert.equal(starts.length, 6);
+  assert.equal(ends.length, 6);
   assert.ok(ends.every(r => r.status === 200 || r.status === 204));
   assert.ok(starts.every(r => /^[a-f0-9]{16}$/.test(r.instanceId) && r.pid === process.pid && r.timestamp));
 });

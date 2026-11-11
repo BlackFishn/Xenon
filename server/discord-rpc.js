@@ -17,6 +17,7 @@
 // instead of crashing the request. The IPC socket is lazy and idle-closed, so an
 // unconfigured or unused Discord integration keeps zero sockets open.
 
+const fs = require('fs');
 const net = require('net');
 const crypto = require('crypto');
 const path = require('path');
@@ -127,35 +128,12 @@ function userVolumeFor(mode, current, value) {
   return nudgedVolume(now, mode, USER_VOL_MAX);
 }
 
-// A member's avatar as an https URL on Discord's own CDN. It lands in an
-// <img src>, so it is BUILT here from the id and the hash rather than accepted
-// from the wire: the host is fixed and both parts are checked against the only
-// shapes Discord issues, which leaves nothing a payload could steer elsewhere.
-// Someone with no picture of their own gets the default one Discord would draw
-// for them (picked from the id, or from the discriminator on a legacy account),
-// so a tile never has to guess. '' for an id that is not a snowflake.
-const AVATAR_CDN = 'https://cdn.discordapp.com';
-const AVATAR_HASH = /^(a_)?[0-9a-f]{32}$/;
-function avatarUrl(u) {
-  const id = u && u.id != null ? String(u.id) : '';
-  if (!isSnowflake(id)) return '';
-  // An animated avatar (a_…) is asked for as a still: a row of looping GIFs
-  // would decode on every frame for as long as the call lasts.
-  if (typeof u.avatar === 'string' && AVATAR_HASH.test(u.avatar)) {
-    return `${AVATAR_CDN}/avatars/${id}/${u.avatar}.png?size=128`;
-  }
-  const disc = typeof u.discriminator === 'string' ? u.discriminator : '';
-  const index = (/^\d{4}$/.test(disc) && disc !== '0000')
-    ? Number(disc) % 5
-    : Number((BigInt(id) >> 22n) % 6n);
-  return `${AVATAR_CDN}/embed/avatars/${index}.png`;
-}
-
 // Map a GET_SELECTED_VOICE_CHANNEL response to a client-safe member list for the
-// widget: display name (server nick > global name > username), the avatar URL
-// built above, muted/deafened flags (server- or self-imposed), what THIS machine
-// hears them at, and a speaking placeholder the live watch fills in. No
-// tokens/emails, and capped so a huge channel can't bloat the SSE payload.
+// widget: display name (server nick > global name > username), the avatar's
+// public CDN address (avatarUrl), muted/deafened flags (server- or self-imposed),
+// what THIS machine hears them at, and a speaking placeholder the live watch
+// fills in. No tokens or emails, capped so a huge channel can't bloat the SSE
+// payload.
 //
 // Two different mutes live in one RPC entry and they are not interchangeable:
 // `voice_state.mute`/`self_mute` is the member's OWN microphone state (everyone
@@ -163,6 +141,25 @@ function avatarUrl(u) {
 // are the local playback settings of THIS client — the ones the per-user volume
 // action writes. Keeping them apart is what lets a widget show "they muted
 // themselves" and "I turned them down" as the different things they are.
+// A member's avatar on Discord's CDN, as a fixed https URL built from two
+// checked values: never a string from the wire. A custom avatar is a 32-hex
+// hash (`a_` in front when it is animated: the .png is its still first frame,
+// which is also lighter on a dashboard). Without one, Discord's own default
+// avatar: picked by (id >> 22) % 6 for accounts on the new usernames, or by the
+// legacy discriminator % 5. 128px: this fork draws the call as tiles whose
+// avatar reaches ~104px, which 64px would blur.
+function avatarUrl(user) {
+  const id = user && typeof user.id === 'string' ? user.id.trim() : '';
+  if (!isSnowflake(id)) return '';
+  const hash = typeof user.avatar === 'string' ? user.avatar : '';
+  if (/^(a_)?[0-9a-f]{32}$/.test(hash)) return 'https://cdn.discordapp.com/avatars/' + id + '/' + hash + '.png?size=128';
+  const disc = typeof user.discriminator === 'string' ? user.discriminator : '';
+  const index = /^\d{1,4}$/.test(disc) && disc !== '0' && disc !== '0000'
+    ? Number(disc) % 5
+    : Number((BigInt(id) >> 22n) % 6n);
+  return 'https://cdn.discordapp.com/embed/avatars/' + index + '.png';
+}
+
 function channelMembers(ch, cap = 50) {
   const states = ch && Array.isArray(ch.voice_states) ? ch.voice_states : [];
   const out = [];
@@ -351,6 +348,26 @@ function pipePath(i) {
   return path.join(base, 'discord-ipc-' + i);
 }
 
+// POSIX only: is this discord-ipc-N something we may talk to? Without
+// XDG_RUNTIME_DIR the socket lives in a shared, world-writable temp dir
+// (/tmp on most Linux setups), where ANY local user can create discord-ipc-0
+// first and receive our RPC handshake, client id and — during login — the
+// OAuth authorization code / access token. So it must be the socket itself
+// (lstat: a symlink to somewhere else is refused) and it must be owned by the
+// user we run as. Deps are injectable for tests.
+function trustedIpcSocket(p, deps) {
+  const o = deps || {};
+  const lstat = o.lstatSync || fs.lstatSync;
+  const getuid = o.getuid || (typeof process.getuid === 'function' ? process.getuid : null);
+  if (!getuid) return true;   // no uid concept (Windows named pipes take another path)
+  try {
+    const st = lstat(p);
+    return st.isSocket() && st.uid === getuid();
+  } catch {
+    return false;
+  }
+}
+
 // Try discord-ipc-0..9 in turn; resolve the first that connects, else reject.
 // A pipe that EXISTS but refuses us fails in two ways that need OPPOSITE advice,
 // and libuv reports them differently (measured against a live Discord):
@@ -374,8 +391,11 @@ function connectPipe() {
         reject(new Error(why));
         return;
       }
-      const sock = net.connect({ path: pipePath(i) });
+      const target = pipePath(i);
       i += 1;
+      // A missing or foreign socket is treated like "nothing listening here".
+      if (process.platform !== 'win32' && !trustedIpcSocket(target)) { tryNext(); return; }
+      const sock = net.connect({ path: target });
       const onErr = (e) => {
         const code = e && e.code;
         if (code === 'EPERM' || code === 'EACCES') sawDenied = true;
@@ -526,7 +546,15 @@ function createDiscordProvider(deps) {
       timer = setTimeout(() => fail(new Error('discord_timeout')), CMD_TIMEOUT_MS);
       Promise.resolve().then(getAccessToken).then((token) => {
         if (settled) return;
-        if (!token) { fail(new Error('not_connected')); return; }
+        if (!token) {
+          // Creds still stored: the refresh only failed for now, so the watch must
+          // retry. 'not_connected' would stop it with the account still linked.
+          creds().then(
+            (left) => fail(new Error(left.accessToken ? 'discord_closed' : 'not_connected')),
+            () => fail(new Error('not_connected')),
+          );
+          return;
+        }
         _connectPipe().then((s) => {
           if (settled) { try { s.destroy(); } catch { /* ignore */ } return; }
           sock = s;
@@ -566,7 +594,9 @@ function createDiscordProvider(deps) {
     return rawSend(cmd, args || {});
   }
 
-  // Exchange the refresh token for a fresh access token; clear creds on hard fail.
+  // Exchange the refresh token for a fresh access token. Only a revoked or expired
+  // refresh token (invalid_grant) unlinks the account: a 5xx, a rate limit or a bad
+  // client secret must keep the login, or a hiccup forces the user to link again.
   async function refresh() {
     const c = await creds();
     if (!c.refreshToken) return false;
@@ -576,9 +606,9 @@ function createDiscordProvider(deps) {
         body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, grant_type: 'refresh_token', refresh_token: c.refreshToken }),
       });
       const data = await res.json().catch(() => null);
-      if (!res.ok || !data || !data.access_token) { await clearCreds(); return false; }
-      await persistToken(data);
-      return true;
+      if (res.ok && data && data.access_token) { await persistToken(data); return true; }
+      if (data && String(data.error || '').toLowerCase() === 'invalid_grant') await clearCreds();
+      return false;
     } catch { return false; }   // network blip: keep creds, fail this attempt
   }
   const getAccessToken = makeGetAccessToken(refresh);
@@ -758,6 +788,23 @@ function createDiscordProvider(deps) {
     if (!isSnowflake(id)) return { ok: false, error: 'bad_channel' };
     await command('SELECT_VOICE_CHANNEL', { channel_id: id, force: true });
     return { ok: true };
+  }
+
+  // Show one text channel, group DM or DM in the Discord app (SELECT_TEXT_CHANNEL,
+  // under the `rpc` scope every linked account already granted). Used by the
+  // widget's "Reply" on a mirrored notification: Discord has no RPC command that
+  // SENDS a message, so the closest honest thing is taking the user to the chat.
+  // Never throws; the error is the RPC one, which discord-launch.js reads to
+  // decide whether a starting Discord is worth waiting for.
+  async function openTextChannel(channelId) {
+    const id = String(channelId == null ? '' : channelId).trim();
+    if (!isSnowflake(id)) return { ok: false, error: 'bad_channel' };
+    try {
+      await command('SELECT_TEXT_CHANNEL', { channel_id: id });
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: (e && e.message) || 'discord_failed' };
+    }
   }
 
   async function leaveVoice() {
@@ -1256,7 +1303,7 @@ function createDiscordProvider(deps) {
 
   // NB: getAccessToken stays a private closure — never exposed on the provider, so
   // no consumer (or generic forwarding layer) can pull a live token off it.
-  return { configured, status, login, logout, runAction, listVoiceChannels, listSoundboardSounds, voiceRoster, voiceState, watchVoice, notifStatus, holdingUserOverrides, close };
+  return { configured, status, login, logout, runAction, openTextChannel, listVoiceChannels, listSoundboardSounds, voiceRoster, voiceState, watchVoice, notifStatus, holdingUserOverrides, close };
 }
 
 module.exports = {
@@ -1282,4 +1329,5 @@ module.exports = {
   errDetail,
   loginCloseError,
   authorizeError,
+  trustedIpcSocket,
 };

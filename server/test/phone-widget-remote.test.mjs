@@ -38,8 +38,8 @@ const LABELS = {
 
 const STATUS = { ok: true, canDial: true, pbap: true, telephony: true, map: true, device: 'iPhone' };
 const CALLS = [
-  { name: 'Mamma Nadia', number: '+393478594466', direction: 'out', at: Date.now() - 6e5 },
-  { name: '', number: '+390912570471', direction: 'out', at: Date.now() - 12e5 },
+  { name: 'Mamma Giulia', number: '+393331230466', direction: 'out', at: Date.now() - 6e5 },
+  { name: '', number: '+390612345679', direction: 'out', at: Date.now() - 12e5 },
 ];
 
 /**
@@ -82,7 +82,7 @@ async function mount({ remote = false } = {}) {
   };
   sandbox.window = sandbox;
   sandbox.window.t = (k) => LABELS[k] || '';
-  if (remote) sandbox.window.__xenonRemote = { name: 'iPhone di Marcello' };
+  if (remote) sandbox.window.__xenonRemote = { name: 'iPhone di Luca' };
   vm.createContext(sandbox);
   vm.runInContext(SRC, sandbox, { filename: 'phone-widget.js' });
 
@@ -115,8 +115,8 @@ test('tapping a row on the PC opens the confirm sheet, naming the number in full
   tile.querySelectorAll('.phw-row')[0].click();
   const sheet = tile.querySelector('.phw-confirm');
   assert.ok(sheet, 'a call must ask first — that has always been the rule here');
-  assert.equal(sheet.querySelector('.phw-confirm-name').textContent, 'Mamma Nadia');
-  assert.equal(sheet.querySelector('.phw-confirm-num').textContent, '+393478594466',
+  assert.equal(sheet.querySelector('.phw-confirm-name').textContent, 'Mamma Giulia');
+  assert.equal(sheet.querySelector('.phw-confirm-num').textContent, '+393331230466',
     'a name alone would hide what is about to be dialled');
 });
 
@@ -154,7 +154,7 @@ test('the call log itself is still read from the phone on a paired device', asyn
   const { calledPaths, tile } = await mount({ remote: true });
   assert.ok(calledPaths.some((p) => p.startsWith('/api/phone/calls')), 'reading must not be gated');
   assert.equal(tile.querySelectorAll('.phw-row').length, CALLS.length);
-  assert.ok(tile.querySelectorAll('.phw-name').map((n) => n.textContent).includes('Mamma Nadia'));
+  assert.ok(tile.querySelectorAll('.phw-name').map((n) => n.textContent).includes('Mamma Giulia'));
 });
 
 // ── The sheet, when it is legitimately shown, has to be readable ─────────────

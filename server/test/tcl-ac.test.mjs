@@ -7,13 +7,11 @@ const compact = () => fixtureStates().map((e) => ha.compactEntity(e));
 
 test('the dedicated TCL widget leaves Smart Home selections, order and settings unchanged', () => {
   const entities = ['light.desk', p.climate, 'climate.other', ...Array.from({ length: 97 }, (_, i) => 'sensor.s' + i)];
-  const config = { url: 'http://localhost:8123', token: 'private', entities, tileLayout: 'custom', tileSections: [{ id: 'shs_room', title: 'Room', parent: '' }], tileCards: { 'light.desk': { width: 2, height: 2, section: 'shs_room' } }, energyEntities: ['sensor.power'], cameras: ['camera.door'] };
+  const config = { url: 'http://localhost:8123', token: 'private', entities, energyEntities: ['sensor.power'], cameras: ['camera.door'] };
   const result = ha.normalizeHomeAssistant(config);
   assert.deepEqual(result.entities, entities);
   assert.equal(result.entities.length, 100);
   assert.deepEqual(ha.normalizeHomeAssistant(result), result, 'normalization is idempotent');
-  assert.deepEqual(result.tileCards, config.tileCards);
-  assert.deepEqual(result.tileSections, config.tileSections);
   assert.equal(ha.redactHaToken({ homeAssistant: result }).homeAssistant.token, '');
   assert.equal(ha.preserveHaToken({ homeAssistant: { ...result, token: '' } }, { homeAssistant: result }).homeAssistant.token, 'private');
   assert.equal(ha.normalizeHomeAssistant({ entities: [] }).entities.length, 0);

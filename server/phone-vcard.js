@@ -14,7 +14,7 @@
 //
 //  1. A property name carries PARAMETERS, and one of them is the answer to the
 //     most important question here. Call direction is not a field: it is a
-//     parameter on the timestamp — `X-IRMC-CALL-DATETIME;RECEIVED:20260729T121505`
+//     parameter on the timestamp — `X-IRMC-CALL-DATETIME;RECEIVED:20260529T101505`
 //     — so "ricevuta / effettuata / persa" comes out of ONE combined pull
 //     instead of four separate ones.
 //  2. Long values are FOLDED across lines (continuation starts with a space),
@@ -31,7 +31,7 @@
 // Number identity comes from phone-numbers.js rather than being re-derived
 // here. Two spellings of one number must be "the same" for the dedupe below
 // and for caller lookup alike: when the two disagreed, a contact stored as
-// `+393881156069` and `388 1156069` was listed with its own number twice.
+// `+393331230388` and `333 1230388` was listed with its own number twice.
 const { matchKey } = require('./phone-numbers.js');
 
 const MAX_ENTRIES = 5000;      // a phonebook, not a database import
@@ -250,7 +250,7 @@ function callDirection(params, book) {
   return BOOK_DIRECTION[String(book || '').toLowerCase()] || '';
 }
 
-// `20260729T121505` is LOCAL time on the phone; the same string with a trailing
+// `20260529T101505` is LOCAL time on the phone; the same string with a trailing
 // Z is UTC. Reading the first as UTC shifts every call in the list by the
 // timezone offset, which looks like a bug in the clock rather than in a parser.
 function parseStamp(raw) {

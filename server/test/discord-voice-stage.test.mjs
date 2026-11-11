@@ -158,8 +158,8 @@ test('a picture is loaded once per URL, and only over https', () => {
   assert.match(set, /if \(av\.dataset\.dcSrc === src\) return;/, 'the same URL is left alone, loaded or failed');
   assert.match(set, /img\.addEventListener\('error', \(\) => img\.remove\(\)\)/, 'a failed picture is the letter underneath');
   assert.match(set, /img\.referrerPolicy = 'no-referrer'/, 'Discord is not told which dashboard asked');
-  assert.match(CSS, /\.dc-av-img \{[^}]*opacity: 0/, 'hidden until it has loaded: no broken-image glyph');
-  assert.match(CSS, /\.dc-av\.has-img \.dc-av-img \{ opacity: 1; \}/);
+  assert.match(CSS, /\.dc-tav-img \{[^}]*opacity: 0/, 'hidden until it has loaded: no broken-image glyph');
+  assert.match(CSS, /\.dc-tav\.has-img \.dc-tav-img \{ opacity: 1; \}/);
 });
 
 test('names reach the page as text', () => {
@@ -201,5 +201,5 @@ test('speaking outranks the open outline, on the tile and in the call bar', () =
   const open = CSS.indexOf('.dc-tile.is-open {');
   const speaking = CSS.indexOf('.dc-tile.is-speaking {');
   assert.ok(open !== -1 && speaking > open, 'declared after .is-open, at the same specificity');
-  assert.match(CSS, /\.dc-tile\.is-speaking \.dc-av, \.dc-self\.is-speaking \.dc-av \{ outline-color:/);
+  assert.match(CSS, /\.dc-tile\.is-speaking \.dc-tav, \.dc-self\.is-speaking \.dc-tav \{ outline-color:/);
 });

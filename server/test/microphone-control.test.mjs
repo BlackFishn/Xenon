@@ -4,7 +4,8 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 
 const require = createRequire(import.meta.url);
-const { decodeSoundVolumeCsv } = require('../soundvolume-csv.js');
+// Upstream's svv-text.js decodes the export now (it replaced this fork's soundvolume-csv.js).
+const { decodeCsv: decodeSoundVolumeCsv } = require('../svv-text.js');
 const SERVER = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
 const MIC = readFileSync(new URL('../js/mic.js', import.meta.url), 'utf8');
 const VOLUME = readFileSync(new URL('../js/volume.js', import.meta.url), 'utf8');
@@ -22,7 +23,7 @@ test('SoundVolumeView UTF-8 exports preserve non-ASCII device IDs and drop the B
 
 test('microphone mute targets the live default endpoint and verifies the result', () => {
   const start = SERVER.indexOf('async function setMicMute(mute)');
-  const end = SERVER.indexOf('\nasync function svvExec(args)', start);
+  const end = SERVER.indexOf('\nfunction svvExec(args)', start);
   const body = SERVER.slice(start, end);
 
   assert.ok(start >= 0 && end > start);
@@ -44,7 +45,7 @@ test('toggle route and microphone UI use confirmed hardware state', () => {
 
 test('microphone picker validates and confirms the requested default device', () => {
   const start = SERVER.indexOf('async function setDefaultMic(id)');
-  const end = SERVER.indexOf('\nasync function svvExec(args)', start);
+  const end = SERVER.indexOf('\nfunction svvExec(args)', start);
   const body = SERVER.slice(start, end);
 
   assert.ok(start >= 0 && end > start);

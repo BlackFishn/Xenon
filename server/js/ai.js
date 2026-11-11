@@ -16,7 +16,7 @@ const AI_RECENT_KEEP = 16;      // raw turns kept verbatim after a fold (the res
 // Current AI provider config from hub settings (defaults to Gemini).
 function _aiProviderCfg() {
   const s = (typeof hubSettings !== 'undefined' && hubSettings) ? hubSettings : {};
-  const provider = ['ollama', 'openai', 'anthropic', 'claudecode', 'codex'].includes(s.aiProvider) ? s.aiProvider : 'gemini';
+  const provider = ['ollama', 'localapi', 'openai', 'anthropic', 'claudecode', 'codex', 'xenon'].includes(s.aiProvider) ? s.aiProvider : 'gemini';
   // The model the client advertises. For openai/anthropic and the Claude Code /
   // Codex subscriptions the server reads the model from its own settings, so
   // this is informational there; for ollama it selects the local model.
@@ -24,8 +24,10 @@ function _aiProviderCfg() {
   if (provider === 'openai') model = (s.openaiAuthMode === 'chatgpt' ? s.chatgptModel : s.openaiModel) || 'auto';
   else if (provider === 'anthropic') model = typeof s.anthropicModel === 'string' ? s.anthropicModel : 'auto';
   else if (provider === 'ollama') model = typeof s.ollamaModel === 'string' ? s.ollamaModel : 'auto';
+  else if (provider === 'localapi') model = typeof s.localApiModel === 'string' ? s.localApiModel : 'auto';
   else if (provider === 'claudecode') model = typeof s.claudeCodeModel === 'string' ? s.claudeCodeModel : 'default';
   else if (provider === 'codex') model = typeof s.codexModel === 'string' ? s.codexModel : 'default';
+  else if (provider === 'xenon') model = typeof s.xenonModel === 'string' ? s.xenonModel : 'sonnet';
   return {
     provider,
     model,
@@ -38,10 +40,11 @@ function _aiProviderCfg() {
 function _aiProviderReady() {
   const s = (typeof hubSettings !== 'undefined' && hubSettings) ? hubSettings : {};
   const p = _aiProviderCfg().provider;
-  if (p === 'ollama') return true;
-  // The program itself knows whether the user is signed in; the server asks it
-  // and answers a turn with a clear reason when not, so there is no key to check.
-  if (p === 'claudecode' || p === 'codex') return true;
+  if (p === 'ollama' || p === 'localapi') return true;
+  // The program itself knows whether the user is signed in (and the hub whether
+  // the pass has credits); the server answers a turn with a clear reason when
+  // not, so there is no key to check.
+  if (p === 'claudecode' || p === 'codex' || p === 'xenon') return true;
   if (p === 'openai') return s.openaiAuthMode === 'chatgpt' || !!s.openaiApiKeySet;
   if (p === 'anthropic') return !!s.anthropicApiKeySet;
   return geminiKeyReady(s);
@@ -114,9 +117,35 @@ function _aiFormatCliError(code, detail) {
   return fill('ai_' + code);
 }
 
+// Xenon credits answer with a reason code (ai-xenon-credits.js via /api/ai).
+const AI_XENON_ERRORS = new Set(['no_credits', 'no_code', 'bad_code', 'busy', 'rate_limited']);
+function _aiFormatXenonError(code) {
+  return t(AI_XENON_ERRORS.has(code) ? 'ai_xenon_' + code : 'ai_xenon_failed');
+}
+
+// A server on this PC answers with a reason code (ai-local-server.js), and what
+// it said in its own words goes after ours when there is something to add.
+const AI_LOCAL_SERVER_ERRORS = new Set(['offline', 'bad_key', 'no_model', 'not_compatible', 'context', 'timeout', 'empty', 'failed']);
+function _aiFormatLocalServerError(code, detail) {
+  const text = t('ai_localserver_' + (AI_LOCAL_SERVER_ERRORS.has(code) ? code : 'failed'));
+  return detail ? text + ' ' + detail : text;
+}
+
+// A reply without Xenon's commands reads like any other, and a model will even say
+// it set the timer: the user is told why, once per reason.
+const _aiToolsOffShown = new Set();
+function _aiNoteToolsOff(reason) {
+  if (!['context', 'refused'].includes(reason) || _aiToolsOffShown.has(reason)) return;
+  _aiToolsOffShown.add(reason);
+  _aiAppendBubble('assistant', t('ai_localserver_tools_' + reason));
+}
+
 function _aiFormatApiError(err) {
   const msg = (err && err.message) || String(err || '');
   if (/whisper_not_installed|whisper_model_missing/.test(msg)) return t('ai_whisper_required');
+  if (msg === 'voice_blocked') return t('ai_voice_blocked');
+  if (/^localserver_[a-z_]+$/.test(msg)) return _aiFormatLocalServerError(msg.slice(12), err && err.detail);
+  if (/^xenon_[a-z_]+$/.test(msg)) return _aiFormatXenonError(msg.slice(6));
   if (/^cli_(not_installed|not_logged_in|timeout|busy|offline|failed)$/.test(msg)) return _aiFormatCliError(msg, err && err.detail);
   const isKeyError   = /API_KEY|api key|invalid key/i.test(msg);
   const isQuotaError = /quota|rate.?limit|429|free_tier/i.test(msg);
@@ -145,9 +174,13 @@ function _aiLog(msg) {
 let aiPanelOpen = false;
 let aiConversationHistory = [];
 let aiConversationSummary = '';   // rolling summary of older turns folded out of the window
+// The tool groups this conversation loaded (server ai-tool-groups.js), sent back
+// each turn so a group asked for once stays without being asked for again.
+let aiToolGroups = [];
 let _aiSummarizing = false;       // single-flight guard for the background summarize call
 let _aiStickyDocs = null;         // recent non-screenshot attachments, re-sent for a few follow-ups
 let _aiStickyTurns = 0;           // remaining turns the sticky docs carry forward
+let _aiStickyAttach = [];         // the same attachments whole, for their pictures (ai-pictures.js)
 const AI_STICKY_TURNS = 2;        // how many follow-up turns a shared document stays in context
 let aiListening = false;
 let aiRecognition = null;
@@ -159,6 +192,11 @@ let _aiScreenMonitor = null;
 let _aiMediaRecorder = null;
 let _aiAudioChunks   = [];
 let _aiServerRecordingId = null;
+// Bumped whenever a recording is cancelled or dropped. A recorder still opening
+// at that moment (about a second) is let go when it answers, instead of running
+// on unseen: the server takes one recording at a time, so an orphan made every
+// later mic tap answer 409 until the 5-minute sweep.
+let _aiRecorderCancel = 0;
 let _aiVoiceSessionActive = false; // true during an active voice session (button-triggered)
 let _aiFollowupTimer      = null;  // auto-stop timer for the follow-up listening window
 let _aiPendingVoiceReply  = '';    // reply text held until the server's speak_start fires
@@ -177,6 +215,7 @@ const AI_FOLLOWUP_MS = 12000;
 const AI_MAX_UTTERANCE_MS = 30000;
 const AI_MAX_EMPTY_RETRIES = 2;    // how many empty captures to forgive before ending an actively-started turn
 const AI_VOICE_TAP_GRACE_MS = 500; // ignore tap-to-interrupt within this window after opening
+const AI_VOICE_ERROR_HOLD_MS = 4500; // how long a voice-screen error stays up before the session closes
 
 // ── Panel control ────────────────────────────────────────────────
 
@@ -209,10 +248,11 @@ function closeAiPanel() {
   _aiVoiceSessionActive = false;
   _aiVoiceGen++;            // invalidate any in-flight transcription so it can't reopen the panel / run a command
   if (_aiFollowupTimer) { clearTimeout(_aiFollowupTimer); _aiFollowupTimer = null; }
-  // Cancel any active server recording (free ffmpeg, no transcription).
-  const rid = _aiServerRecordingId;
+  // Cancel any server recording, the one still opening too (free ffmpeg, no transcription).
+  _aiRecorderCancel++;
+  _aiDropRecorder(_aiServerRecordingId);
   _aiServerRecordingId = null;
-  if (rid) fetch('/api/stt/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: rid, key: '' }) }).catch(() => {});
+  aiListening = false;
   _aiCloseMonitorPicker();
   _aiStopSpeaking();
   _aiVoiceModeExit();
@@ -224,9 +264,11 @@ function closeAiPanel() {
 }
 
 function aiClearHistory() {
+  if (window.BitTold) BitTold.forget();
   aiConversationHistory = [];
   aiConversationSummary = '';
-  _aiStickyDocs = null; _aiStickyTurns = 0;
+  aiToolGroups = [];
+  _aiStickyDocs = null; _aiStickyAttach = []; _aiStickyTurns = 0;
   const chat = $('ai-chat');
   if (chat) chat.replaceChildren();
   _aiRenderWelcomeIfEmpty();
@@ -248,6 +290,9 @@ async function _aiMaybeShowUndo() {
   _aiAppendUndoChip(last.id, last.label || '');
 }
 
+// "Annulla" as a quiet line under the reply, above any follow-ups, with no
+// Scintille beside it: it takes the change back, not the cost. The click is
+// delegated (below), so a chat copy, which mirrors the log as HTML, works too.
 function _aiAppendUndoChip(id, label) {
   const chat = $('ai-chat');
   if (!chat) return;
@@ -256,36 +301,61 @@ function _aiAppendUndoChip(id, label) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'ai-undo-btn';
-  btn.textContent = '↶ ' + (typeof t === 'function' ? t('ai_undo', 'Annulla') : 'Annulla');
+  btn.dataset.undoId = id;
+  btn.textContent = t('ai_undo');
   if (label) btn.title = label;
-  btn.addEventListener('click', async () => {
-    btn.disabled = true;
-    try {
-      const res = await fetch('/api/ai/actions/undo', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id }),
-      });
-      const data = await res.json();
-      if (data && data.ok) {
-        if (data.refresh) _aiExecuteClientAction(data.refresh, {});
-        btn.textContent = (typeof t === 'function' ? t('ai_undo_done', 'Annullato') : 'Annullato');
-        btn.classList.add('ai-undo-done');
-      } else {
-        btn.disabled = false;
-      }
-    } catch { btn.disabled = false; }
-  });
   row.appendChild(btn);
-  chat.appendChild(row);
+  const last = chat.lastElementChild;
+  if (last && last.classList.contains('ai-choices')) chat.insertBefore(row, last);
+  else chat.appendChild(row);
   chat.scrollTop = chat.scrollHeight;
+  if (typeof mirrorChatCopies === 'function') mirrorChatCopies();
 }
 
+async function _aiUndo(id) {
+  const btns = () => document.querySelectorAll('.ai-undo-btn[data-undo-id="' + CSS.escape(id) + '"]');
+  btns().forEach((b) => { b.disabled = true; });
+  try {
+    const res = await fetch('/api/ai/actions/undo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!(data && data.ok)) throw new Error((data && data.error) || 'undo_failed');
+    if (data.refresh) _aiExecuteClientAction(data.refresh, {});
+    btns().forEach((b) => { b.textContent = t('ai_undo_done'); b.classList.add('ai-undo-done'); });
+  } catch (err) {
+    _aiLog('Undo failed: ' + err.message);
+    btns().forEach((b) => { b.disabled = false; });
+    _aiNotice(t('ai_undo_failed'));
+  }
+  if (typeof mirrorChatCopies === 'function') mirrorChatCopies();
+}
+
+document.addEventListener('click', (e) => {
+  const btn = e.target && e.target.closest && e.target.closest('.ai-undo-btn[data-undo-id]');
+  if (btn && !btn.disabled && !btn.classList.contains('ai-undo-done')) _aiUndo(btn.dataset.undoId);
+});
+
+// What Bit said on its own (js/bit-told.js) does not make a chat a conversation.
+const _aiTalkNodes = (chat) => chat.querySelectorAll(':scope > :not([data-bit-told])');
+
+// An empty chat shows Bit's welcome with three things to ask (js/bit-welcome.js).
+// Nothing to answer with: the chat tile shows its own card (media.js), so the
+// log stays empty here.
 function _aiRenderWelcomeIfEmpty() {
   const chat = $('ai-chat');
-  if (!chat || chat.children.length > 0) return;
-  const ready = _aiProviderReady();
-  _aiAppendBubble('assistant', t(ready ? 'ai_welcome' : 'ai_welcome_no_key'));
+  if (!chat || _aiTalkNodes(chat).length > 0 || !window.BitWelcome || !_aiProviderReady()) return;
+  chat.appendChild(BitWelcome.build());
+  if (typeof mirrorChatCopies === 'function') mirrorChatCopies();
+  BitWelcome.fit();
+}
+
+// The welcome belongs to an empty chat: the first message retires it.
+function _aiDropWelcome() {
+  const box = document.querySelector('#ai-chat [data-bit-welcome]');
+  if (box) box.remove();
 }
 
 // ── Sending messages ─────────────────────────────────────────────
@@ -298,7 +368,39 @@ function aiSendText() {
   // aiSendMessage() renders the attachment-only bubble and sends it.
   if (!text && _aiPendingImages.length === 0) return;
   input.value = '';
+  if (window.BitComposer) BitComposer.sync();
   aiSendMessage(text, false); // text input: no TTS
+}
+
+// The text turn the chat is waiting on, for the stop button: its id, which the
+// server ends at its next tool or round (ai-turns.js), and the request to drop.
+let _aiRunningTurn = null;
+
+function aiTurnRunning() { return !!_aiRunningTurn; }
+
+function _aiSetTurnRunning(turn) {
+  _aiRunningTurn = turn;
+  document.body.classList.toggle('ai-turn-running', !!turn);
+  const label = t(turn ? 'bit_stop' : 'tip_send');
+  document.querySelectorAll('.ai-send-btn').forEach((b) => { b.title = label; b.setAttribute('aria-label', label); });
+}
+
+// The send button is the stop button while a reply is on its way.
+function aiSendOrStop() {
+  if (_aiRunningTurn) aiStopTurn();
+  else aiSendText();
+}
+
+function aiStopTurn() {
+  const turn = _aiRunningTurn;
+  if (!turn || turn.stopped) return;
+  turn.stopped = true;
+  fetch('/api/ai/turn/stop', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: turn.id }),
+  }).catch(() => { /* the turn still ends; its answer is dropped below */ });
+  turn.ctrl.abort();
 }
 
 function aiHandleKeydown(event) {
@@ -325,6 +427,13 @@ async function aiSendMessage(userText, fromVoice, audioParts) {
   const text = String(userText || '').trim();
   const hasAudio = Array.isArray(audioParts) && audioParts.length > 0;
   if (!text && _aiPendingImages.length === 0 && !hasAudio) return;
+  // A turn spoken in a voice session belongs to the voice screen: the chat is a
+  // separate conversation, so nothing of it is written there. The generation
+  // lets a reply that lands after the user closed the session be dropped.
+  const voiceTurn = !!fromVoice && _aiVoiceSessionActive;
+  const voiceGen = _aiVoiceGen;
+  _aiClearChoices();
+  _aiDropWelcome();
 
   // Blank on every loaded page: the key is server-only and the server swaps the
   // stored one in. It is still SENT, so a key typed a second ago works before
@@ -355,21 +464,26 @@ async function aiSendMessage(userText, fromVoice, audioParts) {
   // so a follow-up like "and the second page of that PDF?" used to lose the file.
   // Keep real (non-screenshot) attachments available for a couple of follow-up
   // turns by transparently re-sending them. Bounded and light — no storage, no RAG.
-  const freshDocs = attachParts.filter(p => !p.fromScreenMode).map(({ mimeType, data }) => ({ mimeType, data }));
+  const freshAttach = attachParts.filter(p => !p.fromScreenMode);
+  const freshDocs = freshAttach.map(({ mimeType, data }) => ({ mimeType, data }));
   let sentImageParts = imageParts;
+  let sentAttach = attachParts;
   if (freshDocs.length > 0) {
     _aiStickyDocs = freshDocs;
+    _aiStickyAttach = freshAttach;
     _aiStickyTurns = AI_STICKY_TURNS;
   } else if (_aiStickyDocs && _aiStickyTurns > 0 && !hasAudio) {
     sentImageParts = _aiStickyDocs;   // carry the recent document(s) forward
+    sentAttach = _aiStickyAttach;
     _aiStickyTurns -= 1;
   }
 
-  if (text) _aiAppendBubble('user', text, attachParts);
-  else if (hasAudio) _aiAppendBubble('user', '🎤');
-  else _aiAppendBubble('user', '', attachParts);
-
-  setAiStatus('thinking');
+  if (!voiceTurn) {
+    if (text) _aiAppendBubble('user', text, attachParts);
+    else if (hasAudio) _aiAppendBubble('user', '🎤');
+    else _aiAppendBubble('user', '', attachParts);
+    setAiStatus('thinking');
+  }
   document.body.classList.add('ai-active');
 
   // Only store text in history (audio/images are too large to keep for context).
@@ -390,9 +504,28 @@ async function aiSendMessage(userText, fromVoice, audioParts) {
   // blocking this turn — the summary is applied for subsequent turns).
   _aiMaybeSummarize(apiKey);
 
+  // The turn's id lets the chat show how far a long creation has got and pick
+  // its answer up again after a reload or a dropped connection (ai-turn-wait.js).
+  const turnWait = window.AiTurnWait;
+  const turnId = turnWait ? turnWait.newId() : '';
+  let stopWatch = null;
+  let recovering = false;
+  if (turnWait) {
+    turnWait.remember(turnId);
+    if (!voiceTurn) stopWatch = turnWait.watch(turnId, (st) => setAiStatus('working', st));
+  }
+  const running = (!voiceTurn && turnId) ? { id: turnId, ctrl: new AbortController(), stopped: false } : null;
+  if (running) _aiSetTurnRunning(running);
+  const startedAt = Date.now();
+  // The balance before the turn, for the cost line under a reply paid with Scintille.
+  const sparksBefore = window.XenonCredits && XenonCredits.active() ? XenonCredits.state.balance : null;
   try {
     const featureFlags = _aiFeatureFlags();
-    const response = await fetch('/api/ai', {
+    // The attached pictures, fitted so Xenon AI can put them in what it creates.
+    const pictures = window.AiPictures ? await AiPictures.aiPicturesForSend(sentAttach) : [];
+    let response;
+    try {
+      response = await fetch('/api/ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -404,6 +537,9 @@ async function aiSendMessage(userText, fromVoice, audioParts) {
         // exist this turn — it injects them into the prompt so Xenon can switch
         // by exact name via the switch_deck_profile client action.
         deckProfiles: (window.Deck && window.Deck.listProfiles) ? window.Deck.listProfiles() : [],
+        // Bit on the main screen with no dashboard (js/screen-bit.js): the server
+        // answers the dashboard-only actions with needs_dashboard (ai-surface.js).
+        ...(window.AiSurface === 'screen' ? { surface: 'screen' } : {}),
         // Opt-in advanced features: the server only declares the extra tools
         // (Genesis, Guardian …) for flags that are present and true.
         ...(Object.keys(featureFlags).length > 0 ? { features: featureFlags } : {}),
@@ -414,14 +550,35 @@ async function aiSendMessage(userText, fromVoice, audioParts) {
         // the model keeps the thread of a long conversation. Empty until the
         // first fold happens.
         ...(aiConversationSummary ? { summary: aiConversationSummary } : {}),
+        ...(aiToolGroups.length ? { toolGroups: aiToolGroups } : {}),
         ...(sentImageParts.length > 0 ? { imageParts: sentImageParts } : {}),
+        ...(pictures.some(Boolean) ? { pictures } : {}),
         ...(hasAudio ? { audioParts } : {}),
+        ...(turnId ? { turnId } : {}),
       }),
-    });
+      ...(running ? { signal: running.ctrl.signal } : {}),
+      });
+    } catch (netErr) {
+      if (running && running.stopped) { _aiAfterStop(turnId); return; }
+      // The connection dropped, but the server goes on with the turn: wait for
+      // its answer instead of reporting a failure that is not one.
+      if (turnWait && !voiceTurn) { recovering = true; _aiAwaitLostTurn(turnId, startedAt); return; }
+      throw netErr;
+    }
 
     const data = await response.json().catch(() => ({}));
+    if (running && running.stopped) { _aiAfterStop(turnId); return; }
+    // A turn on credits carries the balance left: every chip shows it at once.
+    if (window.XenonCredits && Number.isFinite(data.credits)) XenonCredits.set(data.credits);
+    if (Array.isArray(data.toolGroups)) aiToolGroups = data.toolGroups.filter((g) => typeof g === 'string').slice(0, 16);
+    if (voiceTurn && voiceGen !== _aiVoiceGen) return; // the session closed while this was thinking
 
     if (!response.ok) {
+      // A later round failed, but the widget an earlier one made still lands.
+      if (Array.isArray(data.clientActions) && data.clientActions.length) {
+        _aiRunMadeActions(data.clientActions);
+        if (!voiceTurn) _aiAppendBubble('assistant', t('ai_partial_done'));
+      }
       const errMsg = (data && data.error) ? data.error : `${t('ai_http_error')} ${response.status}`;
       const err = new Error(errMsg);
       if (data && data.detail) err.detail = String(data.detail);
@@ -432,7 +589,7 @@ async function aiSendMessage(userText, fromVoice, audioParts) {
     let deferredPickerScreens = null;
     let mutated = false; // a refresh_* action means Xenon changed persisted state
     if (Array.isArray(data.clientActions)) {
-      for (const action of data.clientActions) {
+      for (const action of _aiActionsToRun(data.clientActions)) {
         if (action.action === 'show_monitor_picker') {
           pickerOpened = true;
           // Defer the modal so it appears together with Xenon's spoken question
@@ -452,7 +609,15 @@ async function aiSendMessage(userText, fromVoice, audioParts) {
 
     const replyText = data.text || '';
     if (replyText) {
-      _aiAppendBubble('assistant', replyText);
+      if (!voiceTurn) {
+        const ranActions = Array.isArray(data.clientActions) && data.clientActions.length > 0;
+        _aiAppendBubble('assistant', replyText, null, ranActions ? 'done' : 'idle');
+        _aiNoteToolsOff(data.toolsOff);
+        if (window.BitChat) {
+          if (ranActions) BitChat.react('nod');
+          if (BitChat.crossedLow && BitChat.crossedLow(sparksBefore, data.credits)) _aiAppendBuyRow(t('xai_low'));
+        }
+      }
       // Offer to undo a state-changing action (notes overwrite, bulk clear, a
       // just-created task) in the text chat, where a chip can sit under the reply.
       if (mutated && !fromVoice) _aiMaybeShowUndo();
@@ -479,8 +644,20 @@ async function aiSendMessage(userText, fromVoice, audioParts) {
           // at the same moment. _aiPendingVoiceReply is cleared at the start of
           // every new turn (wake trigger + new request) so it can never carry a
           // stale value across sessions.
-          _aiPendingVoiceReply = replyText;
-          _aiSpeak(replyText, afterAnswer);
+          const spokenReply = window.AiReplyChoices ? AiReplyChoices.spoken(replyText) : replyText;
+          _aiPendingVoiceReply = spokenReply;
+          _aiSpeak(spokenReply, () => {
+            // No voice came out (the speech service failed or was cut): the reply
+            // still has to be seen, so show it and leave time to read it.
+            if (_aiPendingVoiceReply && _aiVoiceSessionActive) {
+              _aiVoiceSetReply(_aiPendingVoiceReply);
+              _aiPendingVoiceReply = '';
+              _aiVoiceState('');
+              setTimeout(afterAnswer, Math.min(6000, 1500 + replyText.length * 40));
+              return;
+            }
+            afterAnswer();
+          });
         } else {
           if (_aiVoiceSessionActive) {
             if (deferredPickerScreens) { _aiVoiceSetReply(replyText); _aiShowVoiceMonitorPicker(deferredPickerScreens); _aiPendingPicker = null; }
@@ -495,21 +672,140 @@ async function aiSendMessage(userText, fromVoice, audioParts) {
       // turn that only ran dashboard actions is exempt — the user watched those
       // happen, so a "no answer" notice there would be wrong.
       const ranActions = Array.isArray(data.clientActions) && data.clientActions.length > 0;
-      if (!ranActions) _aiAppendBubble('assistant', t('ai_no_reply'));
-      if (fromVoice && _aiVoiceSessionActive && !pickerOpened) _aiEndVoiceSession();
+      if (voiceTurn) {
+        if (!ranActions && _aiVoiceSessionActive) _aiVoiceShowError(t('ai_no_reply'));
+        else if (_aiVoiceSessionActive && !pickerOpened) _aiEndVoiceSession();
+      } else if (!ranActions) {
+        _aiAppendBubble('assistant', t('ai_no_reply'), null, 'worry');
+      }
     }
 
-    setAiStatus('');
+    if (!voiceTurn) setAiStatus('');
   } catch (e) {
+    if (voiceTurn && voiceGen !== _aiVoiceGen) return;
     const msg = _aiFormatApiError(e);
-    _aiAppendBubble('assistant', msg);
-    setAiStatus('error');
-    setTimeout(() => setAiStatus(''), 3500);
-    // Close the voice session on error so it doesn't hang waiting for a follow-up.
-    if (fromVoice && _aiVoiceSessionActive) _aiEndVoiceSession();
+    // Close the voice session on error so it doesn't hang waiting for a
+    // follow-up, after showing why on the voice screen.
+    if (voiceTurn) {
+      if (_aiVoiceSessionActive) _aiVoiceShowError(msg);
+    } else {
+      _aiAppendBubble('assistant', msg, null, 'worry');
+      _aiFollowNoCode(e);
+      if (_aiOutOfSparks(e)) _aiAppendBuyRow('');
+      else if (text && !hasAudio) _aiAppendRetry(text);
+      setAiStatus('error');
+      setTimeout(() => setAiStatus(''), 3500);
+    }
   } finally {
-    document.body.classList.remove('ai-active');
+    if (stopWatch) stopWatch();
+    if (running && _aiRunningTurn === running) _aiSetTurnRunning(null);
+    if (!recovering) {
+      document.body.classList.remove('ai-active');
+      if (turnWait) turnWait.forget(turnId);
+      if (!voiceTurn && !(running && running.stopped)) _aiToastIfUnseen(startedAt);
+    }
   }
+}
+
+// Stopped: the chat is free at once, with a line saying so. What the turn made
+// before it stopped, and the balance after the round it was in, arrive when the
+// server has finished that round.
+function _aiAfterStop(turnId) {
+  setAiStatus('');
+  const chat = $('ai-chat');
+  if (chat) {
+    const note = document.createElement('div');
+    note.className = 'ai-note';
+    note.textContent = t('bit_stopped');
+    chat.appendChild(note);
+    requestAnimationFrame(() => { chat.scrollTop = chat.scrollHeight; });
+    if (typeof mirrorChatCopies === 'function') mirrorChatCopies();
+  }
+  // The model sees that its last turn was cut, instead of two user turns in a row.
+  aiConversationHistory.push({ role: 'model', parts: [{ text: '[The user stopped this reply.]' }] });
+  if (!window.AiTurnWait) return;
+  window.AiTurnWait.recover(turnId, (data) => {
+    if (!data) return;
+    if (window.XenonCredits && Number.isFinite(data.credits)) XenonCredits.set(data.credits);
+    if (Array.isArray(data.clientActions) && data.clientActions.length) _aiRunMadeActions(data.clientActions);
+  });
+}
+
+// create_preset may run again in one reply after its critique: only its last
+// code opens, so the user never gets a stack of earlier drafts.
+function _aiActionsToRun(actions) {
+  const list = (Array.isArray(actions) ? actions : []).filter((a) => a && typeof a.action === 'string');
+  const isDraft = (a) => !!(a.action === 'marketplace_open_import' && a.args && a.args.created);
+  const lastCreated = list.map(isDraft).lastIndexOf(true);
+  return list.filter((a, i) => !isDraft(a) || i === lastCreated);
+}
+
+// What a turn made, run without the rest of a reply (an answer picked up late,
+// or a turn that failed after making something).
+function _aiRunMadeActions(actions) {
+  for (const action of _aiActionsToRun(actions)) {
+    if (action.action === 'show_monitor_picker') continue; // a question nobody is waiting on any more
+    _aiExecuteClientAction(action.action, action.args || {});
+  }
+}
+
+// A long turn that ends while the chat is out of sight says so with a toast:
+// the wait told the user they could close the chat.
+function _aiToastIfUnseen(startedAt) {
+  const AW = window.AiTurnWait;
+  if (!AW || Date.now() - startedAt < AW.LONG_SECS * 1000) return;
+  const status = $('ai-status');
+  const seen = document.visibilityState === 'visible' && aiPanelOpen && !!status && status.getClientRects().length > 0;
+  if (!seen && window.XenonToast) window.XenonToast.show({ type: 'success', title: t('ai_wait_ready') });
+}
+
+// A reply the chat itself never received: shown, its actions run, and kept in
+// the conversation like any other.
+function _aiApplyLateAnswer(data, ok) {
+  if (!data) return;
+  if (window.XenonCredits && Number.isFinite(data.credits)) XenonCredits.set(data.credits);
+  const made = Array.isArray(data.clientActions) && data.clientActions.length > 0;
+  if (made) _aiRunMadeActions(data.clientActions);
+  if (!ok) {
+    if (made) _aiAppendBubble('assistant', t('ai_partial_done'));
+    const err = new Error(data.error || t('ai_http_error'));
+    if (data.detail) err.detail = String(data.detail);
+    _aiAppendBubble('assistant', _aiFormatApiError(err));
+    _aiFollowNoCode(err);
+    if (_aiOutOfSparks(err)) _aiAppendBuyRow('');
+    return;
+  }
+  if (data.newContent) aiConversationHistory.push(data.newContent);
+  else if (data.text) aiConversationHistory.push({ role: 'model', parts: [{ text: data.text }] });
+  if (data.text) _aiAppendBubble('assistant', data.text);
+  _aiNoteToolsOff(data.toolsOff);
+}
+
+// The connection dropped mid-turn: keep the wait on screen and take the answer
+// from the server when it is ready.
+function _aiAwaitLostTurn(turnId, startedAt) {
+  setAiStatus('working', { stage: 'thinking', secs: Math.round((Date.now() - startedAt) / 1000) });
+  window.AiTurnWait.recover(turnId, (data, ok) => {
+    document.body.classList.remove('ai-active');
+    setAiStatus('');
+    if (data) _aiApplyLateAnswer(data, ok);
+    else _aiAppendBubble('assistant', t('ai_wait_lost'));
+    _aiToastIfUnseen(startedAt);
+  }, (st) => setAiStatus('working', st));
+}
+
+// On load: a turn the previous page was waiting on is picked up, so a reload
+// in the middle of a creation still delivers it.
+function _aiResumePendingTurn() {
+  const AW = window.AiTurnWait;
+  const saved = AW && AW.pending();
+  if (!saved) return;
+  document.body.classList.add('ai-active');
+  AW.recover(saved.id, (data, ok) => {
+    document.body.classList.remove('ai-active');
+    setAiStatus('');
+    if (data) { _aiApplyLateAnswer(data, ok); _aiToastIfUnseen(saved.at); }
+  }, (st) => setAiStatus('working', st));
 }
 
 function _aiExecuteClientAction(action, args) {
@@ -522,6 +818,15 @@ function _aiExecuteClientAction(action, args) {
       break;
     case 'open_app_switcher':
       if (typeof toggleAppSwitcher === 'function') toggleAppSwitcher();
+      break;
+    case 'open_sparks_shop':
+      if (window.XenonCredits && typeof XenonCredits.openShop === 'function') XenonCredits.openShop();
+      break;
+    case 'open_whats_new':
+      if (window.XenonWhatsNew) XenonWhatsNew.reopen();
+      break;
+    case 'open_store_entry':
+      if (window.CommunityGallery) CommunityGallery.openEntryById(String(args.entryId || ''));
       break;
     case 'show_lock_screen':   // pre-v4.4 alias — was a TOGGLE, keep that semantic
       if (window.AmbientMode) AmbientMode.toggle();
@@ -549,6 +854,9 @@ function _aiExecuteClientAction(action, args) {
     case 'customize_appearance':
       if (typeof applyAiAppearance === 'function') applyAiAppearance(args);
       break;
+    case 'style_tile':
+      if (window.TileDress) window.TileDress.dress(args);
+      break;
     case 'create_dashboard_style':
       if (typeof applyAiCreateStyle === 'function') applyAiCreateStyle(args);
       break;
@@ -566,6 +874,26 @@ function _aiExecuteClientAction(action, args) {
       break;
     case 'confirm_pc_command':
       _aiShowPcConfirm(args || {});
+      break;
+    case 'confirm_deck_action':
+      if (window.AiDeckConfirm) {
+        window.AiDeckConfirm.open(args || {}, {
+          onOpen: () => {
+            // Same guard as the PC card: no listening while the card is up.
+            _aiPcConfirmOpen = true;
+            if (_aiFollowupTimer) { clearTimeout(_aiFollowupTimer); _aiFollowupTimer = null; }
+            if (aiListening) { try { _aiStopServerRecorder(); } catch {} }
+          },
+          onClose: () => {
+            _aiPcConfirmOpen = false;
+            if (_aiVoiceSessionActive && !aiListening) _aiStartFollowupListen();
+          },
+        });
+      }
+      break;
+    case 'run_deck_client':
+      // A sound or the mixer: only a dashboard can play them (deck.js).
+      if (window.DeckClientRun) window.DeckClientRun(args && args.action);
       break;
     case 'refresh_tasks':
       if (typeof loadTasks === 'function') loadTasks();
@@ -611,10 +939,14 @@ function _aiExecuteClientAction(action, args) {
       // DeckActions.validateAction inside applyAiDeck before anything persists.
       if (window.Deck && window.Deck.applyAiDeck) window.Deck.applyAiDeck(args || {});
       break;
+    case 'place_created_widget':
+      if (window.CustomWidget && window.CustomWidget.placeCreated && args && args.id) window.CustomWidget.placeCreated(String(args.id));
+      break;
     case 'marketplace_open_import':
       // A catalog entry the AI resolved — the NORMAL import review dialog opens;
       // the user confirms (or cancels) exactly like a hand-pasted code.
-      if (window.PresetShare && window.PresetShare.openImport && args && args.code) window.PresetShare.openImport(String(args.code));
+      // A code the assistant made replaces its previous draft's dialog.
+      if (window.PresetShare && window.PresetShare.openImport && args && args.code) window.PresetShare.openImport(String(args.code), { draft: args.created === true });
       break;
   }
 }
@@ -642,18 +974,32 @@ function _aiSafeLinkScheme(url) {
   return /^(https?:|mailto:)/.test(probe);
 }
 
-function _inlineMarkdown(line) {
-  // Process bold, italic, inline code in order (no nesting to keep it simple)
-  return _escHtmlAI(line)
+// Bold, italic and inline code, in that order (no nesting to keep it simple).
+function _inlineEmphasis(html) {
+  return html
     .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/_(.+?)_/g, '<em>$1</em>')
-    .replace(/`([^`]+)`/g, '<code class="ai-inline-code">$1</code>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_full, label, url) =>
-      _aiSafeLinkScheme(url)
-        ? `<a href="${url}" target="_blank" rel="noopener" class="ai-link">${label}</a>`
-        : `${label} (${url})`);
+    .replace(/`([^`]+)`/g, '<code class="ai-inline-code">$1</code>');
+}
+
+function _inlineMarkdown(line) {
+  // Links are taken out BEFORE the emphasis pass and put back after it. The
+  // other way round, a code span or an underscore inside a link's URL became
+  // markup — `<code class="…">` has quotes of its own — inside href="…", which
+  // let assistant text (and whatever page or file it was quoting) add
+  // attributes to the anchor. A URL ends at whitespace or ")" and never
+  // contains a quote or angle bracket; only the label gets emphasis.
+  const links = [];
+  const text = _escHtmlAI(String(line == null ? '' : line).replace(/\u0000/g, ''))
+    .replace(/\[([^\]]+)\]\(([^)\s"<>]+)\)/g, (_full, label, url) => {
+      links.push(_aiSafeLinkScheme(url)
+        ? `<a href="${url}" target="_blank" rel="noopener" class="ai-link">${_inlineEmphasis(label)}</a>`
+        : `${_inlineEmphasis(label)} (${url})`);
+      return `\u0000${links.length - 1}\u0000`;
+    });
+  return _inlineEmphasis(text).replace(/\u0000(\d+)\u0000/g, (_m, i) => links[Number(i)]);
 }
 
 function _aiRenderMarkdown(raw) {
@@ -715,7 +1061,7 @@ function _aiRenderMarkdown(raw) {
 
 // ── Chat UI helpers ──────────────────────────────────────────────
 
-function _aiAppendBubble(role, text, imagesToShow) {
+function _aiAppendBubble(role, text, imagesToShow, mood) {
   const chat = $('ai-chat');
   if (!chat) return;
   const msg = document.createElement('div');
@@ -749,6 +1095,8 @@ function _aiAppendBubble(role, text, imagesToShow) {
     });
     bubble.appendChild(strip);
   }
+  const offered = role === 'assistant' && window.AiReplyChoices ? AiReplyChoices.split(text) : { text, choices: [] };
+  text = offered.text;
   if (text) {
     const t = document.createElement('span');
     if (role === 'assistant') {
@@ -761,6 +1109,7 @@ function _aiAppendBubble(role, text, imagesToShow) {
     }
     bubble.appendChild(t);
   }
+  if (role === 'assistant' && window.BitChat) msg.insertAdjacentHTML('afterbegin', BitChat.avatarHtml(mood));
   msg.appendChild(bubble);
   // Copy affordance — only when there is text to copy. The click is handled by a
   // single delegated listener (below) so it also works on the innerHTML-cloned
@@ -776,16 +1125,105 @@ function _aiAppendBubble(role, text, imagesToShow) {
     msg.appendChild(copyBtn);
   }
   chat.appendChild(msg);
+  let asking = null;
+  if (offered.notes && window.AiAskCard) asking = AiAskCard.build(offered.choices, offered.notes);
+  if (asking) chat.appendChild(asking);
+  else if (offered.choices.length) chat.appendChild(_aiChoicesRow(offered.choices));
   requestAnimationFrame(() => { chat.scrollTop = chat.scrollHeight; });
   if (typeof mirrorChatCopies === 'function') mirrorChatCopies(); // reflect into duplicated chat tiles
+  if (asking) AiAskCard.settle(asking);
 }
 
-function setAiStatus(state) {
+// The answers the assistant offered with its question, one tap each. The click
+// is delegated (see _aiHandleChoiceClick) so chat mirrors work too.
+function _aiChoicesRow(choices) {
+  const row = document.createElement('div');
+  row.className = 'ai-choices';
+  for (const c of choices) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ai-choice';
+    btn.textContent = c;
+    row.appendChild(btn);
+  }
+  return row;
+}
+
+// The packs under a reply, when the Scintille just ran low or out (BitChat.buyRow).
+function _aiAppendBuyRow(text) {
+  const chat = $('ai-chat');
+  const row = chat && window.BitChat && BitChat.buyRow ? BitChat.buyRow(text) : null;
+  if (!row) return;
+  chat.appendChild(row);
+  requestAnimationFrame(() => { chat.scrollTop = chat.scrollHeight; });
+  if (typeof mirrorChatCopies === 'function') mirrorChatCopies();
+}
+
+const _aiOutOfSparks = (err) => !!(err && err.message === 'xenon_no_credits');
+// No code on this PC (the trial Sparks ended, or never came): the chat turns into
+// the card that offers the Sparks or a key.
+function _aiFollowNoCode(err) {
+  if (err && err.message === 'xenon_no_code' && window.XenonCredits) XenonCredits.refresh(true);
+}
+
+// A turn that failed keeps the question on screen with "Riprova ora" under the
+// error. A tap takes the failed exchange off the chat and the history, then
+// asks again, so the question is not shown or sent twice.
+function _aiAppendRetry(text) {
+  const chat = $('ai-chat');
+  if (!chat) return;
+  const row = document.createElement('div');
+  row.className = 'ai-undo-row ai-retry-row';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'ai-retry-btn';
+  btn.dataset.retry = text;
+  btn.textContent = t('ai_retry_now');
+  row.appendChild(btn);
+  chat.appendChild(row);
+  requestAnimationFrame(() => { chat.scrollTop = chat.scrollHeight; });
+  if (typeof mirrorChatCopies === 'function') mirrorChatCopies();
+}
+
+function _aiRetry(text) {
+  const chat = $('ai-chat');
+  const asked = chat ? [...chat.querySelectorAll('.ai-msg-user')].pop() : null;
+  if (asked) { while (asked.nextSibling) asked.nextSibling.remove(); asked.remove(); }
+  const last = aiConversationHistory[aiConversationHistory.length - 1];
+  if (last && last.role === 'user') aiConversationHistory.pop();
+  aiSendMessage(text, false);
+}
+
+document.addEventListener('click', (e) => {
+  const btn = e.target && e.target.closest && e.target.closest('.ai-retry-btn[data-retry]');
+  if (btn && !aiTurnRunning()) _aiRetry(btn.dataset.retry);
+});
+
+// Offered answers belong to the question just asked: any new message retires them.
+function _aiClearChoices() {
+  const rows = document.querySelectorAll('.ai-choices');
+  if (!rows.length) return;
+  rows.forEach((r) => r.remove());
+  if (typeof mirrorChatCopies === 'function') mirrorChatCopies();
+}
+
+function _aiHandleChoiceClick(e) {
+  const btn = e.target && e.target.closest && e.target.closest('.ai-choice');
+  if (!btn) return;
+  const answer = (btn.dataset.answer || btn.textContent || '').trim();
+  if (answer) aiSendMessage(answer, false);
+}
+document.addEventListener('click', _aiHandleChoiceClick);
+
+function setAiStatus(state, detail) {
   const el = $('ai-status');
   if (!el) return;
   el.className = 'ai-status' + (state ? ` ai-status-${state}` : '');
+  if (window.BitChat) BitChat.setStatus(state);
   if (state === 'thinking') {
     el.innerHTML = '<span class="ai-thinking-dots"><span></span><span></span><span></span></span>';
+  } else if (state === 'working' && window.AiTurnWait) {
+    _aiRenderWorking(el, window.AiTurnWait.describe(detail));
   } else if (state === 'connecting') {
     el.textContent = t('ai_connecting');
   } else if (state === 'listening') {
@@ -796,10 +1234,57 @@ function setAiStatus(state) {
   if (typeof mirrorChatCopies === 'function') mirrorChatCopies(); // keep copy status in sync
 }
 
+// The wait on a long turn: the steps the turn went through, each ticked off
+// when the next begins, the current one with the time spent, and past a while
+// a line saying the chat can be closed. Built once and updated in place.
+const AI_STEP_TICK = '<svg viewBox="0 0 14 14" aria-hidden="true"><path d="M2.5 7.5 5.6 10.5 11.5 3.8"/></svg>';
+const AI_STEP_SPIN = '<svg viewBox="0 0 14 14" aria-hidden="true"><circle class="ai-step-track" cx="7" cy="7" r="5.2"/><path class="ai-step-arc" d="M7 1.8a5.2 5.2 0 0 1 5.2 5.2"/></svg>';
+
+function _aiRenderWorking(el, info) {
+  let row = el.querySelector('.ai-wait');
+  if (!row) {
+    el.textContent = '';
+    row = document.createElement('div');
+    row.className = 'ai-wait';
+    const steps = document.createElement('ol');
+    steps.className = 'ai-steps';
+    const hint = document.createElement('div');
+    hint.className = 'ai-wait-hint';
+    hint.hidden = true;
+    row.append(steps, hint);
+    el.appendChild(row);
+  }
+  const steps = row.querySelector('.ai-steps');
+  let current = steps.lastElementChild;
+  if (!current || current.querySelector('.ai-step-label').textContent !== info.text) {
+    if (current) {
+      current.classList.replace('is-current', 'is-done');
+      current.querySelector('.ai-step-icon').innerHTML = AI_STEP_TICK;
+      current.querySelector('.ai-step-time').remove();
+    }
+    current = document.createElement('li');
+    current.className = 'ai-step is-current';
+    const icon = document.createElement('span');
+    icon.className = 'ai-step-icon';
+    icon.innerHTML = AI_STEP_SPIN;
+    const label = document.createElement('span');
+    label.className = 'ai-step-label';
+    label.textContent = info.text;
+    const time = document.createElement('span');
+    time.className = 'ai-step-time';
+    current.append(icon, label, time);
+    steps.appendChild(current);
+  }
+  current.querySelector('.ai-step-time').textContent = info.time;
+  const hint = row.querySelector('.ai-wait-hint');
+  hint.hidden = !info.long;
+  if (info.long) hint.textContent = t('ai_wait_long');
+}
+
 // ── Push-to-talk voice input ─────────────────────────────────────
 
 function aiToggleVoice() {
-  _aiLog(`PTT toggle — aiListening=${aiListening} mediaDevices=${!!navigator.mediaDevices} MediaRecorder=${typeof MediaRecorder !== 'undefined'}`);
+  _aiLog(`PTT toggle: aiListening=${aiListening} mediaDevices=${!!navigator.mediaDevices} MediaRecorder=${typeof MediaRecorder !== 'undefined'}`);
   if (aiListening) stopAiVoice();
   else startAiVoice();
 }
@@ -866,6 +1351,7 @@ function stopAiVoice() {
     _aiStopServerRecorder();
     return;
   }
+  _aiRecorderCancel++;
   aiListening = false;
   document.body.classList.remove('ai-listening');
   const btn = $('ai-voice-btn');
@@ -900,7 +1386,7 @@ async function _aiStartMediaRecorder() {
     ]);
     // Mic browser aperto — ora mostra "Ascolto…"
     setAiStatus('listening');
-    _aiLog(`PTT stream ok — ownStream=${ownStream} tracks:${stream.getAudioTracks().map(t => t.label).join(',')}`);
+    _aiLog(`PTT stream ok: ownStream=${ownStream} tracks:${stream.getAudioTracks().map(t => t.label).join(',')}`);
     _aiAudioChunks = [];
 
     const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus'
@@ -938,7 +1424,7 @@ async function _aiStartMediaRecorder() {
         const transcribeRes = await fetch('/api/transcribe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ audio: base64, mimeType: recordedMime, key: apiKey, provider: _aiProviderCfg().provider }),
+          body: JSON.stringify({ audio: base64, mimeType: recordedMime, key: apiKey, lang: (typeof lang !== 'undefined' && lang) || 'en', provider: _aiProviderCfg().provider }),
         });
         const { text, error } = await transcribeRes.json();
         if (error) throw new Error(error);
@@ -980,12 +1466,21 @@ async function _aiStartMediaRecorder() {
 // ── Server-side recording via Windows MCI ────────────────────────
 // Used as fallback when getUserMedia is unavailable (e.g. Xenon Edge WebView).
 
+// Frees the server recorder without using what it heard.
+function _aiDropRecorder(id) {
+  if (id) fetch('/api/stt/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, key: '' }) }).catch(() => {});
+}
+
 async function _aiStartServerRecorder() {
+  const ticket = _aiRecorderCancel;
   aiListening = true;
   document.body.classList.add('ai-listening');
-  const btn = $('ai-voice-btn');
+  // The chat's own mic button and status line speak for the chat only; a voice
+  // session shows its state on the voice screen.
+  const inChat = !_aiVoiceSessionActive;
+  const btn = inChat ? $('ai-voice-btn') : null;
   if (btn) btn.classList.add('active');
-  setAiStatus('connecting');
+  if (inChat) setAiStatus('connecting');
   try {
     const r = await fetch('/api/stt/start', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ provider: _aiProviderCfg().provider }) });
@@ -1002,10 +1497,18 @@ async function _aiStartServerRecorder() {
     }
     const { id, error } = await r.json().catch(() => ({}));
     if (error || !id) throw new Error(error || 'no id');
+    // Cancelled while the mic was opening: whoever cancelled has already reset the UI.
+    if (ticket !== _aiRecorderCancel) {
+      _aiDropRecorder(id);
+      aiListening = false;
+      _aiLog(`Server STT: annullata durante l'avvio, rilasciata id=${id}`);
+      return;
+    }
     _aiServerRecordingId = id;
-    // Solo ORA la registrazione è confermata — l'utente può parlare
-    setAiStatus('listening');
-    if (_aiVoiceSessionActive) _aiVoiceState('listening');
+    // Only now is the mic really recording: "listening" before this point told
+    // people to talk while their first words were still being thrown away.
+    if (inChat) setAiStatus('listening');
+    else if (_aiVoiceSessionActive) _aiVoiceState('listening');
     _aiLog(`Server STT: registrazione avviata id=${id}`);
   } catch (err) {
     _aiLog(`Server STT: errore avvio: ${err.message}`);
@@ -1014,9 +1517,10 @@ async function _aiStartServerRecorder() {
     document.body.classList.remove('ai-listening');
     if (btn) btn.classList.remove('active');
     setAiStatus('');
-    if (_aiVoiceSessionActive) _aiEndVoiceSession();
-    if (!aiPanelOpen) openAiPanel();
-    _aiAppendBubble('assistant', _aiFormatApiError(err));
+    // This fork's subscription voice needs local Whisper: say where to install it
+    // rather than showing the raw error code.
+    _aiNotice(/whisper_not_installed|whisper_model_missing/.test(err.message)
+      ? _aiFormatApiError(err) : `${t('ai_mic_unavailable')} ${err.message}`);
   }
 }
 
@@ -1040,7 +1544,7 @@ async function _aiStopServerRecorder() {
   const myGen = _aiVoiceGen;
   const apiKey = (hubSettings && hubSettings.geminiApiKey) || '';
   if (!_aiProviderReady() && _aiProviderCfg().provider === 'gemini') { setAiStatus(''); return; }
-  setAiStatus('thinking');
+  if (!wasVoice) setAiStatus('thinking');
   try {
     const uiLangForStt = (typeof lang !== 'undefined' && lang) || 'en';
     const r = await fetch('/api/stt/stop', {
@@ -1074,16 +1578,14 @@ async function _aiStopServerRecorder() {
       // message pointing at the mic settings. An opportunistic follow-up just ends.
       if (_aiActiveListen && _aiEmptyRetries < AI_MAX_EMPTY_RETRIES) {
         _aiEmptyRetries++;
-        _aiLog(`Server STT: empty capture — retry ${_aiEmptyRetries}/${AI_MAX_EMPTY_RETRIES}`);
+        _aiLog(`Server STT: empty capture, retry ${_aiEmptyRetries}/${AI_MAX_EMPTY_RETRIES}`);
         const hint = $('ai-voice-hint');
         if (hint) hint.textContent = t('ai_didnt_hear');
         _aiRetryActiveListen();
       } else {
-        if (_aiActiveListen && _aiEmptyRetries >= AI_MAX_EMPTY_RETRIES) {
-          _aiAppendBubble('assistant', t('ai_didnt_hear_end'));
-        }
         _aiEmptyRetries = 0;
-        _aiEndVoiceSession();
+        if (_aiActiveListen) _aiVoiceShowError(t('ai_didnt_hear_end'));
+        else _aiEndVoiceSession();
       }
     } else {
       setAiStatus('');
@@ -1092,9 +1594,7 @@ async function _aiStopServerRecorder() {
     if (wasVoice && myGen !== _aiVoiceGen) return; // session gone — swallow the error too
     _aiLog(`Server STT: errore stop: ${err.message}`);
     setAiStatus('');
-    if (_aiVoiceSessionActive) _aiEndVoiceSession();
-    if (!aiPanelOpen) openAiPanel();
-    _aiAppendBubble('assistant', _aiFormatApiError(err));
+    _aiNotice(_aiFormatApiError(err));
   }
 }
 
@@ -1139,9 +1639,9 @@ async function runAiMicTest() {
     if (d.error) throw new Error(d.error);
     const dev = `${d.device || '?'} · ${Number.isFinite(d.db) ? d.db : '?'} dB`;
     if (d.heard) {
-      _aiSetMicTestResult(`✓ ${t('ai_mictest_heard')} — ${dev}`, 'ok');
+      _aiSetMicTestResult(`✓ ${t('ai_mictest_heard')}: ${dev}`, 'ok');
     } else {
-      _aiSetMicTestResult(`✕ ${t('ai_mictest_notheard')} — ${dev}. ${t('ai_mictest_fix')}`, 'warn');
+      _aiSetMicTestResult(`✕ ${t('ai_mictest_notheard')}: ${dev}. ${t('ai_mictest_fix')}`, 'warn');
     }
   } catch (err) {
     _aiLog(`Mic test error: ${err.message}`);
@@ -1169,15 +1669,6 @@ function _aiPlayCloseChime() {
   fetch('/api/chime', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"kind":"close"}' }).catch(() => {});
 }
 
-// True when the user just wants to dismiss the assistant ("stop", "basta"…).
-// Matched only for short utterances so it doesn't trip on a real question that
-// merely contains the word.
-function _aiIsStopCommand(text) {
-  const t = String(text || '').trim().toLowerCase().replace(/[.,!?;:]/g, '');
-  if (!t || t.split(/\s+/).length > 3) return false;
-  return /\b(stop|basta|ferma|fermati|fermo|fermate|esci|chiudi|chiuditi|spegniti|spegni|zitto|taci|quit|exit|close|cancel|cancella|stop xenon|ferma xenon|grazie xenon|grazie basta)\b/.test(t);
-}
-
 // ── Voice mode UI (stylized animated conversation) ──────────────
 function _aiVoiceModeEnter() {
   if (!aiPanelOpen) openAiPanel();
@@ -1194,7 +1685,9 @@ function _aiVoiceModeExit() {
 }
 function _aiVoiceState(state) {
   document.body.classList.remove('voice-listening', 'voice-thinking', 'voice-speaking');
-  if (state) document.body.classList.add('voice-' + state);
+  // "connecting" (the mic is opening) looks like thinking: busy, not yet listening.
+  if (state) document.body.classList.add('voice-' + (state === 'connecting' ? 'thinking' : state));
+  if (window.BitChat) BitChat.voiceState(state);
   const h = $('ai-voice-hint');
   if (!h) return;
   const tap = t('ai_tap_stop');
@@ -1218,11 +1711,7 @@ function _aiVoiceTapInterrupt() {
   if (Date.now() - _aiVoiceOpenedAt < AI_VOICE_TAP_GRACE_MS) return;
   if (document.body.classList.contains('ai-picker-open')) return; // picker handles its own taps
   _aiLog('Voice tap → interrupt');
-  const rid = _aiServerRecordingId;
-  _aiServerRecordingId = null;   // discard any in-flight recording (don't transcribe it)
   aiListening = false;
-  // Free the server recorder (stops ffmpeg + cleans up). Empty key → no transcription.
-  if (rid) fetch('/api/stt/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: rid, key: '' }) }).catch(() => {});
   _aiStopSpeaking();             // stop TTS immediately (server /api/speak/stop)
   fetch('/api/volume/restore', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
   _aiEndVoiceSession();
@@ -1257,8 +1746,6 @@ async function _aiVoiceOrbTap() {
   _aiVoiceSetUser('');
   _aiVoiceState('connecting');
   _aiPlayWakeChime();
-  await new Promise(r => setTimeout(r, 450));
-  if (!_aiVoiceSessionActive) return;
   await _aiStartServerRecorder();
   const capturedId = _aiServerRecordingId;
   if (capturedId) {
@@ -1277,7 +1764,8 @@ function _aiVoiceSetUser(text) {
 function _aiVoiceSetReply(text) {
   const r = $('ai-voice-reply');
   if (!r) return;
-  const clean = String(text || '')
+  const said = window.AiReplyChoices ? AiReplyChoices.spoken(text) : text;
+  const clean = String(said || '')
     .replace(/\*\*(.+?)\*\*/g, '$1')
     .replace(/\*(.+?)\*/g, '$1')
     .replace(/`(.+?)`/g, '$1')
@@ -1292,12 +1780,32 @@ function _aiVoiceSetReply(text) {
   r.classList.toggle('ai-voice-reply-long', clean.length > 200);
 }
 
+// A voice turn's failure belongs on the voice screen, where the user is looking;
+// it stays up long enough to read, then the session closes (a tap closes it sooner).
+function _aiVoiceShowError(msg) {
+  const gen = _aiVoiceGen;
+  _aiVoiceSetReply(msg);
+  _aiVoiceState('');
+  setTimeout(() => { if (gen === _aiVoiceGen && _aiVoiceSessionActive) _aiEndVoiceSession(); }, AI_VOICE_ERROR_HOLD_MS);
+}
+// A notice from the shared recorder: on the voice screen during a voice
+// session, in the chat otherwise.
+function _aiNotice(msg) {
+  if (_aiVoiceSessionActive) _aiVoiceShowError(msg);
+  else _aiAppendBubble('assistant', msg);
+}
+
 // Ends the voice session: clears the follow-up timer, drops the listening UI,
 // and plays the closing chime so the user knows Xenon stopped without looking.
 function _aiEndVoiceSession() {
   if (_aiFollowupTimer) { clearTimeout(_aiFollowupTimer); _aiFollowupTimer = null; }
   _aiVoiceGen++;           // invalidate any in-flight transcription from this session
+  // The session's recording goes with it, the one still opening too; dropping
+  // only the id left ffmpeg running and every later mic tap refused.
+  _aiRecorderCancel++;
+  _aiDropRecorder(_aiServerRecordingId);
   _aiServerRecordingId = null;
+  aiListening = false;
   _aiPendingPicker = null;
   _aiPcConfirmOpen = false; // clear the modal guard so it can't block a future session's mic
   _aiCloseMonitorPicker(); // close the monitor picker too, if open
@@ -1339,12 +1847,9 @@ async function _aiStartFollowupListen() {
   // Keep the last reply on screen while we wait for a follow-up (don't blank it),
   // just clear the user line. The reply is replaced once the user speaks again.
   const u = $('ai-voice-user'); if (u) u.textContent = '';
-  // Wait for the chime to finish AND for any audio tail to clear before showing
-  // "Listening..." or opening the mic — prevents the label appearing while TTS
-  // is still audible and prevents the mic capturing the chime (or the very tail
-  // of Xenon's own voice) itself.
-  await new Promise(r => setTimeout(r, 850));
-  if (!_aiVoiceSessionActive || aiListening) return; // user tapped to interrupt during the gap
+  // /api/speak resolves only after playback ends, so Xenon's own voice is
+  // already over; the mic takes longer to open than the chime lasts, so the
+  // chime is not recorded either. "Listening" shows once the mic is open.
   _aiVoiceState('connecting');
   await _aiStartServerRecorder();
   const capturedId = _aiServerRecordingId;
@@ -1408,19 +1913,21 @@ async function startVoiceSessionTurnBased() {
   if (!_aiVoiceSessionActive) {
     aiConversationHistory = [];
     aiConversationSummary = '';
-    _aiStickyDocs = null; _aiStickyTurns = 0;
-    _aiLog('New voice session — history cleared');
+    aiToolGroups = [];
+    _aiStickyDocs = null; _aiStickyAttach = []; _aiStickyTurns = 0;
+    _aiLog('New voice session: history cleared');
   }
   _aiPendingVoiceReply = '';
   _aiVoiceSessionActive = true;
   _aiActiveListen = true;   // user deliberately opened the voice session
   _aiEmptyRetries = 0;
+  // The chime and the recorder start together: opening the mic takes about a
+  // second, longer than the chime, so the chime is over before recording begins
+  // and "listening" shows the moment the mic is really open.
   _aiPlayWakeChime();
   _aiVoiceModeEnter();
   _aiVoiceSetUser('');
   _aiVoiceState('connecting');
-  await new Promise(r => setTimeout(r, 950));
-  if (!_aiVoiceSessionActive) return;
   await _aiStartServerRecorder();
   const capturedId = _aiServerRecordingId;
   if (capturedId) {
@@ -1433,7 +1940,7 @@ async function startVoiceSessionTurnBased() {
   }
 }
 
-// Server-side "Hey Xenon" wake word detected (SSE `wake` from main.js) — open
+// Server-side "Hey Bit" wake word detected (SSE `wake` from main.js) — open
 // a voice session unless one is already live or the assistant is mid-turn.
 function _aiHandleWake() {
   if (_aiVoiceSessionActive || aiListening || aiSpeaking) return;
@@ -1443,8 +1950,8 @@ function _aiHandleWake() {
 // Called from settings.js when the API key changes
 function onAiKeyUpdated() {
   const chat = $('ai-chat');
-  if (chat && chat.children.length <= 1) {
-    chat.replaceChildren();
+  if (chat && _aiTalkNodes(chat).length <= 1) {
+    _aiTalkNodes(chat).forEach((node) => node.remove());
     _aiRenderWelcomeIfEmpty();
   }
 }
@@ -1563,7 +2070,7 @@ function aiOnFileAttach(input) {
       const base64 = dataUrl.split(',')[1];
       if (!base64) return;
       const mimeType = isImage ? type : (isPdf ? 'application/pdf' : 'text/plain');
-      _aiPendingImages.push({ mimeType, data: base64, previewUrl: isImage ? dataUrl : '', name, isImage });
+      _aiPendingImages.push(_aiPreparePicture({ mimeType, data: base64, previewUrl: isImage ? dataUrl : '', name, isImage }));
       _aiUpdateAttachPreview();
     };
     reader.readAsDataURL(file);
@@ -1577,8 +2084,7 @@ function _aiDocExt(name) {
 }
 
 function _aiUpdateScreenBtn() {
-  const btn = document.querySelector('.ai-screen-btn');
-  if (btn) btn.classList.toggle('active', _aiScreenMode);
+  document.querySelectorAll('.ai-attach-btn').forEach((btn) => btn.classList.toggle('active', _aiScreenMode));
 }
 
 async function aiCaptureScreen() {
@@ -1721,14 +2227,16 @@ function _aiShowVoiceMonitorPicker(screens) {
 // The server never runs a proposed command until the user approves it here. The
 // command text comes from the server (by nonce) and is shown verbatim via
 // textContent — we only send the nonce back to run or cancel.
+// The card on screen: a newer one takes its place, keyboard included.
+let _aiDropPcCard = null;
+
 function _aiShowPcConfirm(args) {
   const nonce = String(args.nonce || '');
   const command = String(args.command || '');
   const purpose = String(args.description || '');
   if (!nonce || !command) return;
 
-  const existing = document.getElementById('ai-pc-confirm');
-  if (existing) existing.remove();
+  if (_aiDropPcCard) _aiDropPcCard();
 
   // The card is modal: while it's up, Xenon must not be listening. Stop any
   // in-flight follow-up recorder/timer and block the mic from re-opening until
@@ -1743,18 +2251,23 @@ function _aiShowPcConfirm(args) {
 
   const card = document.createElement('div');
   card.className = 'ai-monitor-card ai-pc-card';
+  card.setAttribute('role', 'dialog');
+  card.setAttribute('aria-modal', 'true');
+  card.tabIndex = -1;
 
   const title = document.createElement('div');
   title.className = 'ai-pc-title';
+  title.id = 'ai-pc-confirm-title';
   title.textContent = t('ai_pc_confirm_title') || 'Eseguire questo comando sul PC?';
-  card.appendChild(title);
+  card.setAttribute('aria-labelledby', title.id);
 
+  let desc = null;
   if (purpose) {
-    const desc = document.createElement('div');
+    desc = document.createElement('div');
     desc.className = 'ai-pc-desc';
     desc.textContent = purpose;
-    card.appendChild(desc);
   }
+  card.appendChild(window.AiDeckConfirm.head(title, desc));
 
   const pre = document.createElement('pre');
   pre.className = 'ai-pc-cmd';
@@ -1769,8 +2282,13 @@ function _aiShowPcConfirm(args) {
   const row = document.createElement('div');
   row.className = 'ai-pc-actions';
 
+  let letGo = () => {};
+  let onEsc = () => {};
+  const drop = () => { letGo(); overlay.remove(); };
+  _aiDropPcCard = drop;
   const close = () => {
-    overlay.remove();
+    drop();
+    if (typeof window.ambientFreeze === 'function') window.ambientFreeze('pc-confirm', false);
     document.body.classList.remove('ai-picker-open');
     _aiPcConfirmOpen = false;
     // Now that the modal is gone, resume the voice session's listening (if any).
@@ -1800,7 +2318,9 @@ function _aiShowPcConfirm(args) {
     } catch (e) {
       _aiRenderPcResult(card, row, { ok: false, errorMessage: String((e && e.message) || e) }, close);
     }
+    onEsc = close;
   });
+  onEsc = () => cancelBtn.click();
 
   row.appendChild(cancelBtn);
   row.appendChild(runBtn);
@@ -1808,6 +2328,8 @@ function _aiShowPcConfirm(args) {
   overlay.appendChild(card);
   document.body.appendChild(overlay);
   document.body.classList.add('ai-picker-open');
+  if (typeof window.ambientFreeze === 'function') window.ambientFreeze('pc-confirm', true);
+  letGo = window.DialogFocus.hold(card, { onEsc: () => onEsc() });
 }
 
 function _aiRenderPcResult(card, row, data, close) {
@@ -1899,6 +2421,11 @@ async function _aiDoCapture(monitor, fromScreenMode = false) {
   }
 }
 
+// Starts making an attached picture ready to go inside a creation (ai-pictures.js).
+function _aiPreparePicture(item) {
+  return window.AiPictures ? AiPictures.prepareAiPicture(item) : item;
+}
+
 function aiRemoveAttachment(index) {
   _aiPendingImages.splice(index, 1);
   _aiUpdateAttachPreview();
@@ -1926,7 +2453,7 @@ function _aiHandlePaste(e) {
       const dataUrl = ev.target.result;
       const base64 = dataUrl.split(',')[1];
       if (base64) {
-        _aiPendingImages.push({ mimeType: file.type || 'image/png', data: base64, previewUrl: dataUrl });
+        _aiPendingImages.push(_aiPreparePicture({ mimeType: file.type || 'image/png', data: base64, previewUrl: dataUrl }));
         _aiUpdateAttachPreview();
         // Focus the text input so the user can type a comment
         const inp = $('ai-text-input');
@@ -2005,6 +2532,7 @@ document.addEventListener('click', _aiHandleCopyClick);
 // which keeps every remove button wired to the live array.
 function _aiUpdateAttachPreview() {
   document.querySelectorAll('.ai-attach-preview').forEach(_aiRenderAttachPreview);
+  if (window.BitComposer) BitComposer.sync(); // an attachment alone is sendable
 }
 
 function _aiRenderAttachPreview(el) {
@@ -2052,7 +2580,9 @@ function _aiRenderAttachPreview(el) {
 // ── Initialisation ────────────────────────────────────────────────
 
 function initAi() {
-  // Nothing to initialise — voice sessions start via button tap.
+  // Voice sessions start via button tap; a turn the last page was waiting on
+  // is picked up here.
+  _aiResumePendingTurn();
 }
 
 if (document.readyState === 'loading') {
@@ -2077,7 +2607,7 @@ let _aiDictateTimer = null;   // safety auto-stop so a forgotten recording can't
 function _aiDictateReset(btn) {
   if (_aiDictateTimer) { clearTimeout(_aiDictateTimer); _aiDictateTimer = null; }
   const b = btn || $('ai-dictate-btn');
-  if (b) { b.classList.remove('active', 'busy'); b.title = t('ai_dictate'); }
+  if (b) { b.classList.remove('active', 'busy'); b.title = t('ai_dictate'); b.setAttribute('aria-label', t('ai_dictate')); }
 }
 
 async function aiDictateToggle() {
@@ -2090,7 +2620,7 @@ async function aiDictateToggle() {
   // hold an id (recording) or have reset the button (start failed / mic busy).
   _aiDictateBusy = true;
   try {
-    if (btn) { btn.classList.add('active'); btn.title = t('ai_dictate_stop'); }
+    if (btn) { btn.classList.add('active'); btn.title = t('ai_dictate_stop'); btn.setAttribute('aria-label', t('ai_dictate_stop')); }
     const r = await fetch('/api/stt/start', { method: 'POST' });
     if (r.status === 409) { _aiDictateReset(btn); return; } // mic claimed elsewhere — back off
     const { id, error } = await r.json().catch(() => ({}));
@@ -2144,6 +2674,7 @@ function _aiDictateInsert(text) {
   if (!input) return;
   const cur = (input.value || '').trim();
   input.value = cur ? `${cur} ${text}` : text;
+  if (window.BitComposer) BitComposer.sync();
   input.focus();
   try { input.setSelectionRange(input.value.length, input.value.length); } catch { /* non-text input */ }
 }

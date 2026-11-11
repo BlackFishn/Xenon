@@ -3,7 +3,7 @@
     {
       "_items" : [
         {
-          "_name" : "Microfono di Nadia",
+          "_name" : "Microfono di Giulia",
           "coreaudio_device_input" : 1,
           "coreaudio_device_manufacturer" : "Apple Inc.",
           "coreaudio_device_srate" : 48000,

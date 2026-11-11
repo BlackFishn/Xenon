@@ -31,6 +31,7 @@ function serverVoice({ synth = async () => Buffer.from('wav'), play = async () =
   let restores = 0;
   const context = vm.createContext({
     Buffer, path, os: { tmpdir: () => '/tmp' },
+    privateTmpFile: (prefix, ext) => '/tmp/' + prefix + Math.random().toString(36).slice(2) + ext,
     fs: { promises: {
       writeFile: async file => { files.add(file); },
       unlink: async file => { files.delete(file); },

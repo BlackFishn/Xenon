@@ -17,34 +17,9 @@
 // ambient-idle.js (whose fixed 60s animation-pause is load-bearing for GPU
 // cost) — same activity events, independent lifecycle.
 //
-// Pure helpers (resolveScene, idleStartSuppressed, normalizeIdleMinutes) are
+// Pure helpers (idleStartSuppressed, normalizeIdleMinutes) are
 // exported for node:test (server/test/ambient-logic.test.mjs), same pattern as
 // preset-share.js.
-
-// Pick the scene to show for the current settings + installed packages + saved
-// canvas scenes. Returns one of:
-//   { builtin:true, fallback? }         — the native lockscreen scene
-//   { builtin:false, pkg }              — an installed SDK surface:'ambient' pkg
-//   { builtin:false, canvas:true, scene } — a native canvas scene (JSON layout)
-// Falls back to builtin when the configured scene is missing, isn't an ambient
-// scene, or the SDK subsystem is off — the user must never hit a dead button
-// because a package/scene was deleted.
-function resolveAmbientScene(cfg, packages, sdkEnabled, scenes) {
-  const sceneId = (cfg && typeof cfg.sceneId === 'string') ? cfg.sceneId : 'builtin';
-  if (sceneId === 'builtin') return { builtin: true };
-  // Native canvas scene ("canvas:<id>") — first-party, no SDK subsystem needed.
-  if (typeof sceneId === 'string' && sceneId.indexOf('canvas:') === 0) {
-    const id = sceneId.slice('canvas:'.length);
-    const scene = (Array.isArray(scenes) ? scenes : []).find(s => s && s.id === id);
-    if (!scene) return { builtin: true, fallback: 'missing' };
-    return { builtin: false, canvas: true, scene };
-  }
-  if (!sdkEnabled) return { builtin: true, fallback: 'sdk_off' };
-  const pkg = (Array.isArray(packages) ? packages : [])
-    .find(p => p && p.id === sceneId && p.surface === 'ambient');
-  if (!pkg) return { builtin: true, fallback: 'missing' };
-  return { builtin: false, pkg };
-}
 
 // Should the game-mode watcher tear the open scene down right now? Pure — the
 // observer gathers the flags from the DOM so this stays unit-testable.
@@ -112,6 +87,26 @@ function ambientStartupDecision(state) {
   return 'open';
 }
 
+// A screensaver the idle start put up closes when the PC is in use again. A tap
+// on one of the scene's own touch controls (play/pause, volume…) is PC input
+// too, and must not close the scene it was made on: for touchHoldMs after one,
+// that input is the touch, not the user coming back. After the hold the idle
+// counter has grown past the threshold again unless something else was used.
+// state: { idleStarted, open, sysIdleSec, dropped, sinceTouchMs, activeIdleSec, touchHoldMs }
+function ambientIdleCloses(state) {
+  const s = state || {};
+  if (!s.idleStarted || !s.open || s.sysIdleSec == null) return false;
+  if (Number.isFinite(s.sinceTouchMs) && s.sinceTouchMs >= 0 && s.sinceTouchMs < s.touchHoldMs) return false;
+  return s.sysIdleSec < s.activeIdleSec || !!s.dropped;
+}
+
+// The wake gesture over an idle-started scene closes it, except on a touch
+// control of a canvas scene ([data-ac-touch], js/ambient-canvas.js).
+function ambientTouchTarget(target) {
+  return !!(target && typeof target.closest === 'function'
+    && target.closest('#ambient-canvas-overlay [data-ac-touch]'));
+}
+
 if (typeof window !== 'undefined') (function () {
   const REARM_THROTTLE_MS = 1000;
   const IDLE_EVENTS = ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart'];
@@ -120,10 +115,10 @@ if (typeof window !== 'undefined') (function () {
   const BUSY_BODY_CLASSES = ['game-mode', 'perf-mode', 'layout-editing', 'ai-open', 'ai-active', 'ai-voice-mode', 'ai-listening', 'ai-picker-open'];
   // Visible overlays/dialogs that suppress the idle auto-start.
   const OVERLAY_IDS = ['ai-overlay', 'settings-overlay', 'weather-overlay', 'app-switcher', 'tab-switcher', 'day-modal'];
-  // `.cw-overlay` is the Claude Code approval: a tool call is blocked on a tap,
+  // `.ask-overlay` is a Codex or Claude Code request: a tool call is blocked on a tap,
   // so starting a screensaver over it would hide the one thing on screen that
-  // someone is waiting for.
-  const OVERLAY_SELECTOR = '.preset-modal-overlay, .cw-perm-backdrop, .cw-overlay, .deck-mix-backdrop, .wc-overlay, dialog[open]';
+  // someone is waiting for. `.xm-scrim` is the Xenon menu on the dashboard, as Settings above.
+  const OVERLAY_SELECTOR = '.preset-modal-overlay, .cw-perm-backdrop, .ask-overlay, .xm-scrim, .deck-ed-backdrop, .deck-mix-backdrop, .deck-style-modal, .xfer-sheet-backdrop, dialog[open]';
 
   let idleTimer = null;
   let lastRearm = 0;
@@ -137,6 +132,8 @@ if (typeof window !== 'undefined') (function () {
   let idleStarted = false; // the CURRENT open was the idle auto-start (screensaver), not a manual open
   let startupPending = false; // "Open at startup" is still waiting for a clear screen (see openOnStartup)
   const ACTIVE_IDLE_SEC = 30; // whole-PC idle below this = the user is active on SOME screen → dismiss
+  const TOUCH_HOLD_MS = (ACTIVE_IDLE_SEC + 5) * 1000;   // see ambientIdleCloses
+  let lastSceneTouchAt = 0;   // last tap on a canvas touch control while the scene was up
   const warnedFallback = new Set();   // fallback reasons already explained this session
 
   function cfg() {
@@ -161,18 +158,6 @@ if (typeof window !== 'undefined') (function () {
   function savedScenes() {
     const arr = (typeof hubSettings === 'object' && hubSettings) ? hubSettings.ambientScenes : null;
     return Array.isArray(arr) ? arr : [];
-  }
-  function uniqueSceneId(base) {
-    const used = new Set(savedScenes().map(scene => scene && scene.id).filter(Boolean));
-    const clean = String(base || 'my-ambient').toLowerCase()
-      .replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 41) || 'my-ambient';
-    if (!used.has(clean)) return clean;
-    for (let number = 2; number < 1000; number++) {
-      const suffix = '-' + number;
-      const candidate = clean.slice(0, 41 - suffix.length).replace(/-+$/g, '') + suffix;
-      if (!used.has(candidate)) return candidate;
-    }
-    return 'my-ambient-' + Date.now().toString(36).slice(-6);
   }
   function tt(key, fb) {
     const v = (typeof window.t === 'function') ? window.t(key) : key;
@@ -239,16 +224,12 @@ if (typeof window !== 'undefined') (function () {
   }
   function unmountCanvas() {
     gameWatch.disconnect();
-    if (window.AmbientEditor && AmbientEditor.isEditing && AmbientEditor.isEditing()) AmbientEditor.abort();
     if (window.AmbientCanvas && AmbientCanvas.unmount) AmbientCanvas.unmount();
   }
   function isOpen() { return sceneOpen() || builtinOpen() || canvasOpen(); }
 
   function openBuiltin(fallback) {
     if (typeof openWidgetLockScreen === 'function') openWidgetLockScreen();
-    document.body.classList.add('ambient-builtin-open');
-    const editButton = document.getElementById('ambient-builtin-edit');
-    if (editButton) editButton.hidden = false;
     // Tell the user (once per reason per session) why their chosen scene
     // didn't come up — a silent switcheroo reads like a broken setting.
     if (!fallback || warnedFallback.has(fallback) || !window.XenonToast) return;
@@ -258,44 +239,8 @@ if (typeof window !== 'undefined') (function () {
       ? tt('preset_bundle_widgets_note', 'Enable the Community widgets switch and approve each one\'s permissions to use them.')
       : fallback === 'ungranted'
         ? tt('cw_review_hint', 'It was updated (or predates a Xenon feature) and now requests capabilities you haven\'t approved.')
-        : tt('ambient_scene_missing_hint', 'The selected scene was removed — showing the built-in one.');
+        : tt('ambient_scene_missing_hint', 'The selected scene was removed: showing the built-in one.');
     window.XenonToast.show({ type: 'info', title, message });
-  }
-
-  // Edit only first-party Canvas scenes. The classic scene is converted into a
-  // new user-owned Canvas draft; SDK scenes remain opaque sandboxed packages.
-  function edit() {
-    if (!(window.AmbientEditor && window.AmbientEditorModel && window.AmbientCanvas)) return false;
-    if (sceneOpen()) return false;
-    disarmDismiss();
-    idleStarted = false;
-    const fromBuiltin = builtinOpen();
-    let source = null;
-    if (fromBuiltin) {
-      source = AmbientEditorModel.createDefaultScene({ id: uniqueSceneId('my-ambient'), name: 'My Ambient' });
-      if (!source) return false;
-      if (typeof closeWidgetLockScreen === 'function') closeWidgetLockScreen();
-      document.body.classList.remove('ambient-builtin-open');
-      const editButton = document.getElementById('ambient-builtin-edit');
-      if (editButton) editButton.hidden = true;
-      if (!mountCanvas(source)) { openBuiltin(); return false; }
-    } else if (canvasOpen() && AmbientCanvas.sceneSnapshot) {
-      source = AmbientCanvas.sceneSnapshot();
-    }
-    if (!source) return false;
-    const forkId = source.imported ? uniqueSceneId(source.id + '-copy') : undefined;
-    const started = AmbientEditor.open(source, {
-      forkId,
-      onDone: scene => (typeof window.saveAmbientCanvasScene === 'function'
-        ? window.saveAmbientCanvasScene(scene)
-        : scene),
-      onCancel: fromBuiltin ? () => {
-        unmountCanvas();
-        openBuiltin();
-      } : null,
-    });
-    if (!started && fromBuiltin) { unmountCanvas(); openBuiltin(); }
-    return started;
   }
 
   // manual = a user tap (may show the permission dialog); idle auto-start
@@ -364,13 +309,9 @@ if (typeof window !== 'undefined') (function () {
     startupPending = false;   // the user has taken the screen over; don't reopen on them
     disarmDismiss();
     idleStarted = false;
-    if (window.AmbientEditor && AmbientEditor.isEditing && AmbientEditor.isEditing()) AmbientEditor.cancel();
     if (sceneOpen()) unmountScene();
     if (canvasOpen()) unmountCanvas();
     if (builtinOpen() && typeof closeWidgetLockScreen === 'function') closeWidgetLockScreen();
-    document.body.classList.remove('ambient-builtin-open');
-    const editButton = document.getElementById('ambient-builtin-edit');
-    if (editButton) editButton.hidden = true;
     armIdleTimer();
   }
 
@@ -406,6 +347,8 @@ if (typeof window !== 'undefined') (function () {
     }
   }
   function dismissOnInput(e) {
+    // A touch control does its job and the scene stays (the click reaches it).
+    if (ambientTouchTarget(e.target)) { lastSceneTouchAt = Date.now(); return; }
     lastLocalInputAt = Date.now();   // stopPropagation below skips onActivity
     disarmDismiss();
     // Swallow this first "wake" gesture so it only dismisses the screensaver.
@@ -516,7 +459,11 @@ if (typeof window !== 'undefined') (function () {
     // Two triggers: the absolute threshold, and ANY backwards jump in idleSec —
     // the counter only ever resets on real input, so a drop proves the user is
     // back even when probe hiccups made the sample skip the sub-30s window.
-    if (idleStarted && isOpen() && (sysIdleSec < ACTIVE_IDLE_SEC || sysIdleDropped)) { close(); return; }
+    if (ambientIdleCloses({
+      idleStarted, open: isOpen(), sysIdleSec, dropped: sysIdleDropped,
+      sinceTouchMs: lastSceneTouchAt ? Date.now() - lastSceneTouchAt : NaN,
+      activeIdleSec: ACTIVE_IDLE_SEC, touchHoldMs: TOUCH_HOLD_MS,
+    })) { close(); return; }
     // Auto-start only once the whole PC has been idle for the chosen time.
     // sysIdleSec is a SAMPLE taken on a cadence: right after a local dismiss
     // (touching the dashboard) it can still read minutes-stale "away" — and the
@@ -630,16 +577,15 @@ if (typeof window !== 'undefined') (function () {
   const STARTUP_POLL_MS = 500;
   const STARTUP_GIVE_UP_MS = 10 * 60 * 1000;   // a first-run tour left open all morning is not a startup any more
 
-  // The screen question still to be asked, or the tour not yet seen — read the
-  // way surface-picker.js and onboarding.js decide it themselves.
+  // The first-run question still to be asked, or the tour running: read the way
+  // surface-picker.js and onboarding.js decide it themselves. usage-ask.js counts
+  // too: it answers the screen question, and until it does that one is pending.
   function firstRunPending() {
     const sp = window.SurfacePicker;
     if (sp && typeof sp.shouldAsk === 'function' && sp.shouldAsk()) return true;
     if (sp && typeof sp.isOpen === 'function' && sp.isOpen()) return true;
     const onb = window.Onboarding;
-    if (onb && typeof onb.isActive === 'function' && onb.isActive()) return true;
-    const seen = typeof window.getOnboardingSeen === 'function' ? Number(window.getOnboardingSeen()) || 0 : Infinity;
-    return !!(onb && Number(onb.version) > seen);
+    return !!(onb && typeof onb.isActive === 'function' && onb.isActive());
   }
 
   function collectStartupState() {
@@ -673,14 +619,16 @@ if (typeof window !== 'undefined') (function () {
     XenonStartupCards.whenReady(openOnStartup);
   }
 
-  window.AmbientMode = { toggle, open, close, edit, isOpen, onSettingsChanged, onStatus };
+  window.AmbientMode = { toggle, open, close, isOpen, onSettingsChanged, onStatus };
 })();
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    resolveAmbientScene,
+    resolveAmbientScene: require('./ambient-resolve.js').resolveAmbientScene,
     ambientIdleSuppressed,
     ambientStartupDecision,
     ambientGameCloses,
+    ambientIdleCloses,
+    ambientTouchTarget,
   };
 }

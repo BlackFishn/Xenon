@@ -71,7 +71,7 @@ test('subscription is opt-in; sign-in links allow only official HTTPS hosts', ()
   assert.equal(usesChatgpt({ openaiAuthMode: 'api' }), false);
   assert.equal(usesChatgpt({ openaiAuthMode: 'chatgpt' }), true);
   assert.match(safeAuthUrl('https://auth.openai.com/authorize'), /^https:/);
-  for (const url of ['http://auth.openai.com/a', 'https://auth.openai.com.evil.test/a', 'https://user@chatgpt.com/', 'https://chatgpt.com:8443/', 'javascript:alert(1)']) {
+  for (const url of ['http://auth.openai.com/a', 'https://auth.openai.com.evil.test/a', 'https://user:pw@chatgpt.com/', 'https://chatgpt.com:8443/', 'javascript:alert(1)']) {
     assert.throws(() => safeAuthUrl(url));
   }
 });

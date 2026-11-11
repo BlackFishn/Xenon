@@ -12,25 +12,25 @@ const msgs = require('../phone-messages.js');
 // is the only defence against a body containing its own delimiter.
 
 const LISTING = '<MAP-msg-listing version="1.0">'
-  + '<msg handle="1105E1CFB1C989E" subject="NON CONDIVIDERE. Codice attivazione: 395721" '
-  + 'datetime="20260728T192938" sender_name="Trade Rep" sender_addressing="Trade Rep" '
+  + '<msg handle="1000000000000A1" subject="NON CONDIVIDERE. Codice attivazione: 123456" '
+  + 'datetime="20260528T172938" sender_name="Banca Dem" sender_addressing="Banca Dem" '
   + 'recipient_name="" recipient_addressing="" type="SMS_GSM" size="155" '
   + 'reception_status="complete" text="yes" attachment_size="0" read="yes" sent="no" />'
-  + '<msg handle="4A888744BF32658" subject="Con Agospay gestisci le spese come vuoi tu!" '
-  + 'datetime="20260717T163837" sender_name="AGOS" sender_addressing="AGOS" '
+  + '<msg handle="1000000000000B2" subject="Con NegozioPay gestisci le spese come vuoi tu!" '
+  + 'datetime="20260517T143837" sender_name="NEGOZIO" sender_addressing="NEGOZIO" '
   + 'type="SMS_GSM" read="no" sent="no" />'
   + '</MAP-msg-listing>';
 
 const BMESSAGE = [
   'BEGIN:BMSG', 'VERSION:1.0', 'STATUS:READ', 'TYPE:SMS_GSM',
   'FOLDER:telecom/msg/inbox', 'NOTIFICATION:1',
-  'BEGIN:VCARD', 'VERSION:2.1', 'FN;CHARSET=UTF-8:Trade Rep', 'N;CHARSET=UTF-8:Trade Rep',
-  'TEL:87233 737', 'END:VCARD',
+  'BEGIN:VCARD', 'VERSION:2.1', 'FN;CHARSET=UTF-8:Banca Dem', 'N;CHARSET=UTF-8:Banca Dem',
+  'TEL:12345 737', 'END:VCARD',
   'BEGIN:BENV',
   'BEGIN:VCARD', 'VERSION:2.1', 'N;CHARSET=UTF-8:', 'TEL;CHARSET=UTF-8:', 'END:VCARD',
   'BEGIN:BBODY', 'CHARSET:UTF-8', 'LANGUAGE:UNKNOWN', 'LENGTH:177',
   'BEGIN:MSG',
-  'NON CONDIVIDERE. Codice attivazione: 395721 per aggiungere carta Trade Republic 3961 a Apple Wallet. Nessuno chiederà mai questo codice. Valido per 5 min.',
+  'NON CONDIVIDERE. Codice attivazione: 123456 per aggiungere carta Banca Demo Spa 0000 a Apple Wallet. Nessuno chiederà mai questo codice. Valido per 5 min.',
   'END:MSG',
   'END:BBODY', 'END:BENV', 'END:BMSG', '',
 ].join('\r\n');
@@ -38,11 +38,11 @@ const BMESSAGE = [
 test('a real listing parses into sender, time and read state', () => {
   const list = msgs.parseListing(LISTING);
   assert.equal(list.length, 2);
-  assert.equal(list[0].handle, '1105E1CFB1C989E');
-  assert.equal(list[0].name, 'Trade Rep');
+  assert.equal(list[0].handle, '1000000000000A1');
+  assert.equal(list[0].name, 'Banca Dem');
   assert.equal(list[0].read, true);
   assert.equal(list[0].sent, false);
-  assert.equal(list[0].at, new Date(2026, 6, 28, 19, 29, 38).getTime());
+  assert.equal(list[0].at, new Date(2026, 4, 28, 17, 29, 38).getTime());
   // Newest first, whatever order the phone sent them in.
   assert.ok(list[0].at > list[1].at);
   assert.equal(list[1].read, false);
@@ -50,8 +50,8 @@ test('a real listing parses into sender, time and read state', () => {
 
 test('a real message yields its sender and its whole text', () => {
   const m = msgs.parseMessage(BMESSAGE);
-  assert.equal(m.name, 'Trade Rep');
-  assert.equal(m.number, '87233 737');
+  assert.equal(m.name, 'Banca Dem');
+  assert.equal(m.number, '12345 737');
   assert.equal(m.read, true);
   assert.equal(m.folder, 'telecom/msg/inbox');
   assert.match(m.body, /^NON CONDIVIDERE/);
@@ -63,8 +63,8 @@ test('the sender is the vCard OUTSIDE the envelope, not the recipient', () => {
   // The one inside BENV is who it was sent TO. Reading that one puts your own
   // details on every message in the inbox.
   const s = msgs.senderFrom(BMESSAGE);
-  assert.equal(s.name, 'Trade Rep');
-  assert.equal(s.number, '87233 737');
+  assert.equal(s.name, 'Banca Dem');
+  assert.equal(s.number, '12345 737');
 });
 
 test('a body containing END:MSG survives, because LENGTH is honoured', () => {
@@ -92,7 +92,7 @@ test('multi-byte characters do not shift the LENGTH slice', () => {
   const text = 'Perché è già così, ciao 👋';
   const block = 'BEGIN:MSG\r\n' + text + '\r\nEND:MSG\r\n';
   const bmsg = 'BEGIN:BMSG\r\nVERSION:1.0\r\nTYPE:SMS_GSM\r\n'
-    + 'BEGIN:VCARD\r\nFN:Amore\r\nTEL:+393463331166\r\nEND:VCARD\r\n'
+    + 'BEGIN:VCARD\r\nFN:Amore\r\nTEL:+393331230166\r\nEND:VCARD\r\n'
     + 'BEGIN:BENV\r\nBEGIN:BBODY\r\nCHARSET:UTF-8\r\nLENGTH:' + Buffer.byteLength(block, 'utf8') + '\r\n'
     + block + 'END:BBODY\r\nEND:BENV\r\nEND:BMSG\r\n';
   assert.equal(msgs.parseMessage(bmsg).body, text);
@@ -136,18 +136,18 @@ test('the listing cap holds', () => {
 
 const OBEX_ROWS = [
   ['/org/bluez/obex/client/session0/message0', {
-    Subject: { type: 's', data: 'NON CONDIVIDERE. Codice attivazione: 395721' },
-    Timestamp: { type: 's', data: '20260728T192938' },
-    Sender: { type: 's', data: 'Trade Rep' },
-    SenderAddress: { type: 's', data: '87233737' },
+    Subject: { type: 's', data: 'NON CONDIVIDERE. Codice attivazione: 123456' },
+    Timestamp: { type: 's', data: '20260528T172938' },
+    Sender: { type: 's', data: 'Banca Dem' },
+    SenderAddress: { type: 's', data: '12345737' },
     Read: { type: 'b', data: true },
     Sent: { type: 'b', data: false },
     Type: { type: 's', data: 'sms-gsm' },
   }],
   ['/org/bluez/obex/client/session0/message1', {
-    Subject: { type: 's', data: 'Con Agospay gestisci le spese come vuoi tu!' },
-    Timestamp: { type: 's', data: '20260717T163837' },
-    Sender: { type: 's', data: 'AGOS' },
+    Subject: { type: 's', data: 'Con NegozioPay gestisci le spese come vuoi tu!' },
+    Timestamp: { type: 's', data: '20260517T143837' },
+    Sender: { type: 's', data: 'NEGOZIO' },
     Read: { type: 'b', data: false },
     Sent: { type: 'b', data: false },
   }],
@@ -158,10 +158,10 @@ test('obexd rows produce the same shape the XML listing does', () => {
   const fromXml = msgs.parseListing(LISTING);
   assert.deepEqual(Object.keys(list[0]).sort(), Object.keys(fromXml[0]).sort(),
     'the widget renders one shape; the transport it came from must not show');
-  assert.equal(list[0].name, 'Trade Rep');
-  assert.equal(list[0].number, '87233737');
+  assert.equal(list[0].name, 'Banca Dem');
+  assert.equal(list[0].number, '12345737');
   assert.equal(list[0].read, true);
-  assert.equal(list[0].at, new Date(2026, 6, 28, 19, 29, 38).getTime());
+  assert.equal(list[0].at, new Date(2026, 4, 28, 17, 29, 38).getTime());
   assert.equal(list[1].read, false);
   // Newest first, like the other one.
   assert.ok(list[0].at > list[1].at);
@@ -182,7 +182,7 @@ test('a composed bMessage round-trips through our own reader', () => {
   // The envelope is the one thing here with no phone to check it, so the test
   // is that the format we WRITE is the format we can READ.
   const text = 'Ciao, arrivo tra 10 minuti. Perché è così?';
-  const built = msgs.buildBMessage('+393463331166', text);
+  const built = msgs.buildBMessage('+393331230166', text);
   const out = msgs.parseMessage(built);
   assert.equal(out.body, text);
   assert.equal(out.folder, 'telecom/msg/outbox');
@@ -193,7 +193,7 @@ test('a composed bMessage round-trips through our own reader', () => {
   // BENV. senderFrom deliberately refuses to look there — doing otherwise is
   // what would put the user's own details on every message in their inbox.
   assert.equal(out.number, '', 'an outgoing message has no sender to read');
-  assert.match(built, /BEGIN:BENV[\s\S]*TEL:\+393463331166/, 'the recipient is in the envelope');
+  assert.match(built, /BEGIN:BENV[\s\S]*TEL:\+393331230166/, 'the recipient is in the envelope');
 });
 
 test('a composed bMessage counts LENGTH in bytes, not characters', () => {

@@ -156,7 +156,7 @@ test('all request refusals use the shared deadline result', () => {
 });
 
 test('the device list uses the shared read error mapper', () => {
-  const m = /async function getDevices\(\) \{[\s\S]*?\n  \}/.exec(SERVER);
+  const m = /async function getDevices\((?:opts)?\) \{[\s\S]*?\n  \}/.exec(SERVER);
   assert.ok(m, 'getDevices is gone');
   assert.match(m[0], /return readError\(r, 'failed'\)/);
 });

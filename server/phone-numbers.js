@@ -5,7 +5,7 @@
 //
 // One job: decide whether two spellings are the same person, so a caller can be
 // given a name. The phone is not consistent with itself about this. The same
-// contact is stored as `+393463331166` in one place and `346 333 1166` in
+// contact is stored as `+393331230166` in one place and `333 123 0166` in
 // another, the call log writes the international form and the phonebook often
 // does not, and a number typed by hand has spaces, dots or brackets in it.
 //
@@ -43,7 +43,7 @@ function matchKey(value) {
   const raw = String(value == null ? '' : value).trim();
   if (!raw) return '';
   // 00 is the international prefix written the old way; dropping it makes
-  // 00393463331166 and +393463331166 the same number, which they are.
+  // 00393331230166 and +393331230166 the same number, which they are.
   const digits = digitsOf(raw.replace(/^00/, '+'));
   if (!digits) return '';
   if (digits.length <= SHORT_NUMBER_MAX) return 'x' + digits;   // exact bucket

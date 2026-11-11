@@ -17,17 +17,17 @@ const lp = require('../linux-phone.js');
 const OBJECTS = JSON.stringify({
   type: 'a{oa{sa{sv}}}',
   data: [{
-    '/org/bluez/hci0/dev_5C_13_CC_F1_8B_FF': {
+    '/org/bluez/hci0/dev_00_00_5E_00_53_01': {
       'org.bluez.Device1': {
-        Address: { type: 's', data: '5C:13:CC:F1:8B:FF' },
+        Address: { type: 's', data: '00:00:5E:00:53:01' },
         Alias: { type: 's', data: 'iPhone' },
         Connected: { type: 'b', data: true },
         UUIDs: { type: 'as', data: ['0000112f-0000-1000-8000-00805f9b34fb', '00001132-0000-1000-8000-00805f9b34fb'] },
       },
     },
-    '/org/bluez/hci0/dev_84_D3_52_AF_16_04': {
+    '/org/bluez/hci0/dev_00_00_5E_00_53_02': {
       'org.bluez.Device1': {
-        Address: { type: 's', data: '84:D3:52:AF:16:04' },
+        Address: { type: 's', data: '00:00:5E:00:53:02' },
         Alias: { type: 's', data: 'SRS-XB100' },
         Connected: { type: 'b', data: true },
         UUIDs: { type: 'as', data: ['0000110b-0000-1000-8000-00805f9b34fb'] },
@@ -47,7 +47,7 @@ const OBJECTS = JSON.stringify({
 const MODEMS = JSON.stringify({
   type: 'a(oa{sv})',
   data: [[
-    ['/hfp/org/bluez/hci0/dev_5C_13_CC_F1_8B_FF', {
+    ['/hfp/org/bluez/hci0/dev_00_00_5E_00_53_01', {
       Name: { type: 's', data: 'iPhone' },
       Type: { type: 's', data: 'hfp' },
       Online: { type: 'b', data: true },
@@ -62,7 +62,7 @@ const ringing = (state) => JSON.stringify({
   data: [[
     ['/hfp/modem0/voicecall01', {
       State: { type: 's', data: state },
-      LineIdentification: { type: 's', data: '+393463331166' },
+      LineIdentification: { type: 's', data: '+393331230166' },
       Name: { type: 's', data: 'Amore' },
     }],
   ]],
@@ -73,7 +73,7 @@ test('the phone is the connected device that publishes a phonebook', () => {
   assert.equal(devices.length, 3);
   const phone = lp.pickPhone(devices, lp.PBAP_UUID);
   assert.equal(phone.name, 'iPhone');
-  assert.equal(phone.address, '5C:13:CC:F1:8B:FF');
+  assert.equal(phone.address, '00:00:5E:00:53:01');
 });
 
 test('a speaker is never mistaken for a phone', () => {
@@ -93,7 +93,7 @@ test('a connected phone wins over a paired one that is out of range', () => {
 test('the handsfree modem is the paired phone, not a cellular card', () => {
   const modems = lp.parseModems(MODEMS);
   assert.equal(modems.length, 1);
-  assert.equal(lp.pickModem(modems).path, '/hfp/org/bluez/hci0/dev_5C_13_CC_F1_8B_FF');
+  assert.equal(lp.pickModem(modems).path, '/hfp/org/bluez/hci0/dev_00_00_5E_00_53_01');
 });
 
 test('a modem with no VoiceCallManager is not usable', () => {
@@ -127,8 +127,8 @@ test('no calls is a quiet state, not an error', () => {
 });
 
 test('the caller falls back to the number when the phone sent no name', () => {
-  const anon = JSON.stringify({ data: [[['/c1', { State: { data: 'incoming' }, LineIdentification: { data: '+393287248309' } }]]] });
-  assert.equal(lp.callState(lp.parseCalls(anon)).caller, '+393287248309');
+  const anon = JSON.stringify({ data: [[['/c1', { State: { data: 'incoming' }, LineIdentification: { data: '+393331230444' } }]]] });
+  assert.equal(lp.callState(lp.parseCalls(anon)).caller, '+393331230444');
 });
 
 test('the value reader survives the shapes busctl has actually printed', () => {

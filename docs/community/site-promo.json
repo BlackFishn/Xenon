@@ -1,6 +1,158 @@
 {
   "promos": [
     {
+      "id": "meter-reading-corner",
+      "entryId": "meter-reading",
+      "format": "corner",
+      "activeFrom": "2026-11-10T00:00:00+01:00",
+      "video": "https://assets.xenon-app.com/community/promo/meter-reading.mp4",
+      "poster": "https://assets.xenon-app.com/community/promo/meter-reading-poster.png",
+      "url": "https://xenon-app.com/catalog/meter-reading/",
+      "look": {
+        "paper": "#d4d5cd",
+        "ink": "#1d281d"
+      },
+      "text": {
+        "en": {
+          "title": "Meter Reading",
+          "line": "Your PC's electricity meter: kWh today and this month, what they cost at your price, and a red light that blinks once per watt-hour.",
+          "cta": "Unlock it in the Store"
+        },
+        "it": {
+          "title": "Meter Reading",
+          "line": "Il contatore della luce del tuo PC: kWh di oggi e del mese, quanto costano al tuo prezzo e una luce rossa che lampeggia a ogni wattora.",
+          "cta": "Sbloccalo nello Store"
+        },
+        "es": {
+          "title": "Meter Reading",
+          "line": "El contador de luz de tu PC: kWh de hoy y del mes, lo que cuestan a tu precio y una luz roja que parpadea con cada vatio hora.",
+          "cta": "Desbloquéalo en la Store"
+        },
+        "fr": {
+          "title": "Meter Reading",
+          "line": "Le compteur électrique de ton PC : les kWh du jour et du mois, leur coût à ton prix, et un voyant rouge qui clignote à chaque wattheure.",
+          "cta": "Débloque-le dans le Store"
+        },
+        "ja": {
+          "title": "Meter Reading",
+          "line": "PCの電力メーター。今日と今月のkWh、自分で決めた単価での料金、そして1Whごとに点滅する赤いランプ。",
+          "cta": "ストアでアンロック"
+        },
+        "ko": {
+          "title": "Meter Reading",
+          "line": "PC의 전력 계량기: 오늘과 이번 달의 kWh, 내가 정한 단가로 계산한 요금, 그리고 1Wh마다 깜박이는 빨간 불빛.",
+          "cta": "스토어에서 잠금 해제"
+        },
+        "zh": {
+          "title": "Meter Reading",
+          "line": "你的电脑电表：今天和本月的千瓦时、按你设定的电价算出的费用，还有每消耗一瓦时就闪一次的红灯。",
+          "cta": "在商店解锁"
+        }
+      }
+    },
+    {
+      "id": "alibi-strip",
+      "entryId": "alibi",
+      "format": "strip",
+      "activeFrom": "2026-11-10T00:00:00+01:00",
+      "activeUntil": "2026-12-09T23:59:59+01:00",
+      "video": "https://assets.xenon-app.com/community/promo/alibi.mp4",
+      "poster": "https://assets.xenon-app.com/community/promo/alibi-poster.png",
+      "url": "https://xenon-app.com/catalog/alibi/",
+      "look": {
+        "paper": "#eceeef",
+        "ink": "#141619"
+      },
+      "text": {
+        "en": {
+          "title": "Culprit",
+          "line": "Names who made your game lag, in red while you play: your PC, your Wi-Fi, your home line or your provider. 300 Sparks, on sale only in the first 30 days of Xenon 5.0.0.",
+          "cta": "See Culprit"
+        },
+        "it": {
+          "title": "Culprit",
+          "line": "Dice chi ha fatto laggare il gioco, in rosso mentre giochi: il PC, il Wi-Fi, la linea di casa o il provider. 300 Scintille, in vendita solo nei primi 30 giorni di Xenon 5.0.0.",
+          "cta": "Vedi Culprit"
+        },
+        "es": {
+          "title": "Culprit",
+          "line": "Dice quién hizo que tu juego vaya con lag, en rojo mientras juegas: tu PC, tu Wi-Fi, tu línea o tu proveedor. 300 Chispas, a la venta solo los primeros 30 días de Xenon 5.0.0.",
+          "cta": "Ver Culprit"
+        },
+        "fr": {
+          "title": "Culprit",
+          "line": "Dit en rouge, en jeu, qui fait laguer votre partie : votre PC, votre Wi-Fi, votre ligne ou votre FAI. 300 Étincelles, en vente les 30 premiers jours de Xenon 5.0.0 seulement.",
+          "cta": "Voir Culprit"
+        },
+        "ja": {
+          "title": "Culprit",
+          "line": "ゲームのラグが誰のせいかを、プレイ中に赤で表示します。PC、Wi-Fi、家の回線、プロバイダーのどれか。300 スパーク、Xenon 5.0.0 の最初の 30 日間だけ販売します。",
+          "cta": "Culprit を見る"
+        },
+        "ko": {
+          "title": "Culprit",
+          "line": "게임 렉이 누구 탓인지 플레이 중에 빨간색으로 알려 줍니다. PC, Wi-Fi, 집 회선, 인터넷 제공업체 중 하나. 300 스파크, Xenon 5.0.0의 처음 30일 동안만 판매합니다.",
+          "cta": "Culprit 보기"
+        },
+        "zh": {
+          "title": "Culprit",
+          "line": "游戏卡顿时，边玩边用红色标出是谁的错：电脑、Wi-Fi、家里的线路还是运营商。300 火花，仅在 Xenon 5.0.0 的前 30 天出售。",
+          "cta": "查看 Culprit"
+        }
+      }
+    },
+    {
+      "id": "alibi-spotlight",
+      "entryId": "alibi",
+      "format": "spotlight",
+      "activeFrom": "2026-11-10T00:00:00+01:00",
+      "activeUntil": "2026-12-09T23:59:59+01:00",
+      "video": "https://assets.xenon-app.com/community/promo/alibi.mp4",
+      "poster": "https://assets.xenon-app.com/community/promo/alibi-poster.png",
+      "url": "https://xenon-app.com/catalog/alibi/",
+      "look": {
+        "paper": "#eceeef",
+        "ink": "#141619"
+      },
+      "text": {
+        "en": {
+          "title": "Culprit",
+          "line": "Names who made your game lag, in red while you play: your PC, your Wi-Fi, your home line or your provider. 300 Sparks, on sale only in the first 30 days of Xenon 5.0.0.",
+          "cta": "See Culprit"
+        },
+        "it": {
+          "title": "Culprit",
+          "line": "Dice chi ha fatto laggare il gioco, in rosso mentre giochi: il PC, il Wi-Fi, la linea di casa o il provider. 300 Scintille, in vendita solo nei primi 30 giorni di Xenon 5.0.0.",
+          "cta": "Vedi Culprit"
+        },
+        "es": {
+          "title": "Culprit",
+          "line": "Dice quién hizo que tu juego vaya con lag, en rojo mientras juegas: tu PC, tu Wi-Fi, tu línea o tu proveedor. 300 Chispas, a la venta solo los primeros 30 días de Xenon 5.0.0.",
+          "cta": "Ver Culprit"
+        },
+        "fr": {
+          "title": "Culprit",
+          "line": "Dit en rouge, en jeu, qui fait laguer votre partie : votre PC, votre Wi-Fi, votre ligne ou votre FAI. 300 Étincelles, en vente les 30 premiers jours de Xenon 5.0.0 seulement.",
+          "cta": "Voir Culprit"
+        },
+        "ja": {
+          "title": "Culprit",
+          "line": "ゲームのラグが誰のせいかを、プレイ中に赤で表示します。PC、Wi-Fi、家の回線、プロバイダーのどれか。300 スパーク、Xenon 5.0.0 の最初の 30 日間だけ販売します。",
+          "cta": "Culprit を見る"
+        },
+        "ko": {
+          "title": "Culprit",
+          "line": "게임 렉이 누구 탓인지 플레이 중에 빨간색으로 알려 줍니다. PC, Wi-Fi, 집 회선, 인터넷 제공업체 중 하나. 300 스파크, Xenon 5.0.0의 처음 30일 동안만 판매합니다.",
+          "cta": "Culprit 보기"
+        },
+        "zh": {
+          "title": "Culprit",
+          "line": "游戏卡顿时，边玩边用红色标出是谁的错：电脑、Wi-Fi、家里的线路还是运营商。300 火花，仅在 Xenon 5.0.0 的前 30 天出售。",
+          "cta": "查看 Culprit"
+        }
+      }
+    },
+    {
       "id": "haunted-house-strip",
       "entryId": "haunted-house",
       "format": "strip",
@@ -99,144 +251,6 @@
           "title": "Haunted House",
           "line": "南瓜从10月22日起免费，25日至31日每晚亮起一扇新窗户。",
           "cta": ""
-        }
-      }
-    },
-    {
-      "id": "casa-nov-corner",
-      "entryId": "casa",
-      "format": "corner",
-      "activeFrom": "2026-11-03T00:00:00+01:00",
-      "activeUntil": "2026-11-23T23:59:59+01:00",
-      "video": "https://assets.xenon-app.com/community/promo/casa-nov.mp4",
-      "poster": "https://assets.xenon-app.com/community/promo/casa-nov-poster.png",
-      "url": "https://xenon-app.com/catalog/casa/",
-      "look": {
-        "paper": "#e6e3dc",
-        "ink": "#1c1d1e"
-      },
-      "text": {
-        "en": {
-          "title": "Wall Plate",
-          "line": "Your Home Assistant devices as wall plates for Xenon supporters: tap a key to switch, slide to dim, hold for the rest.",
-          "cta": "Unlock Wall Plate"
-        },
-        "it": {
-          "title": "Wall Plate",
-          "line": "I tuoi dispositivi Home Assistant come placche a muro per i sostenitori di Xenon: tocchi per accendere, scorri per regolare, tieni premuto per il resto.",
-          "cta": "Sblocca Wall Plate"
-        },
-        "es": {
-          "title": "Wall Plate",
-          "line": "Tus dispositivos de Home Assistant como placas de pared para los supporters de Xenon: toca para encender, desliza para regular, mantén pulsado para el resto.",
-          "cta": "Desbloquear Wall Plate"
-        },
-        "ja": {
-          "title": "Wall Plate",
-          "line": "Home Assistant のデバイスを壁のスイッチプレートとして表示する、Xenon サポーター向けのウィジェット。タップで点灯、スライドで調光、長押しで詳細。",
-          "cta": "Wall Plate をアンロック"
-        },
-        "ko": {
-          "title": "Wall Plate",
-          "line": "Home Assistant 기기를 벽 스위치 플레이트로 보여 주는 Xenon 후원자용 위젯: 탭하면 켜지고, 밀면 밝기가 바뀌고, 길게 누르면 나머지 설정이 열립니다.",
-          "cta": "Wall Plate 잠금 해제"
-        },
-        "zh": {
-          "title": "Wall Plate",
-          "line": "把 Home Assistant 设备变成墙面开关面板，供 Xenon 支持者使用：点按开关，滑动调光，长按打开全部控制。",
-          "cta": "解锁 Wall Plate"
-        }
-      }
-    },
-    {
-      "id": "casa-nov-strip",
-      "entryId": "casa",
-      "format": "strip",
-      "activeFrom": "2026-11-03T00:00:00+01:00",
-      "activeUntil": "2026-11-23T23:59:59+01:00",
-      "video": "https://assets.xenon-app.com/community/promo/casa-nov.mp4",
-      "poster": "https://assets.xenon-app.com/community/promo/casa-nov-poster.png",
-      "url": "https://xenon-app.com/catalog/casa/",
-      "look": {
-        "paper": "#e6e3dc",
-        "ink": "#1c1d1e"
-      },
-      "text": {
-        "en": {
-          "title": "Wall Plate",
-          "line": "Your Home Assistant devices as wall plates for Xenon supporters: tap a key to switch, slide to dim, hold for the rest.",
-          "cta": "Unlock Wall Plate"
-        },
-        "it": {
-          "title": "Wall Plate",
-          "line": "I tuoi dispositivi Home Assistant come placche a muro per i sostenitori di Xenon: tocchi per accendere, scorri per regolare, tieni premuto per il resto.",
-          "cta": "Sblocca Wall Plate"
-        },
-        "es": {
-          "title": "Wall Plate",
-          "line": "Tus dispositivos de Home Assistant como placas de pared para los supporters de Xenon: toca para encender, desliza para regular, mantén pulsado para el resto.",
-          "cta": "Desbloquear Wall Plate"
-        },
-        "ja": {
-          "title": "Wall Plate",
-          "line": "Home Assistant のデバイスを壁のスイッチプレートとして表示する、Xenon サポーター向けのウィジェット。タップで点灯、スライドで調光、長押しで詳細。",
-          "cta": "Wall Plate をアンロック"
-        },
-        "ko": {
-          "title": "Wall Plate",
-          "line": "Home Assistant 기기를 벽 스위치 플레이트로 보여 주는 Xenon 후원자용 위젯: 탭하면 켜지고, 밀면 밝기가 바뀌고, 길게 누르면 나머지 설정이 열립니다.",
-          "cta": "Wall Plate 잠금 해제"
-        },
-        "zh": {
-          "title": "Wall Plate",
-          "line": "把 Home Assistant 设备变成墙面开关面板，供 Xenon 支持者使用：点按开关，滑动调光，长按打开全部控制。",
-          "cta": "解锁 Wall Plate"
-        }
-      }
-    },
-    {
-      "id": "casa-nov-spotlight",
-      "entryId": "casa",
-      "format": "spotlight",
-      "activeFrom": "2026-11-03T00:00:00+01:00",
-      "activeUntil": "2026-11-23T23:59:59+01:00",
-      "video": "https://assets.xenon-app.com/community/promo/casa-nov.mp4",
-      "poster": "https://assets.xenon-app.com/community/promo/casa-nov-poster.png",
-      "url": "https://xenon-app.com/catalog/casa/",
-      "look": {
-        "paper": "#e6e3dc",
-        "ink": "#1c1d1e"
-      },
-      "text": {
-        "en": {
-          "title": "Wall Plate",
-          "line": "Your Home Assistant devices as wall plates for Xenon supporters: tap a key to switch, slide to dim, hold for the rest.",
-          "cta": "Unlock Wall Plate"
-        },
-        "it": {
-          "title": "Wall Plate",
-          "line": "I tuoi dispositivi Home Assistant come placche a muro per i sostenitori di Xenon: tocchi per accendere, scorri per regolare, tieni premuto per il resto.",
-          "cta": "Sblocca Wall Plate"
-        },
-        "es": {
-          "title": "Wall Plate",
-          "line": "Tus dispositivos de Home Assistant como placas de pared para los supporters de Xenon: toca para encender, desliza para regular, mantén pulsado para el resto.",
-          "cta": "Desbloquear Wall Plate"
-        },
-        "ja": {
-          "title": "Wall Plate",
-          "line": "Home Assistant のデバイスを壁のスイッチプレートとして表示する、Xenon サポーター向けのウィジェット。タップで点灯、スライドで調光、長押しで詳細。",
-          "cta": "Wall Plate をアンロック"
-        },
-        "ko": {
-          "title": "Wall Plate",
-          "line": "Home Assistant 기기를 벽 스위치 플레이트로 보여 주는 Xenon 후원자용 위젯: 탭하면 켜지고, 밀면 밝기가 바뀌고, 길게 누르면 나머지 설정이 열립니다.",
-          "cta": "Wall Plate 잠금 해제"
-        },
-        "zh": {
-          "title": "Wall Plate",
-          "line": "把 Home Assistant 设备变成墙面开关面板，供 Xenon 支持者使用：点按开关，滑动调光，长按打开全部控制。",
-          "cta": "解锁 Wall Plate"
         }
       }
     },
