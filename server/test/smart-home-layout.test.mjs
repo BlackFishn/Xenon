@@ -54,3 +54,17 @@ test('custom mode is wired to the dense card grid rather than adaptive device pa
   assert.match(SRC, /beginCardPointerDrag\(event, slot, e\.id\)/, 'card reorder uses Pointer Events for mouse and touch');
   assert.match(SRC, /addTileSection\(section\.id\)/, 'root sections expose a subsection action');
 });
+
+test('cards of one device drop its name inside a named section, and nowhere else', () => {
+  const sharedDeviceName = new Function(`${extractFunction('sharedDeviceName')}; return sharedDeviceName;`)();
+  const pc = (id) => ({ id, device: 'dev-pc', deviceName: 'PC' });
+  assert.equal(sharedDeviceName([pc('sensor.pc_power'), pc('sensor.pc_energy')], 'shs_pc'), 'PC');
+  assert.equal(sharedDeviceName([pc('sensor.pc_power')], 'shs_pc'), 'PC', 'a section says what its one card belongs to');
+  assert.equal(sharedDeviceName([pc('sensor.pc_power'), pc('sensor.pc_energy')], ''), '', 'loose cards have no title to lean on');
+  assert.equal(sharedDeviceName([pc('sensor.pc_power'), { id: 'light.desk', device: 'dev-wiz', deviceName: 'Desk' }], 'shs_mix'), '', 'two devices keep their full names');
+  assert.equal(sharedDeviceName([{ id: 'sensor.loose' }, { id: 'sensor.other' }], 'shs_x'), '', 'entities without a device are never grouped');
+  assert.equal(sharedDeviceName([], 'shs_empty'), '');
+  // The card keeps the full name for the tooltip and shortens only the label.
+  assert.match(SRC, /label\.title = e\.name \|\| '';/);
+  assert.match(SRC, /customCard\(e, editing, deviceName\)/);
+});

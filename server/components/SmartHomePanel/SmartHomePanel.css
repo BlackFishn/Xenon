@@ -76,6 +76,14 @@ body.layout-editing .grid-stack-item-content:has(.smarthome-panel) > .smarthome-
   grid-column: span var(--sh-card-w, 3); grid-row: span var(--sh-card-h, 1);
 }
 .sh-card-slot > .sh-item { width: 100%; height: 100%; }
+/* A value card sits in its slot as one centred group (icon, number, name)
+   rather than pinned to the top of a tall card. */
+.sh-card-slot > .sh-item--value > .sh-item-body { flex: 0 1 auto; }
+/* Two or three rows tall: a headline reading, drawn larger. */
+.sh-card-slot[data-tall] > .sh-item--value { gap: 6px; padding: 14px 16px; }
+.sh-card-slot[data-tall] > .sh-item--value .sh-item-val { font-size: 2rem; }
+.sh-card-slot[data-tall] > .sh-item--value .sh-item-unit { font-size: 0.95rem; margin-left: 4px; }
+.sh-card-slot[data-tall] > .sh-item--value .sh-item-name { font-size: 0.78rem; margin-top: 4px; }
 
 /* In-widget editor: visible only while the dashboard's established edit mode is
    active. It deliberately looks like instrument chrome, not normal HA controls. */
@@ -261,7 +269,9 @@ body.overlay-frozen .sh-item--media.is-playing .sh-media-art::after { animation-
   background: radial-gradient(80% 90% at 85% 12%, rgba(var(--sh-tint), 0.12), transparent 60%);
 }
 .sh-item--value .sh-item-ico { color: rgb(var(--sh-tint)); }
-.sh-item--value .sh-item-body { gap: 0; }
+/* max-width: the card lines its body up at the start, so without it a long name
+   ran past the card's edge and was cut there instead of ending in an ellipsis. */
+.sh-item--value .sh-item-body { gap: 0; max-width: 100%; }
 .sh-item-val {
   font-size: 1.3rem; font-weight: 800; line-height: 1.05; letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums; display: inline-flex; align-items: baseline;

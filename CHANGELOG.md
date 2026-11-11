@@ -4,6 +4,8 @@
 
 - Bring back this fork's **Custom** card layout for the Smart Home tile on top of Xenon 5.0: every entity as its own card, in your order, with your sections, subsections and card sizes. Cards are dragged, resized and grouped on the tile itself while the layout is being edited.
 - Settings → Smart Home has **Card layout** (Rooms or Custom) above 5.0's room and device order. Rooms is 5.0's tile unchanged.
+- Shorter card names. In a section whose cards all belong to one device, a card drops the device's name ("PC Current Power" reads "Current Power"); the full name is in the tooltip. A name that is still too long ends in an ellipsis instead of being cut by the card's edge.
+- A card two or three rows tall shows its reading larger, centred in the card.
 
 ## Unreleased — AI Usage providers: show, hide, reorder, real marks
 
