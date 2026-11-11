@@ -11,34 +11,34 @@ const num = require('../phone-numbers.js');
 // guessed. So the loose match is only ever allowed between two long numbers.
 
 test('the same number written four ways is one number', () => {
-  const spellings = ['+393463331166', '00393463331166', '346 333 1166', '346-333.1166'];
+  const spellings = ['+393331230166', '00393331230166', '333 123 0166', '333-123.0166'];
   const keys = new Set(spellings.map(num.matchKey));
   assert.equal(keys.size, 1, `expected one key, got ${[...keys].join(' / ')}`);
   for (const a of spellings) for (const b of spellings) assert.ok(num.sameNumber(a, b));
 });
 
 test('two different mobiles are not the same number', () => {
-  assert.ok(!num.sameNumber('+393463331166', '+393463331167'));
-  assert.ok(!num.sameNumber('+393463331166', '+393203465082'));
+  assert.ok(!num.sameNumber('+393331230166', '+393331230167'));
+  assert.ok(!num.sameNumber('+393331230166', '+393331230282'));
 });
 
 test('short codes are compared exactly, never on a tail', () => {
-  // 87233 737 is the Trade Republic sender seen on the real phone. Its digits
+  // 12345 737 is the Banca Demo Spa sender seen on the real phone. Its digits
   // must never be allowed to match the tail of somebody's mobile.
-  assert.ok(!num.sameNumber('87233', '+393338987233'));
-  assert.ok(num.sameNumber('87233', '87233'));
+  assert.ok(!num.sameNumber('12345', '+393331012345'));
+  assert.ok(num.sameNumber('12345', '12345'));
   assert.ok(!num.sameNumber('4321', '432'));
 });
 
 test('a caller resolves to the contact who owns the number', () => {
   const index = num.buildIndex([
-    { name: 'Amore', numbers: [{ value: '+393463331166', kind: 'cell' }] },
-    { name: 'Papà', numbers: [{ value: '340 264 1223', kind: 'cell' }] },
+    { name: 'Amore', numbers: [{ value: '+393331230166', kind: 'cell' }] },
+    { name: 'Papà', numbers: [{ value: '333 123 4567', kind: 'cell' }] },
   ]);
   // The call log writes the international form, the phonebook often does not.
-  assert.equal(num.lookup(index, '346 333 1166').name, 'Amore');
-  assert.equal(num.lookup(index, '+393402641223').name, 'Papà');
-  assert.equal(num.lookup(index, '+393287248309'), null);
+  assert.equal(num.lookup(index, '333 123 0166').name, 'Amore');
+  assert.equal(num.lookup(index, '+393331234567').name, 'Papà');
+  assert.equal(num.lookup(index, '+393331230444'), null);
   assert.equal(num.lookup(index, ''), null);
 });
 
@@ -62,7 +62,7 @@ test('buildIndex survives a malformed contact list', () => {
 });
 
 test('dialable accepts what a phone accepts and refuses the rest', () => {
-  assert.equal(num.dialable('+39 346 333 1166'), '+393463331166');
+  assert.equal(num.dialable('+39 333 123 0166'), '+393331230166');
   assert.equal(num.dialable('(06) 1234-5678'), '0612345678');
   assert.equal(num.dialable('*123#'), '*123#');
   assert.equal(num.dialable(''), '');
@@ -72,6 +72,6 @@ test('dialable accepts what a phone accepts and refuses the rest', () => {
 });
 
 test('display tidies whitespace and changes nothing else', () => {
-  assert.equal(num.displayNumber('  +39  346   333 1166 '), '+39 346 333 1166');
+  assert.equal(num.displayNumber('  +39  333   123 0166 '), '+39 333 123 0166');
   assert.equal(num.displayNumber(null), '');
 });

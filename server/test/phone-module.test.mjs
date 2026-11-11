@@ -10,13 +10,13 @@ const { createPhone, SUPPORTED_PLATFORMS, platformAllowed } = require('../phone.
 // ones a user reads and acts on.
 
 const VCF_CALLS = [
-  'BEGIN:VCARD', 'VERSION:2.1', 'FN:Gabriele Ponzio', 'TEL;TYPE=CELL:+393203465082',
-  'X-IRMC-CALL-DATETIME;RECEIVED:20260729T121505', 'END:VCARD',
-  'BEGIN:VCARD', 'VERSION:2.1', 'FN:', 'TEL:+393463331166',
-  'X-IRMC-CALL-DATETIME;MISSED:20260728T213634', 'END:VCARD', '',
+  'BEGIN:VCARD', 'VERSION:2.1', 'FN:Luca Bianchi', 'TEL;TYPE=CELL:+393331230282',
+  'X-IRMC-CALL-DATETIME;RECEIVED:20260529T101505', 'END:VCARD',
+  'BEGIN:VCARD', 'VERSION:2.1', 'FN:', 'TEL:+393331230166',
+  'X-IRMC-CALL-DATETIME;MISSED:20260528T193634', 'END:VCARD', '',
 ].join('\r\n');
 
-const VCF_CONTACTS = 'BEGIN:VCARD\r\nVERSION:2.1\r\nFN:Amore\r\nTEL;CELL:346 333 1166\r\nEND:VCARD\r\n';
+const VCF_CONTACTS = 'BEGIN:VCARD\r\nVERSION:2.1\r\nFN:Amore\r\nTEL;CELL:333 123 0166\r\nEND:VCARD\r\n';
 
 function make(overrides) {
   const o = overrides || {};
@@ -141,7 +141,7 @@ test('the call log takes names from the phonebook once it is there', async () =>
   await phone.contacts();
   const after = await phone.calls();
   assert.equal(after.list[1].name, 'Amore', 'and named after, without waiting for the TTL');
-  assert.equal(phone.resolve('+393463331166').name, 'Amore');
+  assert.equal(phone.resolve('+393331230166').name, 'Amore');
   phone.stop();
 });
 

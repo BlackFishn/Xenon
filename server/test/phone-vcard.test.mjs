@@ -14,35 +14,35 @@ const vcard = require('../phone-vcard.js');
 const REAL_CALL_LOG = [
   'BEGIN:VCARD',
   'VERSION:2.1',
-  'FN;CHARSET=UTF-8:Gabriele Ponzio',
-  'N;CHARSET=UTF-8:Ponzio;Gabriele',
-  'TEL;TYPE=CELL:+393203465082',
+  'FN;CHARSET=UTF-8:Luca Bianchi',
+  'N;CHARSET=UTF-8:Bianchi;Luca',
+  'TEL;TYPE=CELL:+393331230282',
   'UID:2a',
-  'X-IRMC-CALL-DATETIME;RECEIVED:20260729T121505',
+  'X-IRMC-CALL-DATETIME;RECEIVED:20260529T101505',
   'END:VCARD',
   'BEGIN:VCARD',
   'VERSION:2.1',
-  'FN;CHARSET=UTF-8:Amore🐔',
-  'N;CHARSET=UTF-8:;Amore🐔',
-  'TEL;TYPE=CELL:+393463331166',
-  'EMAIL;CHARSET=UTF-8;TYPE=INTERNET:nadiuccia21@hotmail.it',
+  'FN;CHARSET=UTF-8:Amore🌻',
+  'N;CHARSET=UTF-8:;Amore🌻',
+  'TEL;TYPE=CELL:+393331230166',
+  'EMAIL;CHARSET=UTF-8;TYPE=INTERNET:amore@example.com',
   'UID:10b5',
-  'X-IRMC-CALL-DATETIME;RECEIVED:20260728T213634',
+  'X-IRMC-CALL-DATETIME;RECEIVED:20260528T193634',
   'END:VCARD',
   'BEGIN:VCARD',
   'VERSION:2.1',
   'FN;CHARSET=UTF-8:Papà',
   'N;CHARSET=UTF-8:;Papà',
-  'TEL;TYPE=CELL:+393402641223',
+  'TEL;TYPE=CELL:+393331234567',
   'UID:f',
-  'X-IRMC-CALL-DATETIME;DIALED:20260728T190557',
+  'X-IRMC-CALL-DATETIME;DIALED:20260528T170557',
   'END:VCARD',
   'BEGIN:VCARD',
   'VERSION:2.1',
   'FN;CHARSET=UTF-8:',
   'N;CHARSET=UTF-8:',
-  'TEL:+393287248309',
-  'X-IRMC-CALL-DATETIME;MISSED:20260727T152350',
+  'TEL:+393331230444',
+  'X-IRMC-CALL-DATETIME;MISSED:20260527T132350',
   'END:VCARD',
   '',
 ].join('\r\n');
@@ -52,18 +52,18 @@ test('a real call log parses into names, numbers, times and direction', () => {
   assert.equal(rows.length, 4);
 
   // Newest first, whatever order the phone sent.
-  assert.equal(rows[0].name, 'Gabriele Ponzio');
-  assert.equal(rows[0].number, '+393203465082');
+  assert.equal(rows[0].name, 'Luca Bianchi');
+  assert.equal(rows[0].number, '+393331230282');
   assert.equal(rows[0].direction, 'in');
-  assert.equal(rows[0].at, new Date(2026, 6, 29, 12, 15, 5).getTime());
+  assert.equal(rows[0].at, new Date(2026, 4, 29, 10, 15, 5).getTime());
 
-  assert.equal(rows[1].name, 'Amore🐔');
+  assert.equal(rows[1].name, 'Amore🌻');
   assert.equal(rows[2].name, 'Papà');
   assert.equal(rows[2].direction, 'out');
 
   // A number with no contact behind it is a real row, not a parse failure.
   assert.equal(rows[3].name, '');
-  assert.equal(rows[3].number, '+393287248309');
+  assert.equal(rows[3].number, '+393331230444');
   assert.equal(rows[3].direction, 'missed');
 });
 
@@ -87,8 +87,8 @@ test('the book names the direction only when the phone tagged nothing', () => {
 test('a timestamp is local unless it says otherwise', () => {
   // Reading a local stamp as UTC shifts the whole list by the timezone offset,
   // which reads as a broken clock rather than a broken parser.
-  assert.equal(vcard.parseStamp('20260729T121505'), new Date(2026, 6, 29, 12, 15, 5).getTime());
-  assert.equal(vcard.parseStamp('20260729T121505Z'), Date.UTC(2026, 6, 29, 12, 15, 5));
+  assert.equal(vcard.parseStamp('20260529T101505'), new Date(2026, 4, 29, 10, 15, 5).getTime());
+  assert.equal(vcard.parseStamp('20260529T101505Z'), Date.UTC(2026, 4, 29, 10, 15, 5));
   assert.equal(vcard.parseStamp('non una data'), 0);
   assert.equal(vcard.parseStamp(''), 0);
 });
@@ -97,18 +97,18 @@ test('contacts keep every distinct number and drop the redundant spelling', () =
   const dump = [
     'BEGIN:VCARD',
     'VERSION:2.1',
-    'FN:Ale Paglia',
-    'N:Paglia;Ale',
-    'TEL;CELL:+393881156069',
-    'TEL;HOME:388 1156069',
+    'FN:Ale Verdi',
+    'N:Verdi;Ale',
+    'TEL;CELL:+393331230388',
+    'TEL;HOME:333 1230388',
     'TEL;WORK:+390612345678',
     'END:VCARD', '',
   ].join('\r\n');
   const [contact] = vcard.parseContacts(dump);
-  assert.equal(contact.name, 'Ale Paglia');
+  assert.equal(contact.name, 'Ale Verdi');
   // The first two are the same number written twice; the third is not.
   assert.equal(contact.numbers.length, 2);
-  assert.equal(contact.numbers[0].value, '+393881156069');
+  assert.equal(contact.numbers[0].value, '+393331230388');
   assert.equal(contact.numbers[0].kind, 'cell');
   assert.equal(contact.numbers[1].value, '+390612345678');
   assert.equal(contact.numbers[1].kind, 'work');
@@ -129,12 +129,12 @@ test('quoted-printable accents survive, including the soft line break', () => {
   const dump = [
     'BEGIN:VCARD',
     'VERSION:2.1',
-    'FN;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:Pap=C3=A0 Salvatore Mastro=',
-    'eni',
-    'TEL;CELL:+393402641223',
+    'FN;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:Pap=C3=A0 Mario Ros=',
+    'si',
+    'TEL;CELL:+393331234567',
     'END:VCARD', '',
   ].join('\r\n');
-  assert.equal(vcard.parseContacts(dump)[0].name, 'Papà Salvatore Mastroeni');
+  assert.equal(vcard.parseContacts(dump)[0].name, 'Papà Mario Rossi');
 });
 
 test('a folded line is rejoined without inventing a space', () => {
@@ -144,20 +144,20 @@ test('a folded line is rejoined without inventing a space', () => {
   const dump = [
     'BEGIN:VCARD',
     'VERSION:2.1',
-    'FN:Alberto Carocci Padrone',
+    'FN:Alberto Neri Padrone',
     '  Di Casa',
-    'TEL:+393382851697',
+    'TEL:+393331230697',
     'END:VCARD',
     'BEGIN:VCARD',
     'VERSION:2.1',
-    'FN:Costantino',
+    'FN:Leonardo',
     ' poli',
-    'TEL:+393382851698',
+    'TEL:+393331230698',
     'END:VCARD', '',
   ].join('\r\n');
   const contacts = vcard.parseContacts(dump);
-  assert.equal(contacts[0].name, 'Alberto Carocci Padrone Di Casa');
-  assert.equal(contacts[1].name, 'Costantinopoli');
+  assert.equal(contacts[0].name, 'Alberto Neri Padrone Di Casa');
+  assert.equal(contacts[1].name, 'Leonardopoli');
 });
 
 test('vCard 3.0 escapes are undone', () => {

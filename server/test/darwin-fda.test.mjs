@@ -89,9 +89,9 @@ test('fullDiskAccess: one refusal among several still answers granted when anoth
 });
 
 test('rootReachesHome: the home itself, and every ancestor of it', () => {
-  const home = '/Users/nadia';
-  assert.equal(rootReachesHome('/Users/nadia', home), true);
-  assert.equal(rootReachesHome('/Users/nadia/', home), true);
+  const home = '/Users/giulia';
+  assert.equal(rootReachesHome('/Users/giulia', home), true);
+  assert.equal(rootReachesHome('/Users/giulia/', home), true);
   assert.equal(rootReachesHome('/Users', home), true);
   // "/" walks the home as thoroughly as the home does. A plain equality test
   // misses it, and a user who points the index at the whole disk would get the
@@ -100,24 +100,24 @@ test('rootReachesHome: the home itself, and every ancestor of it', () => {
 });
 
 test('rootReachesHome: a folder the user chose is left alone', () => {
-  const home = '/Users/nadia';
+  const home = '/Users/giulia';
   // Below the home: the user pointed Xenon at this one folder, so one dialog
   // for it is an answer to a question they asked. Only the sweeping root goes.
-  assert.equal(rootReachesHome('/Users/nadia/Documents', home), false);
+  assert.equal(rootReachesHome('/Users/giulia/Documents', home), false);
   assert.equal(rootReachesHome('/Volumes/Backup', home), false);
   assert.equal(rootReachesHome('/opt/data', home), false);
 });
 
 test('rootReachesHome: a prefix that is not a path component does not count', () => {
-  // "/Users/nadi" is a string prefix of "/Users/nadia" and an entirely
+  // "/Users/giul" is a string prefix of "/Users/giulia" and an entirely
   // different directory. Withholding a root on a string match would take away
   // a folder the user asked for.
-  assert.equal(rootReachesHome('/Users/nadi', '/Users/nadia'), false);
-  assert.equal(rootReachesHome('/Users/nadianicolosi2', '/Users/nadianicolosi'), false);
+  assert.equal(rootReachesHome('/Users/giul', '/Users/giulia'), false);
+  assert.equal(rootReachesHome('/Users/giuliarossi2', '/Users/giuliarossi'), false);
 });
 
 test('rootReachesHome: nothing in, false out', () => {
-  assert.equal(rootReachesHome('', '/Users/nadia'), false);
-  assert.equal(rootReachesHome('/Users/nadia', ''), false);
+  assert.equal(rootReachesHome('', '/Users/giulia'), false);
+  assert.equal(rootReachesHome('/Users/giulia', ''), false);
   assert.equal(rootReachesHome(undefined, undefined), false);
 });

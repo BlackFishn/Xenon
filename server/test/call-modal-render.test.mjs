@@ -140,8 +140,8 @@ const CALL = (o = {}) => ({
   appName: o.appName || 'Discord',
   // `in`, not `||`: an empty caller is a case worth testing (a number with no
   // contact name), and `||` would quietly replace it with the default.
-  caller: 'caller' in o ? o.caller : 'Nani00',
-  detail: o.detail || 'Nani00 ha avviato una chiamata.',
+  caller: 'caller' in o ? o.caller : 'Lupo77',
+  detail: o.detail || 'Lupo77 ha avviato una chiamata.',
   video: !!o.video,
   icon: o.icon || '',
   source: o.source || 'discord',

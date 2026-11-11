@@ -263,22 +263,22 @@ test('stop clears everything, so shutdown leaves no card and no timer', () => {
 
 test('a Discord call that ends stops ringing immediately', async () => {
   wire();
-  const rec = calls.onDiscordNotification({ title: 'Nani00', body: 'Nani00 ha avviato una chiamata.', channelId: '199737254929760257', messageType: 3 });
+  const rec = calls.onDiscordNotification({ title: 'Lupo77', body: 'Lupo77 ha avviato una chiamata.', channelId: '199737254929760257', messageType: 3 });
   assert.ok(rec, 'the real wording from a live call must ring');
   assert.equal(calls.current().length, 1);
-  calls.onDiscordNotification({ title: 'Nani00', body: 'Chiamata terminata', channelId: '199737254929760257', messageType: 3 });
+  calls.onDiscordNotification({ title: 'Lupo77', body: 'Chiamata terminata', channelId: '199737254929760257', messageType: 3 });
   assert.equal(calls.current().length, 0, 'the hang-up must take the card down');
 });
 
 test('the end of one call does not touch another', () => {
   wire();
-  calls.onDiscordNotification({ title: 'Nani00', body: 'ha avviato una chiamata', channelId: '111111111111111', messageType: 3 });
+  calls.onDiscordNotification({ title: 'Lupo77', body: 'ha avviato una chiamata', channelId: '111111111111111', messageType: 3 });
   calls.onDiscordNotification({ title: 'Anna', body: 'ha avviato una chiamata', channelId: '222222222222222', messageType: 3 });
   assert.equal(calls.current().length, 2);
   calls.onDiscordNotification({ title: 'Anna', body: 'Chiamata terminata', channelId: '222222222222222', messageType: 3 });
   const left = calls.current();
   assert.equal(left.length, 1);
-  assert.equal(left[0].caller, 'Nani00', 'the channel identifies which call ended');
+  assert.equal(left[0].caller, 'Lupo77', 'the channel identifies which call ended');
 });
 
 test('a missed-call toast takes down the card it belongs to', () => {
@@ -293,12 +293,12 @@ test('a missed-call toast takes down the card it belongs to', () => {
 test('calling straight back rings again instead of being deduped away', () => {
   wire();
   const ch = '199737254929760257';
-  calls.onDiscordNotification({ title: 'Nani00', body: 'ha avviato una chiamata', channelId: ch, messageType: 3 });
-  calls.onDiscordNotification({ title: 'Nani00', body: 'Chiamata terminata', channelId: ch, messageType: 3 });
+  calls.onDiscordNotification({ title: 'Lupo77', body: 'ha avviato una chiamata', channelId: ch, messageType: 3 });
+  calls.onDiscordNotification({ title: 'Lupo77', body: 'Chiamata terminata', channelId: ch, messageType: 3 });
   assert.equal(calls.current().length, 0);
   // Same channel, well inside the dedupe window. Ending the call has to clear
   // its key or the call back is silently swallowed.
-  const again = calls.onDiscordNotification({ title: 'Nani00', body: 'ha avviato una chiamata', channelId: ch, messageType: 3 });
+  const again = calls.onDiscordNotification({ title: 'Lupo77', body: 'ha avviato una chiamata', channelId: ch, messageType: 3 });
   assert.ok(again, 'a call back after a hang-up is a new call');
   assert.equal(calls.current().length, 1);
 });
@@ -344,7 +344,7 @@ test('a set that never contained the toast is not read as a removal', () => {
 
 test('a Discord card is untouched by Action Center', () => {
   wire();
-  calls.onDiscordNotification({ title: 'Nani00', body: 'ha avviato una chiamata', channelId: '199737254929760257', messageType: 3 });
+  calls.onDiscordNotification({ title: 'Lupo77', body: 'ha avviato una chiamata', channelId: '199737254929760257', messageType: 3 });
   calls.onNotificationsPresent([]);
   assert.equal(calls.current().length, 1, 'Discord has no toast to lose');
 });
