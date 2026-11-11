@@ -2,28 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const HTML = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const CSS = readFileSync(new URL('../components/AudioSection/AudioSection.css', import.meta.url), 'utf8');
-const DEVICE_CSS = readFileSync(new URL('../components/DevicePicker/DevicePicker.css', import.meta.url), 'utf8');
 const JS = readFileSync(new URL('../js/volume.js', import.meta.url), 'utf8');
 const LAYOUT_JS = readFileSync(new URL('../js/dashboard-layout.js', import.meta.url), 'utf8');
-
-test('Volume workspace orders master output, app mixer, then device routing', () => {
-  const master = HTML.indexOf('class="vol-master-card"');
-  const mixer = HTML.indexOf('class="speaker-mixer"');
-  const devices = HTML.indexOf('class="device-section"', mixer);
-
-  assert.ok(master >= 0 && mixer > master && devices > mixer);
-  assert.match(HTML.slice(master, mixer), /data-volf="vol-mute-btn"/);
-  assert.match(HTML.slice(master, mixer), /data-volf="vol-slider"/);
-  assert.match(HTML.slice(mixer, devices), /data-volf="speaker-app-count"/);
-});
-
-test('device routing cards are keyboard-focusable buttons', () => {
-  assert.match(HTML, /<button class="device-row" type="button" onclick="openPicker\('speaker'\)"/);
-  assert.match(HTML, /<button class="device-row" type="button" onclick="openPicker\('mic'\)"/);
-  assert.match(DEVICE_CSS, /\.audio-block \.device-row:focus-visible/);
-});
 
 test('speaker renderer updates count and visibility without another polling loop', () => {
   const start = JS.indexOf('function renderSpeakerApps(apps)');

@@ -1,16 +1,12 @@
-name: Deploy website to Pages
+name: Deploy website
 
-# Serves docs/ (the static marketing/website folder) via GitHub Pages.
+# Builds docs/ (the website) and publishes it on Cloudflare (site-host/), which serves
+# xenon-app.com since 10 Nov 2026. GitHub Pages took from 35 s to over 25 minutes to publish,
+# with no incident reported; Cloudflare is live in seconds, so a green run means the site is
+# online. The file keeps its old name so links to its runs and badges stay valid.
 #
-# Why this exists instead of the built-in "Deploy from a branch" build:
-# that legacy path has no concurrency control, so two pushes landing close
-# together (a manual push + the supporters bot, or several commits in a row)
-# spawn two Pages deployments that race — GitHub allows only one active, so the
-# loser fails with "Deployment failed, try again later." The `concurrency` group
-# below queues deployments instead, which removes the race. A manual re-run
-# always worked precisely because it ran alone.
-#
-# Requires: Repo → Settings → Pages → Build and deployment → Source = GitHub Actions.
+# The `concurrency` group queues runs: two pushes close together (a manual push and the
+# supporters bot) publish one after the other, never at once.
 
 on:
   push:
@@ -35,6 +31,13 @@ on:
       - 'tools/page-i18n.mjs'
       - 'tools/lang-pages.mjs'
       - 'tools/site-chrome.mjs'
+      # Imported by the builders: build-i18n -> home-bake, build-seo ->
+      # page-meta -> home-i18n, build-seo -> trial-covers. Pinned by
+      # server/test/site-deploy-inputs.test.mjs.
+      - 'tools/home-bake.mjs'
+      - 'tools/home-i18n.mjs'
+      - 'tools/page-meta.mjs'
+      - 'tools/trial-covers.mjs'
       - 'tools/build-seo.mjs'
       - 'tools/stamp-release.mjs'
       - 'tools/build-releases.mjs'
@@ -43,7 +46,12 @@ on:
       - 'tools/i18n/**'
       - 'tools/demo/**'
       - '.github/workflows/pages.yml'
+      # The Cloudflare host of the same build (worker + its config).
+      - 'site-host/**'
   workflow_dispatch: {}
+  # A new Xenon Maker release (its own private repo) asks for a redeploy.
+  repository_dispatch:
+    types: [maker-release]
   # Once a day, so the release facts the pages state (version, installer size)
   # follow a release published between two pushes. Never `release: published`:
   # the release pipeline stages assets on a draft and publishes by hand.
@@ -52,10 +60,8 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
-# Serialize Pages deployments so concurrent pushes queue instead of racing.
+# Serialize deployments so concurrent pushes queue instead of racing.
 # cancel-in-progress: false → never abandon an in-flight deploy; the next one
 # waits its turn (a superseded-but-cancelled deploy would look like a failure).
 concurrency:
@@ -66,12 +72,13 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      name: website
+      url: https://xenon-app.com
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          persist-credentials: false   # no token left in .git/config for later steps
           # Full history: build-seo.mjs reads each page's last commit date for the
           # sitemap's <lastmod>. A shallow clone has no such date, and the script
           # then ships the entry without one rather than inventing today's.
@@ -80,7 +87,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       # Generates docs/demo/ from server/ + packages/core/src. Deliberately no
       # `npm ci`: build-demo.mjs uses only node: builtins, and package.json
@@ -91,8 +98,23 @@ jobs:
       - name: Build the browser demo
         run: node tools/build-demo.mjs
 
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
+      # xenon-app.com/maker/ is built in the private xenon-maker repo and
+      # published there as maker.zip on each release. MAKER_RELEASE_TOKEN is a
+      # read-only fine-grained token on that repo. Without it the site deploys
+      # as before, with a warning; with it, a failed download fails the deploy
+      # rather than shipping a site whose /maker/ links lead nowhere.
+      - name: Add Xenon Maker
+        env:
+          GH_TOKEN: ${{ secrets.MAKER_RELEASE_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::MAKER_RELEASE_TOKEN is not set: /maker/ is not published"
+            exit 0
+          fi
+          gh release download --repo marcimastro98/xenon-maker --pattern maker.zip --dir "$RUNNER_TEMP/maker"
+          mkdir -p docs/maker
+          unzip -q "$RUNNER_TEMP/maker/maker.zip" -d docs/maker
+          test -f docs/maker/index.html
 
       # Regenerates sitemap.xml, the per-entry pages under /catalog/, and the
       # catalog's link index + ItemList from catalog.json. Running it here means a
@@ -125,87 +147,21 @@ jobs:
       - name: Build SEO surface
         run: node tools/build-seo.mjs
 
-      - name: Upload docs/ artifact
-        id: upload
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: docs
-
-      # Creates the deployment the same way actions/deploy-pages does — same POST,
-      # same OIDC token, same artifact — and then does NOT wait for it. That one
-      # difference is the whole point.
-      #
-      # deploy-pages polls for at most 10 minutes and then CANCELS the deployment,
-      # and a cancelled one stays failed forever: a deployment's ID *is* the commit
-      # SHA, so no re-run can revive it and only a fresh commit can publish again.
-      # The wait cannot be extended either — `MAX_TIMEOUT = 600000` is hardcoded in
-      # the action (src/internal/deployment.js takes Math.min of the input and it),
-      # so a bigger `timeout:` is clamped back with a warning and nothing else.
-      #
-      # On 2026-08-06 Pages published this site in 35s the evening before, 9m24s at
-      # 11:50, and then needed more than 10 minutes for the whole afternoon with no
-      # incident reported by GitHub. Three commits in a row were stranded that way,
-      # each one a green build whose finished artifact was thrown away by our own
-      # side. Nothing here was broken; the client-side deadline was the fault.
-      #
-      # We keep `id: deployment` because the job's environment url reads
-      # steps.deployment.outputs.page_url, and page_url comes back in this POST.
-      - name: Create the Pages deployment
-        id: deployment
+      # The site's host. Without the token nothing can publish, so the run fails and says why.
+      - name: Publish on Cloudflare
+        id: cloudflare
         env:
-          GH_TOKEN: ${{ github.token }}
-          ARTIFACT_ID: ${{ steps.upload.outputs.artifact_id }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          set -euo pipefail
-          # Read with :- so a missing grant reports itself instead of dying on
-          # `set -u` before the message below can explain what is wrong.
-          req_url="${ACTIONS_ID_TOKEN_REQUEST_URL:-}"
-          req_tok="${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
-          if [ -z "$req_url" ] || [ -z "$req_tok" ]; then
-            echo '::error::No OIDC request env. Is `id-token: write` still in this workflow permissions block?'
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID is not set: the site was not published"
             exit 1
           fi
-          # No audience argument, to match the action's own core.getIDToken().
-          oidc=$(curl -sf -H "Authorization: bearer $req_tok" "$req_url" | jq -r '.value')
-          if [ -z "$oidc" ] || [ "$oidc" = null ]; then
-            echo '::error::The OIDC endpoint answered without a token.'
-            exit 1
-          fi
-          # -F types artifact_id as a number; -f would send it as a string and the
-          # API rejects that.
-          resp=$(gh api -X POST "repos/$GITHUB_REPOSITORY/pages/deployments" \
-                   -F artifact_id="$ARTIFACT_ID" \
-                   -f pages_build_version="$GITHUB_SHA" \
-                   -f oidc_token="$oidc")
-          echo "page_url=$(jq -r '.page_url // ""' <<<"$resp")" >> "$GITHUB_OUTPUT"
-          echo "Created. GitHub will finish it in its own time: $(jq -r '.status_url // "no status_url"' <<<"$resp")"
-
-      # Reporting only, and deliberately unable to do harm: it never cancels, and
-      # it never fails the run. If Pages is having a slow day the deployment stays
-      # alive and completes after this step has stopped watching — the only thing
-      # lost is the IndexNow ping below, which is gated on having seen it go live.
-      - name: Wait for Pages to publish
-        id: live
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -uo pipefail
-          s=''
-          for i in $(seq 1 150); do            # 150 × 10s = 25 minutes
-            s=$(gh api "repos/$GITHUB_REPOSITORY/pages/deployments/$GITHUB_SHA" -q '.status' 2>/dev/null || echo '')
-            case "$s" in
-              # 'succeed' is the exact string the Pages API reports, not 'success'.
-              succeed)
-                echo "live=true" >> "$GITHUB_OUTPUT"
-                echo "Published after about $((i * 10))s."
-                exit 0 ;;
-              deployment_failed|deployment_content_failed|deployment_cancelled|deployment_lost)
-                echo "::warning::Pages reported '$s'. The site was not updated."
-                exit 0 ;;
-            esac
-            sleep 10
-          done
-          echo "::warning::Still '$s' after 25 minutes. The deployment is alive and will finish on its own; IndexNow was not pinged."
+          # The time of the commit this build came from: the hub's live copy of /community/
+          # (site-host/worker.js) is served only while it is newer than this.
+          npx --yes wrangler@4.110.0 deploy --config site-host/wrangler.jsonc --var "SITE_COMMIT_TIME:$(git log -1 --format=%ct)"
+          echo "Live: https://xenon-app.com" >> "$GITHUB_STEP_SUMMARY"
 
       # Announces the URLs this run changed to the IndexNow engines (Bing, and
       # through it Copilot; Yandex, Seznam, Naver). It runs AFTER the deploy on
@@ -220,11 +176,9 @@ jobs:
       # the working tree, which is what catches a catalog page that build-seo
       # regenerated from a bot's catalog.json edit without any commit naming it.
       #
-      # The `if` is what keeps "after the deploy" true now that the step above
-      # reports instead of blocking: inviting a crawl of a page that is still
-      # publishing would send every engine at the OLD copy.
+      # The `if`: a crawl invited before the new copy is live would read the old one.
       - name: Ping IndexNow
-        if: steps.live.outputs.live == 'true'
+        if: steps.cloudflare.outcome == 'success'
         continue-on-error: true
         env:
           INDEXNOW_BEFORE: ${{ github.event.before }}

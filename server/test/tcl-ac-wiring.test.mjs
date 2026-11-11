@@ -44,7 +44,7 @@ test('TCL state is projected independently of Smart Home and Energy selections',
   config.homeAssistant.entities = ['light.desk', tclAcProfile.profile.climate];
   assert.deepEqual((await build()).entities.map(e => e.id), config.homeAssistant.entities);
   config = {};
-  assert.deepEqual(await build(), { configured: false, connected: false, entities: [], energy: [], tclAc: [] });
+  assert.deepEqual(await build(), { configured: false, connected: false, entities: [], energy: [], tclAc: [], areaOrder: [], tileView: 'auto' });
 });
 
 test('an AC-only dashboard keeps the shared HA watch open with no Smart Home selection', async () => {
@@ -89,8 +89,8 @@ test('TCL layouts remain opt-in and preserve resize, copies, pages, and removal 
 });
 
 test('client Smart Home normalization does not append the TCL profile', () => {
-  const helpers = ['normalizeHomeAssistantTileSections', 'normalizeHomeAssistantTileCards', 'normalizeHomeAssistant'].map(name => functionSource(settings, name)).join('\n');
-  const normalize = new Function('normalizeCamAngles', helpers + ';return normalizeHomeAssistant;')(() => ({}));
+  const helpers = functionSource(settings, 'normalizeHomeAssistant');
+  const normalize = new Function('normalizeCamAngles', 'window', helpers + ';return normalizeHomeAssistant;')(() => ({}), {});
   const entities = [tclAcProfile.profile.climate, 'light.desk'];
   assert.deepEqual(normalize({ entities }).entities, entities);
   assert.deepEqual(normalize({ entities: [] }).entities, []);
@@ -101,7 +101,7 @@ test('TCL mounts, scripts, state delivery, and layout render hooks are registere
   const index = read('../index.html');
   const main = read('../js/main.js');
   const layout = read('../js/dashboard-layout.js');
-  const palette = read('../js/dashboard-palette.js');
+  const palette = read('../js/palette-model.js');
   assert.match(index, /data-dashboard-widget="tcl-ac"[^>]*data-dashboard-hidden="true"/);
   assert.match(index, /class="tcl-ac-widget-mount"/);
   assert.ok(index.indexOf('shared/src/tcl-ac.js') < index.indexOf('js/tcl-ac-widget.js'));
@@ -119,9 +119,9 @@ test('the shared service route passes the optional profile without changing gene
   assert.ok(start > 0 && bodyEnd > bodyStart);
   const calls = [];
   const results = [];
-  const route = new Function('deckHa', 'readBody', 'json', 'return async function(req) {' + server.slice(bodyStart, bodyEnd) + '}')(
+  const route = new Function('deckHa', 'readBody', 'json', 'isRemote', 'remoteActions', 'return async function(req) {' + server.slice(bodyStart, bodyEnd) + '}')(
     { callService: async (...args) => { calls.push(args); return { ok: true }; } },
-    async (req) => JSON.stringify(req), (result) => results.push(result));
+    async (req) => JSON.stringify(req), (result) => results.push(result), false, {});
   await route({ domain: 'homeassistant', service: 'toggle', entityId: 'switch.desk' });
   await route({ domain: 'climate', service: 'set_hvac_mode', entityId: tclAcProfile.profile.climate, data: { hvac_mode: 'cool' }, profile: 'tcl-ac' });
   assert.deepEqual(calls[0], ['homeassistant', 'toggle', { entity_id: 'switch.desk' }, {}, undefined]);

@@ -10,7 +10,7 @@
   min-width: 0;
   min-height: 0;
 }
-.ai-usage-widget-mount { height: 100%; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #65716d55 transparent; }
+.ai-usage-widget-mount { height: 100%; min-height: 0; overflow: auto; overscroll-behavior-y: contain; scrollbar-width: thin; scrollbar-color: #65716d55 transparent; }
 .aiu-wrap { padding: 18px; color: var(--aiu-text); font-size: 12px; line-height: 1.45; }
 .aiu-wrap * { box-sizing: border-box; }
 .aiu-wrap h2, .aiu-wrap h3, .aiu-wrap p { margin: 0; }

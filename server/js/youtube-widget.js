@@ -28,7 +28,7 @@
   // widget sits in the #widget-pool (outside any .pager-page), so it must NOT
   // poll the YouTube API. Adding the widget moves it into a page → polling starts
   // on the next layout pass; removing it parks it back → polling stops.
-  function tiles() { return Array.from(document.querySelectorAll('[data-dashboard-widget="youtube"]')).filter(el => el.closest('.pager-page')); }
+  function tiles() { return Array.from(document.querySelectorAll('[data-dashboard-widget="youtube"]')).filter(el => el.closest('.pager-page, .layer-slot')); }
   const api = apiJson; // shared fetch-JSON helper from utils.js
   const mediaViews = new Map();
   let youtubeSuspended = false;
@@ -95,7 +95,7 @@
     search: () => t('youtube_tab_search', 'Search'),
   };
   const lib = {
-    tab: 'queue',
+    tab: window.TileTabMemory ? TileTabMemory.get('youtube', TABS, 'queue') : 'queue',   // remembered across reloads
     data: { liked: null, playlists: null, subs: null, search: null },   // null = never loaded
     loading: '',
     error: '',
@@ -232,9 +232,7 @@
   const isRefused = (v) => !!v && (v.embeddable === false || refused.has(v.id));
 
   function openStreamingSettings() {
-    const overlay = document.getElementById('settings-overlay');
-    if (overlay && overlay.hidden && typeof window.toggleSettings === 'function') window.toggleSettings();
-    if (typeof window.settingsSetCategory === 'function') window.settingsSetCategory('streaming');
+    openSettingsCategory('streaming');
   }
 
   function fmtTime(sec) {
@@ -242,6 +240,12 @@
     const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
     const mm = h ? String(m).padStart(2, '0') : String(m);
     return (h ? h + ':' : '') + mm + ':' + String(r).padStart(2, '0');
+  }
+
+  // The Liquid progress line has no handle: the watched part is painted from --fill.
+  function paintSeekFill(seek) {
+    const share = (Number(seek.value) / (Number(seek.max) || 1000)) * 100;
+    seek.style.setProperty('--fill', `${Math.max(0, Math.min(100, share))}%`);
   }
 
   // Open a URL where the user can see it: a visible Browser tile first (which
@@ -687,7 +691,7 @@
   // through his library for one that would work (#126).
   function blockedText() {
     if (player.errCode === 153) {
-      return t('youtube_embed_config', 'YouTube would not start the player here. This is not the video — open it in the browser.');
+      return t('youtube_embed_config', 'YouTube would not start the player here. This is not the video: open it in the browser.');
     }
     return t('youtube_no_embed', 'This video cannot be played inside apps.');
   }
@@ -720,6 +724,7 @@
       b.append(ico, el('span', 'yt-tab-lbl', TAB_LABEL[id]()));
       b.addEventListener('click', () => {
         lib.tab = id; lib.openPl = null; lib.plItems = null; lib.error = '';
+        if (window.TileTabMemory) TileTabMemory.set('youtube', id);
         paintLibrary();
         loadTab(id);
       });
@@ -859,7 +864,9 @@
       const viewport = mount.querySelector('.yt-viewport'); if (viewport) viewport.disabled = !owns;
       card.querySelector('.yt-now').hidden = !owns;
       card.querySelector('.yt-now-title').textContent = v ? (v.title || t('youtube_video') + ' · ' + v.id) : '';
-      card.querySelector('.yt-now-sub').textContent = v ? (v.channel || t('youtube_video')) : '';
+      setWordParts(card.querySelector('.yt-now-sub'), v
+        ? [v.channel || t('youtube_video'), player.queue.length > 1 ? (player.qi + 1) + '/' + player.queue.length : '']
+        : []);
       const favorite = card.querySelector('.yt-favorite');
       const isSaved = !!v && saved.favorites.some(item => item.id === v.id);
       favorite.setAttribute('aria-pressed', String(isSaved));
@@ -887,7 +894,9 @@
         b.classList.toggle('is-on', selected); b.setAttribute('aria-selected', String(selected)); b.tabIndex = selected || (!local && b.dataset.ytTab === 'queue') ? 0 : -1;
       });
       card.querySelector('.yt-account-tabs').value = local ? '' : lib.tab;
-      card.querySelector('.yt-setup').hidden = local || connected === true;
+      // Only once the account is known to be missing, never on the local tabs.
+      const setup = mount.querySelector('.yt-setup');
+      if (setup) { setup.hidden = connected !== false; if (local) setup.hidden = true; }
       card.querySelector('.yt-list-summary').hidden = !local;
       card.querySelector('.yt-autoplay').setAttribute('aria-checked', String(saved.autoplay));
       card.querySelector('.yt-repeat').setAttribute('aria-pressed', String(saved.loop));

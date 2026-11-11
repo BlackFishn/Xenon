@@ -2,12 +2,183 @@
   "_note": "Xenon community gallery catalog. Rendered by docs/index.html and served to the app via GET /api/community/catalog. Entries are moderated: submit yours with a PR (see README.md in this folder). Every field is re-validated by the app before display, and installing always goes through the normal import preview. Entries with a 'limited' block are limited-edition drops: reservation-only (via Discord), carry no code, and set total/claimed copies — claimed>=total is sold out.",
   "entries": [
     {
+      "id": "frieren-ispired-bundle",
+      "kind": "bundle",
+      "name": "Frieren ispired Bundle",
+      "author": "Clarette",
+      "description": "A Frieren-inspired theme featuring liquid glass-style windows and a deck designed for creative productivity and gaming. Includes a dedicated page for PC performance monitoring, system vitals, and deck controls; a dashboard with weather, calendar, and notes; and a page for music playback controls and Discord integration.",
+      "category": "style",
+      "tags": [
+        "frieren",
+        "clear",
+        "productivity",
+        "anime",
+        "liquidglass"
+      ],
+      "version": "1.0.0",
+      "preview": {
+        "accent": "#00f8ff",
+        "bg": "#070808",
+        "text": "#ffffff"
+      },
+      "shots": 2,
+      "addedAt": "2026-11-10",
+      "codeFile": true
+    },
+    {
+      "id": "alibi",
+      "kind": "widget",
+      "name": "Culprit",
+      "author": "Xenon",
+      "locked": true,
+      "sparks": 300,
+      "featured": "main",
+      "description": "A frame counter that also tells you who is to blame when a game lags: this PC, the Wi-Fi, the home line or the provider. A row, or a panel with the route in four sectors: over a game, on the desktop, in a tile.\n\n- **You choose what shows:** FPS, lows, frame time, ping, packet loss, Wi-Fi signal, CPU and GPU load, temperature, clock and power, VRAM, RAM, the time.\n- **Colours that mean something:** a value turns from white to yellow, orange and red as it gets worse.\n- **Only when something is wrong:** nothing over the game until there is a culprit.\n- **Is it me?** answers for the last 30 seconds.\n- **After each match:** every lag with times and numbers, ready to copy.\n\nCulprit cannot see the game's server. Frame readings: all on Windows, FPS only on Linux with MangoHud, none on macOS.",
+      "category": "system",
+      "tags": [
+        "gaming",
+        "fps",
+        "ping",
+        "lag",
+        "overlay"
+      ],
+      "version": "1.2.0",
+      "pkgId": "alibi",
+      "appVersionMin": "5.0.0",
+      "preview": {
+        "accent": "#ff4034",
+        "bg": "#0c0e11",
+        "text": "#f4f4f0"
+      },
+      "shots": 4,
+      "activeFrom": "2026-11-10T00:00:00+01:00",
+      "activeUntil": "2026-12-10T23:59:59+01:00",
+      "addedAt": "2026-11-10",
+      "updatedAt": "2026-11-10",
+      "codeFile": true
+    },
+    {
+      "id": "sports",
+      "kind": "widget",
+      "name": "Sports",
+      "author": "halluci293",
+      "description": "Track your favorite teams across 14 major sports leagues (NFL, NBA, MLB, NHL, NCAA, and top global soccer) in one personalized dashboard.\n\n* **Live Scores:** Auto-refreshing updates during active games.\n* **Schedules & Records:** See current standings and upcoming matchups at a glance.\n* **Native Themes:** Fully supports Xenon's Light, Dark, and Retro modes.",
+      "category": "media",
+      "tags": [
+        "sports",
+        "scores",
+        "football",
+        "basketball",
+        "hockey"
+      ],
+      "version": "1.0.0",
+      "pkgId": "sports-espn",
+      "preview": {
+        "accent": "#1ed760",
+        "bg": "#0b0d12",
+        "text": "#e9edf6"
+      },
+      "shots": 3,
+      "addedAt": "2026-11-08",
+      "codeFile": true
+    },
+    {
+      "id": "meter-reading",
+      "kind": "widget",
+      "name": "Meter Reading",
+      "author": "Xenon",
+      "supportersOnly": true,
+      "locked": true,
+      "description": "An electricity meter for this PC, drawn like a real one.\n\n- **kWh today, yesterday, in 24 hours and this month.** Tap to step through.\n- **What it costs** at the price per kWh you set.\n- **Whole PC, CPU+GPU, CPU or GPU:** pick what it counts.\n- **Other devices:** a 3D printer, a monitor, a lamp. Real readings from a Home Assistant smart plug, or an estimate from the watts you type. TOTAL adds them to the PC.\n- **The month report:** tap the bars for every day, the average, the highest day, an estimate and last month.\n- **A red light** blinks once per watt-hour, like a real meter.\n- **By the clock:** today's kWh or cost in the top bar.\n\nNeeds Xenon 5.0 and the sensor history (Settings, Performance), which counts even while the meter is not on screen. Hours the PC was off are not counted.",
+      "category": "system",
+      "tags": [
+        "energy",
+        "power",
+        "kwh",
+        "cost",
+        "supporter"
+      ],
+      "version": "1.1.3",
+      "pkgId": "meter-reading",
+      "appVersionMin": "5.0.0",
+      "preview": {
+        "accent": "#d4372b",
+        "bg": "#b4bfa4",
+        "text": "#1d281d"
+      },
+      "shots": 5,
+      "addedAt": "2026-11-08",
+      "updatedAt": "2026-11-10",
+      "codeFile": true
+    },
+    {
+      "id": "car-stereo-scene",
+      "kind": "ambient",
+      "name": "Joyride Scene",
+      "author": "marcimastro98",
+      "authorSupporter": true,
+      "supportersOnly": true,
+      "locked": true,
+      "trial": "now",
+      "description": "Joyride as a fullscreen Ambient scene. It opens by itself when the screen goes idle, with your real song on the tape, your hour on the display and the reels turning while music plays. It shares its six presets with the Joyride page.",
+      "category": "media",
+      "tags": [
+        "ambient",
+        "music",
+        "car",
+        "cassette",
+        "clock"
+      ],
+      "version": "1.0.0",
+      "pkgId": "car-stereo-scene",
+      "appVersionMin": "5.0.0",
+      "preview": {
+        "accent": "#ffb24a",
+        "bg": "#101012",
+        "text": "#e6e3dc"
+      },
+      "shots": 2,
+      "activeFrom": "2026-11-19T00:00:00+01:00",
+      "addedAt": "2026-11-08",
+      "codeFile": true
+    },
+    {
+      "id": "car-stereo",
+      "kind": "bundle",
+      "name": "Joyride",
+      "author": "marcimastro98",
+      "authorSupporter": true,
+      "supportersOnly": true,
+      "locked": true,
+      "trial": "now",
+      "description": "A car stereo for your real music, on a page of its own. Your song is printed on the tape label and every album gets its own cassette. The reels turn only while music plays, the knob sets your real volume, and a finger on a reel winds through the song. Six keys store what Spotify is playing. After dark the legends light up and a warm lamp lights the tape.",
+      "category": "media",
+      "tags": [
+        "music",
+        "spotify",
+        "car",
+        "cassette",
+        "supporter"
+      ],
+      "version": "1.0.0",
+      "appVersionMin": "5.0.0",
+      "preview": {
+        "accent": "#ffb24a",
+        "bg": "#101012",
+        "text": "#e6e3dc"
+      },
+      "shots": 4,
+      "activeFrom": "2026-11-19T00:00:00+01:00",
+      "addedAt": "2026-11-08",
+      "codeFile": true
+    },
+    {
       "id": "haunted-house",
       "kind": "widget",
       "name": "Haunted House",
       "author": "xenon",
       "authorSupporter": true,
-      "featured": "main",
+      "featured": "on",
       "description": "A haunted house with 8 windows. The first holds a pumpkin you carve with your finger or the mouse; where Xenon can read your GPU, its candle burns brighter the harder the GPU works. From 25 to 31 October a window lights up every evening at 8 pm: tap it for a peek. The guests are for supporters.",
       "category": "system",
       "tags": [
@@ -26,8 +197,10 @@
         "text": "#E6DCC8"
       },
       "shots": 4,
+      "active": false,
       "addedAt": "2026-10-22",
-      "codeFile": true
+      "codeFile": true,
+      "updatedAt": "2026-11-10"
     },
     {
       "id": "haunted-house-all",
@@ -56,8 +229,10 @@
         "text": "#E6DCC8"
       },
       "shots": 5,
+      "active": false,
       "addedAt": "2026-10-22",
-      "codeFile": true
+      "codeFile": true,
+      "updatedAt": "2026-11-10"
     },
     {
       "id": "casa",
@@ -67,7 +242,7 @@
       "supportersOnly": true,
       "locked": true,
       "featured": "on",
-      "description": "Your Home Assistant devices as wall plates. Tap to switch, drag a dimmer, set volume, power and temperature right on the plate. Compact, comfortable or large keys; thermostats, energy, 24 hour traces, cameras and media. Smoke, a leak, a triggered alarm or an open door also show in the top bar.",
+      "description": "Your Home Assistant devices as wall plates. Tap, dim, set volume and temperature on the plate. Sensors say what their value means (CO2, air, noise, humidity, battery) over a 6, 24 or 48 hour trace, with limits you set. Players show the cover and source, thermostats every mode they have.",
       "category": "smart-home",
       "tags": [
         "home-assistant",
@@ -76,9 +251,9 @@
         "camera",
         "supporter"
       ],
-      "version": "1.0.2",
+      "version": "2.0.0",
       "pkgId": "casa",
-      "appVersionMin": "4.11.13",
+      "appVersionMin": "5.0.0",
       "preview": {
         "accent": "#FFB36E",
         "bg": "#141617",
@@ -87,7 +262,7 @@
       "shots": 6,
       "addedAt": "2026-10-16",
       "codeFile": true,
-      "updatedAt": "2026-10-16"
+      "updatedAt": "2026-11-10"
     },
     {
       "id": "pagina-100",
@@ -211,8 +386,7 @@
       "name": "TGK Monitor — Performance Metrics",
       "author": "The.GothamKnight",
       "authorSupporter": true,
-      "perfWarning": true,
-      "description": "Real-time CPU, GPU, memory, clocks, temperatures, fans and FPS monitoring.\nNo setup required. Uses Xenon native system data and follows Xenon temperature units.\nUses your current Xenon theme by default and can be customized like other widgets.\nFPS appears when a foreground game/application is detect",
+      "description": "Real-time CPU, GPU, memory, clocks, temperatures, fans and FPS monitoring. Color customization for sensors and gauges. Uses your current Xenon theme by default and can be customized like other widgets. FPS appears when a foreground game/application is detected.",
       "category": "system",
       "tags": [
         "performance",
@@ -221,7 +395,8 @@
         "fps",
         "on-screen"
       ],
-      "version": "1.0.0",
+      "version": "1.1.0",
+      "changelog": "Added color customization for Sensors and gauges, persistent settings and reset default.\nPreselection of Intel blue, AMD red, Nvidia green.",
       "pkgId": "tgk-monitor",
       "appVersionMin": "4.1.8",
       "preview": {
@@ -229,10 +404,10 @@
         "bg": "#0b0d12",
         "text": "#e9edf6"
       },
-      "shots": 2,
+      "shots": 3,
       "addedAt": "2026-09-16",
-      "codeFile": true,
-      "updatedAt": "2026-11-04"
+      "updatedAt": "2026-11-08",
+      "codeFile": true
     },
     {
       "id": "tgk-steam-launcher-battery",

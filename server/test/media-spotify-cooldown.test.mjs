@@ -11,7 +11,7 @@ async function setup(options = {}) {
   let now = 100000, timerId = 0;
   const makeEl = (tag, cls, text) => {
     const node = mkEl(tag); node.className = cls || ''; if (text != null) node.textContent = text;
-    node.offsetParent = {}; return node;
+    return node; // 5.0 mini-dom: offsetParent follows the hidden ancestors
   };
   document.createElement = tag => makeEl(tag);
   const pane = makeEl('div'); pane.id = 'media-pane-play';

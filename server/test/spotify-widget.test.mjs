@@ -14,7 +14,8 @@ async function setup(options = {}) {
     const node = mkEl(tag);
     node.className = cls;
     if (text !== undefined) node.textContent = text;
-    Object.defineProperty(node, 'firstChild', { get: () => node.children[0] || null });
+    // 5.0's mini-dom already gives every node a firstChild.
+    if (!('firstChild' in node)) Object.defineProperty(node, 'firstChild', { get: () => node.children[0] || null });
     node.getClientRects = () => node.hidden ? [] : [{}];
     node.focus = () => { document.activeElement = node; };
     node.dataset = new Proxy(node.dataset, { set(target, key, value) {

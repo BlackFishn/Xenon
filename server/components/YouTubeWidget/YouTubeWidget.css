@@ -40,7 +40,7 @@
 .yt-link-form .yt-play-link:hover:not(:disabled) { background: #ea3d45; }
 .yt-feedback { flex: 0 0 auto; font-size: .74rem; line-height: 1.5; color: var(--muted-text); overflow-wrap: anywhere; }
 .yt-feedback.is-error { color: var(--color-danger); }
-.yt-cards { display: flex; flex-direction: column; gap: 12px; flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.yt-cards { display: flex; flex-direction: column; gap: 12px; flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior-y: contain; }
 .youtube-panel .yt-wrap .yt-card { border-radius: 10px; border: 1px solid var(--line); background: var(--surface); box-sizing: border-box; }
 .yt-card--player { flex: 1 0 280px; min-height: 280px; display: flex; flex-direction: column; overflow: hidden; }
 .yt-player-stage { margin: 0; padding: 0; border: 0; max-width: none; max-height: none; color: inherit; box-sizing: border-box; flex: 1 1 auto; position: relative; width: 100%; min-height: 200px; background: #000; display: flex; align-items: center; justify-content: center; overflow: hidden; }
@@ -54,21 +54,30 @@
 .yt-now-meta { flex: 1; min-width: 0; }
 .yt-now-title { color: var(--text); font-size: .82rem; line-height: 1.4; font-weight: 650; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
 .yt-now-sub { color: var(--muted-text); font-size: .68rem; margin-top: 4px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+/* One span per fact (setWordParts): a dot between them off Liquid; the Liquid
+   sheet spaces them instead. */
+:root:not([data-style="liquid"]) .yt-now-sub > span + span::before { content: '\00a0· '; }
 .yt-now .yt-ib { width: 32px; min-width: 32px; padding: 7px; background: transparent; }
 .yt-blocked { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 14px; padding: 20px; background: #101315; color: #f2f3f4; text-align: center; }
 .yt-blocked-txt { max-width: 38ch; font-size: .8rem; line-height: 1.6; }
 .yt-blocked-btn { border: 0; border-radius: 8px; padding: 10px 14px; background: var(--yt-accent); color: white; font-size: .75rem !important; font-weight: 700 !important; }
-.yt-card--library { flex: 1 1 290px; min-height: 290px; display: flex; flex-direction: column; gap: 10px; padding: 12px; overflow: hidden; }
+/* An inline-size container of its own, so a narrow column keeps its tabs on one row. */
+.yt-card--library { flex: 1 1 290px; min-height: 290px; display: flex; flex-direction: column; gap: 10px; padding: 12px; overflow: hidden; container: ytlib / inline-size; }
 .yt-tabs { display: flex; gap: 12px; flex-shrink: 0; border-bottom: 1px solid var(--line); }
 .yt-tab { display: flex; align-items: center; gap: 5px; padding: 7px 0 12px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--muted-text); background: transparent; font-size: .72rem !important; white-space: nowrap; }
 .yt-tab.is-on { border-bottom-color: var(--yt-accent); color: var(--text); }
+/* Inactive tabs drop their word and keep their icon (the label stays in the tooltip). */
+@container ytlib (max-width: 380px) {
+  .yt-logo { display: none; }
+  .yt-tab:not(.is-on) .yt-tab-lbl { display: none; }
+}
 .yt-tab-ico { display: inline-flex; }
 .yt-tab-ico svg { width: 13px; height: 13px; }
 .yt-account-tabs { flex: 0 0 auto; max-width: 100%; min-height: 30px; border: 1px solid var(--line); border-radius: 6px; padding: 4px 7px; color: var(--muted-text); background: var(--input-bg); font-size: .7rem !important; }
-.yt-setup { width: 100%; justify-content: flex-start !important; text-align: left; }
+:root:not([data-style="liquid"]) .yt-setup { width: 100%; justify-content: flex-start !important; text-align: left; }
 .yt-setup .yt-button-label { overflow-wrap: anywhere; }
 .yt-list-summary { display: flex; justify-content: space-between; gap: 8px; font-size: .65rem; font-weight: 600; color: var(--muted-text); }
-.yt-list { flex: 1 1 90px; display: flex; flex-direction: column; gap: 8px; min-height: 72px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent; overscroll-behavior: contain; }
+.yt-list { flex: 1 1 90px; display: flex; flex-direction: column; gap: 8px; min-height: 72px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent; overscroll-behavior-y: contain; }
 .yt-local-row { display: flex; align-items: center; min-width: 0; gap: 4px; }
 .yt-row { flex: 0 0 auto; width: 100%; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 5px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text); text-align: left; }
 .yt-local-row .yt-row { flex: 1 1 auto; width: auto; }

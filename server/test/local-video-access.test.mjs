@@ -58,7 +58,8 @@ test('local video responses cannot be wrapped in readable cross-origin JSONP', (
   assert.ok(matchFunction);
   const allowed = vm.runInNewContext('(' + matchFunction[0] + ')', { JSONP_PATHS: allowedPaths });
   for (const route of routes) assert.equal(allowed('/media/local/' + route), false, route);
-  assert.equal(allowed('/media/playpause'), true, 'preserve the existing iCUE transport');
+  // 5.0 keeps JSONP for the iCUE widget's /status only.
+  assert.equal(allowed('/status'), true, 'preserve the iCUE status transport');
 });
 
 test('the real request preamble enforces the guard before exposing media or CORS', async () => {
@@ -69,6 +70,8 @@ test('the real request preamble enforces the guard before exposing media or CORS
   assert.ok(end > from);
   const preamble = vm.runInNewContext('(async (req, res) => {' + server.slice(from, end) + '\nreturn true;})', {
     URL, isAllowedRequest: () => true, _remoteGate: () => ({ paired: true }),
+    // 5.0's cross-site guard (cross-site.js) runs first; its own tests cover it.
+    refusedCrossSite: () => false, PORT: 3031, isJsonpAllowed: () => false,
     isAllowedLocalMediaRequest: serverFunction('isAllowedLocalMediaRequest'),
   });
   const response = () => ({
