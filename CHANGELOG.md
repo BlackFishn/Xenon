@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — Power plan picker fix
+
+- **Picking a power plan closes the menu again.** Since the 5.0 merge the plan switched but the menu stayed open with every row greyed out and no confirmation, because the picker still called a notice the merge had removed. It now closes and confirms through the app's usual toast; a refused switch keeps the menu open and says so.
+
 ## Unreleased — Smart Home card layout on 5.0
 
 - Bring back this fork's **Custom** card layout for the Smart Home tile on top of Xenon 5.0: every entity as its own card, in your order, with your sections, subsections and card sizes. Cards are dragged, resized and grouped on the tile itself while the layout is being edited.
