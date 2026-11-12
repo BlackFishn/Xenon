@@ -225,6 +225,13 @@
 
   function _onPlanMenuKey(e) { if (e.key === 'Escape') _closePlanMenu(); }
 
+  // The picker's result through the app's shared toast (toast.js). Never throws:
+  // the 5.0 merge dropped this file's own toast, and the ReferenceError after a
+  // successful switch left the menu open with every row disabled.
+  function _planToast(type, title) {
+    try { if (window.XenonToast) window.XenonToast.show({ type, title }); } catch { /* a missing toast must not break the picker */ }
+  }
+
   function _closePlanMenu() {
     if (!_planMenuEl) return;
     const el = _planMenuEl;
@@ -319,14 +326,16 @@
         if (item.disabled || isActive) { _closePlanMenu(); return; }
         list.querySelectorAll('.perf-plan-item').forEach(b => { b.disabled = true; });
         item.classList.add('is-busy');
-        const set = await powerPlan('POST', String(plan.guid));
+        let set = null;
+        try { set = await powerPlan('POST', String(plan.guid)); } catch { /* reported as a failure below */ }
         if (set && set.ok) {
-          _perfToastText(tr('perf_plan_changed', 'Power plan changed') + (plan.name ? ' · ' + plan.name : ''), 'ok');
+          // Close first: whatever the toast does, the menu must not stay up.
           _closePlanMenu();
+          _planToast('success', tr('perf_plan_changed', 'Power plan changed') + (plan.name ? ' · ' + plan.name : ''));
         } else {
           item.classList.remove('is-busy');
           list.querySelectorAll('.perf-plan-item').forEach(b => { b.disabled = false; });
-          _perfToastText(tr('perf_plan_failed', 'Could not change power plan'), 'error');
+          _planToast('error', tr('perf_plan_failed', 'Could not change power plan'));
         }
       });
       list.appendChild(item);
