@@ -521,7 +521,7 @@ const { runGuarded } = require('./http/request-boundary.js');
 const remoteControlTailscale = require('./remote-control/tailscale');
 const remoteControlInstaller = require('./remote-control/installer');
 const { createSelfUpdate } = require('./self-update');
-const { createHelperUpdate, HELPER_ASSET, HELPER_ASSET_MAC, MIN_MAC_HELPER, CAPTURE_ASSET, CAPTURE_ASSET_MAC, CAPTURE_ASSET_LINUX } = require('./helper-update');
+const { createHelperUpdate, HELPER_ASSET, HELPER_ASSET_MAC, MIN_MAC_HELPER, CAPTURE_ASSET, CAPTURE_ASSET_MAC, CAPTURE_ASSET_LINUX } = require('./helper-update'); const { runHelperFirstInstall } = require('./helper-first-install.js');
 const { createNativeInstallerFetch } = require('./native-installer');
 let _nativeInstallInFlight = null; // one verified installer download at a time (POST /api/native/install)
 // PresentMon 1.10.0, the last classic single-binary CLI fpsmon.js parses: the
@@ -1227,9 +1227,8 @@ const HELPER_EXE = path.join(__dirname, 'helper',
 // did before macOS had a media path at all.
 const MEDIAREMOTE_DIR = path.join(__dirname, 'mediaremote');
 const CPU_TEMP_SCRIPT = path.join(__dirname, 'cpu-temp.ps1');
-// Raises the startup task to RunLevel Highest via UAC — the repair for
-// sensorAccess: 'needs_admin'. Elevates itself; never runs on the pwsh worker.
-const ENABLE_SENSORS_SCRIPT = path.join(__dirname, 'enable-sensors.ps1');
+const ENABLE_SENSORS_SCRIPT = path.join(__dirname, 'enable-sensors.ps1'); // one UAC prompt: the sensor service
+const sensorService = require('./sensor-service/reader.js').instance();
 const GPU_SCRIPT = path.join(__dirname, 'gpu.ps1');
 const NETWORK_SCRIPT = path.join(__dirname, 'network.ps1');
 const DISK_IO_SCRIPT = path.join(__dirname, 'disk-io.ps1');
@@ -1271,7 +1270,7 @@ const DATA_DIR = path.join(__dirname, 'data');
 // right after a server restart, instead of re-blocking on the upstream fetch and
 // erroring when the site is momentarily unreachable. Read is tolerant of an absent
 // file; the writable dir is ensured by migrateLegacyData() before any fetch writes.
-communityCatalog.initCache({ dataDir: DATA_DIR });
+communityCatalog.initCache({ dataDir: DATA_DIR, appVersion: APP_VERSION });
 // Last-known model lists, so the first AI turn after a restart resolves against
 // what the providers actually offer instead of the built-in offline defaults.
 aiModels.initCache({ dataDir: DATA_DIR });
@@ -1282,7 +1281,7 @@ const lyricsCache = createLyricsCache({ dataDir: DATA_DIR });
 const lyricsOffsets = createLyricsOffsets({ dataDir: DATA_DIR });
 const lyricsTranslator = createLyricsTranslator({
   dataDir: DATA_DIR,
-  complete: (req) => completeWithUserAi({ ...req, json: true, temperature: 0.2 }),
+  complete: (req) => completeWithUserAi({ ...req, json: true, temperature: 0.2, use: 'lyrics' }),
   // The provider's own message (no lyrics, no key): enough to tell a bad key from a bad reply.
   onError: (e) => console.warn('[lyrics] translation failed:', String((e && e.message) || e).slice(0, 200)),
 });
@@ -1290,7 +1289,7 @@ const lyricsTranslator = createLyricsTranslator({
 // user's daily number per widget. Never logs a question or an answer.
 const sdkAi = createSdkAi({
   dataDir: DATA_DIR,
-  complete: (req) => completeWithUserAi(req),
+  complete: (req) => completeWithUserAi({ ...req, use: 'widget' }),
   blocker: () => userAiBlocker(),
   onError: (e) => console.warn('[sdk-ai] question failed:', String((e && e.message) || e).slice(0, 200)),
 });
@@ -5169,7 +5168,7 @@ async function getCpuTemp() {
 
   cpuTempPending = (async () => {
     try {
-      const data = nativeCollectors ? await nativeCollectors.cpuTemp() : await runCollector(CPU_TEMP_SCRIPT, [], 10000);
+      const data = nativeCollectors ? await nativeCollectors.cpuTemp() : ((await sensorService.cpu(sensorRateMs())) || await runCollector(CPU_TEMP_SCRIPT, [], 10000));
       // Windows PowerShell 5.1 can unwrap a single-element array on serialize.
       let fans = data.fans;
       if (fans && !Array.isArray(fans)) fans = [fans];
@@ -5260,7 +5259,7 @@ async function collectSensors(ids) {
   if (!POWERSHELL_SUPPORTED) return { known: true, sensors: [] };
   // The worker only: sensors.ps1 walks the LHM sessions that live there, so a
   // one-shot spawn would answer an empty list that looks like a sensorless PC.
-  const raw = parseJsonOutput(await runPowerShellWorker(SENSORS_SCRIPT, ids ? ['read', ids.join('|')] : ['list'], 8000));
+  const raw = await sensorService.mergeSensors(parseJsonOutput(await runPowerShellWorker(SENSORS_SCRIPT, ids ? ['read', ids.join('|')] : ['list'], 8000)), ids);
   if (!raw || raw.ok !== true) return { known: false, sensors: [] };
   const list = Array.isArray(raw.sensors) ? raw.sensors : (raw.sensors ? [raw.sensors] : []);
   return { known: raw.lhm === true, sensors: SensorSources.normalizeSensorCatalog(list) };
@@ -6199,7 +6198,7 @@ async function smallTaskModel(provider, settings) {
 // `json` asks Gemini for a JSON reply; the other providers follow the prompt.
 // `image` ({ mimeType, data } base64) is a picture the request is about; check
 // userAiVisionBlocker() first, since a plan run through its program sees none.
-async function completeWithUserAi({ system, user, maxTokens, json = false, temperature, image = null }) {
+async function completeWithUserAi({ system, user, maxTokens, json = false, temperature, image = null, use }) {
   const settings = await readHubSettings().catch(() => null) || {};
   const provider = aiLocal.sanitizeProvider(settings.aiProvider);
   let tokens = 0;
@@ -6234,7 +6233,7 @@ async function completeWithUserAi({ system, user, maxTokens, json = false, tempe
       model: await smallTaskModel(provider, settings), systemText: system, userText: user, maxTokens, onUsage, image,
     });
   } else if (provider === 'xenon') {
-    text = await aiXenon.oneShot({ dataDir: DATA_DIR, systemText: system, userText: user, maxTokens, onUsage, image });
+    text = await aiXenon.oneShot({ dataDir: DATA_DIR, systemText: system, userText: user, maxTokens, onUsage, image, use });
   } else if (provider === 'gemini') {
     const apiKey = await geminiKeyFor('');
     const opts = { model: await smallTaskModel(provider, settings), temperature, json, onUsage };
@@ -6307,6 +6306,7 @@ function parseCsvLine(line) {
 
 async function _getAudioInfoRaw() {
   const allRows = await readSoundVolumeRows();
+  _appSessions.remember(allRows);
 
   // ── Device-level (master) ────────────────────────────────────
   const deviceRows = allRows.filter(f => f[F.TYPE] === 'Device' && f[F.STATE] === 'Active');
@@ -6488,15 +6488,13 @@ function svvExec(args) {
   return run.finally(() => { audioPending = null; });
 }
 
-// Normalise a per-app audio target for SoundVolumeView: a bare process name with
-// a .exe suffix (the durable identifier the Deck stores, vs. the volatile CLI id).
-function appAudioTarget(app) {
-  const base = String(app || '').split(/[\\/]/).pop().trim();
-  // A blank app name yields a blank target, never the bare ".exe" — which the
-  // Linux matcher reads as "every stream on the machine" once the suffix is
-  // stripped. Callers refuse an empty target instead of aiming at everything.
-  if (!base) return '';
-  return /\.exe$/i.test(base) ? base : base + '.exe';
+// Per-app volume and mute reach one direction of an app (app-audio/sessions.js):
+// the microphone slider no longer moves the same app's output.
+const _appSessions = require('./app-audio/sessions.js').createAppSessions({ readRows: readSoundVolumeRows, F });
+async function svvEachApp(app, dir, args) {
+  const targets = await _appSessions.targets(app, dir);
+  if (!targets.length) throw new Error('no_app_session');
+  for (const t of targets) await svvExec(args(t));
 }
 
 // Lazy OBS WebSocket client — reads live settings on each new connection so
@@ -7433,16 +7431,12 @@ const deckRegistryDeps = {
     if (mode === 'set') return svvExec(['/SetVolume', cachedSpeakerId, String(value)]);
   },
   appVolume: async (app, mode, value) => {
-    const target = appAudioTarget(app);
-    if (!target) throw new Error('no app named');
-    if (mode === 'set') return svvExec(['/SetVolume', target, String(value)]);
-    return svvExec(['/ChangeVolume', target, mode === 'down' ? '-5' : '5']);
+    if (mode === 'set') return svvEachApp(app, '', (t) => ['/SetVolume', t, String(value)]);
+    return svvEachApp(app, '', (t) => ['/ChangeVolume', t, mode === 'down' ? '-5' : '5']);
   },
   appMute: async (app, mode) => {
-    const target = appAudioTarget(app);
-    if (!target) throw new Error('no app named');
     const verb = mode === 'mute' ? '/Mute' : mode === 'unmute' ? '/Unmute' : '/Switch';
-    return svvExec([verb, target]);
+    return svvEachApp(app, '', (t) => [verb, t]);
   },
   // Switch the default OUTPUT device. The id is matched against the live
   // enumeration before it is used, and only against `speakers` — this is the
@@ -7835,7 +7829,7 @@ async function chooseSensorSource(args) {
 // layer page (which never writes the whole blob). Same lock, rev bump and
 // broadcast as change_setting; the notifications reader follows its switch.
 async function saveTileSettings(body) {
-  const plan = TileSettings.plan(body);
+  const plan = TileSettings.plan(body, { cards: DASHBOARD_CARD_IDS });
   if (plan.error) return { ok: false, ...plan };
   let rev = null;
   await withHubSettingsLock(async () => {
@@ -10159,7 +10153,7 @@ const DEFAULT_HUB_SETTINGS = Object.freeze({
   // Native canvas Ambient scenes (client-owned, like customThemes).
   ambientScenes: Object.freeze([]),
   contentInstalls: Object.freeze([]),
-  weather: Object.freeze({ mode: 'auto', city: '', provider: 'auto', refreshMin: 30, forecastDays: 3, tile: Object.freeze({ hero: 'full', metrics: true, hourly: true, forecast: true, fields: WEATHER_FIELDS_ALL_ON }) }),
+  weather: Object.freeze({ mode: 'auto', city: '', provider: 'auto', refreshMin: 30, forecastDays: 3, tile: Object.freeze({ hero: 'full', look: 'new', metrics: true, hourly: true, forecast: true, fields: WEATHER_FIELDS_ALL_ON }) }),
   tempUnit: 'c', // 'c' | 'f' — weather temperature display unit
   hwTempUnit: 'auto', // 'auto' | 'c' | 'f' — hardware readings; auto follows tempUnit
   // Mirrors js/settings.js: 'off' | 'minimal' | 'wave'. Read by
@@ -10735,8 +10729,8 @@ function normalizeSettingsWeather(value) {
     ? Number(source.forecastDays) : DEFAULT_HUB_SETTINGS.weather.forecastDays;
   const srcTile = source.tile && typeof source.tile === 'object' ? source.tile : {};
   const defTile = DEFAULT_HUB_SETTINGS.weather.tile;
-  // 'full' | 'compact' — mirror of WEATHER_TILE_HEROES in js/settings.js.
-  const tile = { hero: ['full', 'compact'].includes(srcTile.hero) ? srcTile.hero : defTile.hero };
+  // Mirrors of WEATHER_TILE_HEROES and WEATHER_TILE_LOOKS in js/settings.js.
+  const tile = { hero: ['full', 'compact'].includes(srcTile.hero) ? srcTile.hero : defTile.hero, look: ['new', 'classic', 'custom'].includes(srcTile.look) ? srcTile.look : defTile.look };
   ['metrics', 'hourly', 'forecast'].forEach(k => { tile[k] = typeof srcTile[k] === 'boolean' ? srcTile[k] : defTile[k]; });
   const srcFields = srcTile.fields && typeof srcTile.fields === 'object' ? srcTile.fields : {};
   const fields = {};
@@ -15690,6 +15684,7 @@ const CSRF_MUTATION_PATHS = new Set([
   // guarded here too: a cross-site drive-by must not be able to make the local
   // server throw an administrator prompt at the user.
   '/system/enable-sensors',
+  '/api/ffmpeg/install',
   // Opens a System Settings pane in front of whatever the user was doing. It
   // grants nothing and takes no input, but a page that could throw the
   // permissions pane on screen at will is a nuisance a drive-by should not have.
@@ -17058,7 +17053,7 @@ async function _aiPerformancePlan({ activity, appNames, opts, provider, key, mod
       return _normalizePerfPlan(text, names);
     }
     if (provider === 'xenon') {
-      const text = await aiXenon.oneShot({ dataDir: DATA_DIR, systemText: 'You output only a single JSON object, never prose or markdown.', userText: prompt, maxTokens: 500 });
+      const text = await aiXenon.oneShot({ dataDir: DATA_DIR, systemText: 'You output only a single JSON object, never prose or markdown.', userText: prompt, maxTokens: 500, use: 'perf' });
       return _normalizePerfPlan(text, names);
     }
     if (aiCli.isCliProvider(provider)) {
@@ -17675,14 +17670,12 @@ const handleRequest = async (req, res) => {
     catch (e) { err500(e.message); }
 
   } else if (reqPath === '/system/enable-sensors' && req.method === 'POST') {
-    // One-tap repair for `sensorAccess: 'needs_admin'`: raise the startup task to
-    // RunLevel Highest through a UAC prompt, so LHM can load its kernel driver and
-    // CPU temperature / fan RPM / CPU watts start working. Fixed argv, no request
-    // value ever reaches a command line; the UAC prompt is the real gate, so the
-    // worst a drive-by achieves is a prompt the user declines. POST-only, never
-    // JSONP, and listed in CSRF_MUTATION_PATHS.
+    // One tap for `sensorAccess` 'needs_admin' or 'missing', or an outdated sensor
+    // service: one UAC prompt installs LHM + PawnIO if missing and the sensor service.
+    // Fixed argv, no request value reaches a command line; the prompt is the real
+    // gate. POST-only, never JSONP, in CSRF_MUTATION_PATHS.
     try {
-      const out = await runPowerShellScript(ENABLE_SENSORS_SCRIPT, [], 120000);
+      const out = await runPowerShellScript(ENABLE_SENSORS_SCRIPT, [], 600000); // may install LHM + PawnIO first
       json(out && typeof out === 'object' ? out : { ok: false, status: 'failed', message: 'no result' });
     } catch (e) { json({ ok: false, status: 'failed', message: e.message }); }
 
@@ -17737,7 +17730,7 @@ const handleRequest = async (req, res) => {
 
   } else if (featureRoutes.has(req.method, reqPath)) {
     // A route that lives in its feature's routes.js (feature-routes.js).
-    await featureRoutes.run(req.method, reqPath, req, res, { json, sdkStreamGranted: _sdkStreamGranted, history: guardian });
+    await featureRoutes.run(req.method, reqPath, req, res, { json, sdkStreamGranted: _sdkStreamGranted, history: guardian, getFfmpegPath });
 
   } else if (reqPath === '/api/gamemode/status' && req.method === 'GET') {
     // Game mode runs off foreground full-screen detection (no PresentMon needed).
@@ -18451,47 +18444,49 @@ const handleRequest = async (req, res) => {
 
   } else if (reqPath === '/audio/app/volume' && (req.method === 'POST' || req.method === 'GET')) {
     try {
-      let id, level, proc;
+      let id, level, proc, dir;
       if (req.method === 'GET') {
         id = urlObj.searchParams.get('id');
         proc = urlObj.searchParams.get('proc');
+        dir = urlObj.searchParams.get('dir');
         level = parseInt(urlObj.searchParams.get('level'));
       } else {
-        ({ id, level, proc } = JSON.parse(await readBody(req)));
+        ({ id, level, proc, dir } = JSON.parse(await readBody(req)));
       }
-      // Prefer the durable process-name target over the session CLI id, which
-      // SoundVolumeView rotates across app restarts (a stale id is a silent miss).
-      const target = proc ? appAudioTarget(proc) : String(id || '').trim();
-      // Checked AFTER normalisation, never on the raw fields: proc="   " (or
-      // ".exe") passed the old `!id && !proc` test and reduced to a target the
-      // Linux matcher read as "every audio stream on this machine".
-      if (!target) { err500('Missing id'); return; }
       const vol = Math.max(0, Math.min(100, parseInt(level)));
       // Natural behaviour: 0 = silent (muted) for that app, >0 = audible.
-      svvExec(['/SetVolume', target, String(vol)])
-        .then(() => svvExec([vol === 0 ? '/Mute' : '/Unmute', target]))
-        .then(() => json({ ok: true, level: vol }), e => err500(e.message));
+      const set = (t) => svvExec(['/SetVolume', t, String(vol)]).then(() => svvExec([vol === 0 ? '/Mute' : '/Unmute', t]));
+      // The process name (durable: the session CLI id rotates across app restarts)
+      // in one direction; a bare id only from an older client. An empty target is
+      // refused, never read as "every stream" (proc="   " used to pass).
+      const target = String(id || '').trim();
+      const done = String(proc || '').trim()
+        ? svvEachApp(proc, dir, (t) => ['/SetVolume', t, String(vol)]).then(() => svvEachApp(proc, dir, (t) => [vol === 0 ? '/Mute' : '/Unmute', t]))
+        : (target ? set(target) : Promise.reject(new Error('Missing id')));
+      done.then(() => json({ ok: true, level: vol }), e => err500(e.message));
     } catch (e) { err500(e.message); }
 
   } else if (reqPath === '/audio/app/mute' && (req.method === 'POST' || req.method === 'GET')) {
     try {
-      let id, muted, proc;
+      let id, muted, proc, dir;
       if (req.method === 'GET') {
         id = urlObj.searchParams.get('id');
         proc = urlObj.searchParams.get('proc');
+        dir = urlObj.searchParams.get('dir');
         muted = urlObj.searchParams.get('muted');
       } else {
-        ({ id, muted, proc } = JSON.parse(await readBody(req)));
+        ({ id, muted, proc, dir } = JSON.parse(await readBody(req)));
       }
-      // Prefer the durable process-name target over the volatile session CLI id.
-      const target = proc ? appAudioTarget(proc) : String(id || '').trim();
-      // See /audio/app/volume: an empty target used to select every stream.
-      if (!target) { err500('Missing id'); return; }
       // Explicit state (deterministic) when the client tells us; else toggle.
       const action = muted === undefined || muted === null
         ? '/Switch'
         : ((muted === true || muted === 'true' || muted === '1') ? '/Mute' : '/Unmute');
-      svvExec([action, target]).then(() => json({ ok: true }), e => err500(e.message));
+      // Same targets as /audio/app/volume.
+      const target = String(id || '').trim();
+      const done = String(proc || '').trim()
+        ? svvEachApp(proc, dir, (t) => [action, t])
+        : (target ? svvExec([action, target]) : Promise.reject(new Error('Missing id')));
+      done.then(() => json({ ok: true }), e => err500(e.message));
     } catch (e) { err500(e.message); }
 
   } else if (reqPath === '/audio/levels/status' && req.method === 'GET') {
@@ -18523,13 +18518,7 @@ const handleRequest = async (req, res) => {
       const status = await _helperInstall;
       const ok = status === 'installed' || status === 'up-to-date';
       startupLog.write('helper install from Settings: ' + status);
-      if (ok) {
-        writeFileAtomic(HELPER_CHECK_MARKER, APP_VERSION).catch(() => {});
-        // A helper that gave up (too old, kept dying) gets a fresh start now,
-        // not at the next restart.
-        audioLevels.reset();
-        refreshAudioLevelsWatch();
-      }
+      if (ok) helperArrived();
       json({ ok, status });
     } catch (e) { json({ ok: false, status: 'error', detail: String(e && e.message || e) }); }
 
@@ -19112,7 +19101,8 @@ const handleRequest = async (req, res) => {
 
   } else if (reqPath === '/whatsnew' && req.method === 'GET') {
     // Curated highlights for the running version (see loadWhatsNew). Static and
-    // shipped with the build; the client gates display on the `id`.
+    // shipped with the build; the client gates display on the `id`. A new install
+    // gets them too: the major's sheets first, then the notes since it.
     try { json({ ...(await loadWhatsNew()), version: APP_VERSION }); } catch (e) { err500(e.message); }
 
   } else if (reqPath === '/update/notice-seen' && req.method === 'POST') {
@@ -19920,9 +19910,9 @@ const handleRequest = async (req, res) => {
     try { json(await supporterRedeem.savedStatus(DATA_DIR)); } catch (e) { err500(e.message); }
 
   } else if (reqPath === '/api/community/supporter/save' && req.method === 'POST') {
-    // Storing the pass from Settings, before any drop asks for it. Shape only:
-    // whether it WORKS is a question the hub answers against a specific entry,
-    // so there is nothing to check against here. In CSRF_MUTATION_PATHS.
+    // Storing the pass from Settings, before any drop asks for it. The hub is
+    // asked once whether it knows the code (supporter-redeem.js saveTypedCode).
+    // In CSRF_MUTATION_PATHS.
     //
     // Its own path rather than a POST on /api/community/supporter: that GET is a
     // pure read the import dialog makes from every surface, including a paired
@@ -19930,7 +19920,7 @@ const handleRequest = async (req, res) => {
     // remote door. Splitting the write off keeps the read reachable.
     try {
       const body = JSON.parse(await readBody(req) || '{}');
-      const saved = await supporterRedeem.saveTypedCode(DATA_DIR, body.code);
+      const saved = await supporterRedeem.saveTypedCode(DATA_DIR, body.code, { verify: true });
       // A Sparks code already here moves onto the new pass (sparks-wallet.js).
       if (saved && saved.ok) await sparksWallet.mergeIfBoth(DATA_DIR);
       json(saved);
@@ -21397,7 +21387,7 @@ const handleRequest = async (req, res) => {
         ? `The user asks: «${question}». Answer their question, grounded in what you see on screen. Reply in ${langName}: short plain sentences, no markdown, no preamble.`
         : `Identify the game and the current in-game situation, then give ONE concrete, immediately useful tip (strategy, mechanic, objective, build…). Reply in ${langName}: 2-3 short plain sentences, no markdown, no preamble. If the screen is clearly not a game, briefly say what you see instead.`;
       const { text, sparks } = await completeWithUserAi({
-        system: sysText,
+        use: 'insight', system: sysText,
         user: `Live screenshot of the user's primary monitor${fgProc ? ` (foreground process: "${fgProc}")` : ''}. ${task}`,
         image: { mimeType: 'image/jpeg', data: shot },
         maxTokens: 512,
@@ -22095,7 +22085,7 @@ const handleRequest = async (req, res) => {
         const out = await mod.oneShot({ apiKey: provKey, model: provModel, systemText: sysText, userText, maxTokens: 400 }).catch(() => '');
         if (out) summary = String(out).trim().slice(0, 2000);
       } else if (provider === 'xenon') {
-        const out = await aiXenon.oneShot({ dataDir: DATA_DIR, systemText: sysText, userText, maxTokens: 400 }).catch(() => '');
+        const out = await aiXenon.oneShot({ dataDir: DATA_DIR, systemText: sysText, userText, maxTokens: 400, use: 'summary' }).catch(() => '');
         if (out) summary = String(out).trim().slice(0, 2000);
       } else if (aiCli.isCliProvider(provider)) {
         const out = await cliOneShot(provider, sysText, userText).catch(() => '');
@@ -22190,7 +22180,7 @@ const handleRequest = async (req, res) => {
         text = await roastSparks.spend(petCfg.roastSparksCap, async () => {
           let credits = NaN;
           const out = await aiXenon.oneShot({
-            dataDir: DATA_DIR, systemText: sysText, userText, maxTokens: 100,
+            dataDir: DATA_DIR, systemText: sysText, userText, maxTokens: 100, use: 'roast',
             onUsage: (_tokens, u) => { credits = u && u.credits; },
           });
           return { text: out, credits };
@@ -23771,7 +23761,7 @@ const handleRequest = async (req, res) => {
           apiKey: key, model, systemText: sysText, userText, maxTokens: 1500,
         }).catch(() => '');
       } else if (provider === 'xenon') {
-        text = await aiXenon.oneShot({ dataDir: DATA_DIR, systemText: sysText, userText, maxTokens: 1500 }).catch(() => '');
+        text = await aiXenon.oneShot({ dataDir: DATA_DIR, systemText: sysText, userText, maxTokens: 1500, use: 'disk' }).catch(() => '');
       } else if (aiCli.isCliProvider(provider)) {
         text = await cliOneShot(provider, sysText, userText, settings).catch(() => '');
       } else {
@@ -26620,11 +26610,20 @@ const HELPER_CHECK_MARKER = path.join(DATA_DIR, 'helper-checked.txt');
 let _helperInstall = null;   // one Settings install at a time; a second tap waits on the first
 const HELPER_REFRESH_MAX_TRIES = 6;             // in-session retries before falling back to next boot
 const HELPER_REFRESH_RETRY_MS = 3 * 60 * 1000;  // 3 min apart → ~15 min of coverage after the first try
+// A helper that just arrived: this version counts as checked, and meters that gave up start fresh now.
+function helperArrived() {
+  writeFileAtomic(HELPER_CHECK_MARKER, APP_VERSION).catch(() => {});
+  audioLevels.reset();
+  refreshAudioLevelsWatch();
+}
 function ensureHelperUpToDate(attempt = 1) {
   const asset = { win32: HELPER_ASSET, darwin: HELPER_ASSET_MAC }[process.platform]; // Linux has no helper
   if (!asset || !APP_VERSION) return;
   try {
-    if (!fs.existsSync(HELPER_EXE)) return; // declined or never arrived: never surprise-download
+    if (!fs.existsSync(HELPER_EXE)) { // declined or never arrived: never surprise-download, except a carried install's first start
+      if (attempt === 1) runHelperFirstInstall({ dataDir: DATA_DIR, install: () => createHelperUpdate({ helperExe: HELPER_EXE, appVersion: APP_VERSION, asset }).install(), log: (l) => startupLog.write(l), onInstalled: helperArrived }).catch(() => {});
+      return;
+    }
     let marked = '';
     try { marked = fs.readFileSync(HELPER_CHECK_MARKER, 'utf8').trim(); } catch { /* first run */ }
     if (marked && marked === APP_VERSION) return; // already ensured for this version
@@ -26635,11 +26634,8 @@ function ensureHelperUpToDate(attempt = 1) {
       const done = status === 'up-to-date' || status === 'installed'
         || status === 'skip-not-latest' || status === 'no-helper';
       if (done) { writeFileAtomic(HELPER_CHECK_MARKER, APP_VERSION).catch(() => {}); return; }
-      // Transient (the signed assets aren't attached yet — CI does that a few minutes
-      // after a release is published — or a network hiccup / hash mismatch). Retry a
-      // few times THIS session so someone who updates the instant a release goes out
-      // still lands the verified helper without waiting for a restart; after the cap it
-      // falls back to the next-boot retry (the marker stays unwritten).
+      // Transient (assets not attached yet, network, hash mismatch): retry this session,
+      // then at the next boot (the marker stays unwritten).
       if (attempt < HELPER_REFRESH_MAX_TRIES) {
         setTimeout(() => { try { ensureHelperUpToDate(attempt + 1); } catch { /* ignore */ } }, HELPER_REFRESH_RETRY_MS).unref();
       }
@@ -26788,6 +26784,7 @@ function _startListen(host) {
     // and fire-and-forget so it never competes with boot; runs at most once per version.
     setTimeout(() => { try { ensureHelperUpToDate(); } catch { /* ignore */ } }, 8000);
     setTimeout(() => { try { ensureCaptureEngine(); } catch { /* ignore */ } }, 12000);
+    setTimeout(() => { require('./sensor-service/migrate.js').migrateElevatedEngine({ dataDir: DATA_DIR, version: APP_VERSION, script: ENABLE_SENSORS_SCRIPT }).catch(() => {}); }, 15000);
     // After the engine's first look, so what it can do is known. Not there yet = next start.
     setTimeout(() => { capabilityRunner.seedKeys().catch((e) => console.warn('[keys] defaults failed:', e && e.message)); }, 20000);
     // Its first look is two minutes in: the dashboard's own startup comes first.
@@ -27557,6 +27554,12 @@ const _exclusiveHint = createExclusiveHint({
   },
   broadcast: (payload) => broadcastSSE('exclusive_hint', payload),
 });
+// FPS needs a Windows permission since 5.1.0: one pop-up per version (fps-notice.js).
+const _fpsNotice = require('./sensor-service/fps-notice.js').createFpsNotice({
+  access: require('./sensor-service/fps-access.js').instance(), dataDir: DATA_DIR, version: APP_VERSION,
+  readerReady: () => fpsMonitor.backend === 'presentmon' && fpsMonitor.isAvailable(),
+  broadcast: (payload) => broadcastSSE('fps_access', payload),
+});
 const _perfStream = createPerfStream({
   fps: fpsMonitor,
   why: () => _stutterWatch.current(),
@@ -27567,6 +27570,7 @@ const _perfStream = createPerfStream({
   bench: () => _benchmark.status(),
   // A game that runs but draws no readable frames is named, not "start a game".
   game: () => (gameDetect.isGameRunning() ? gameDetect.getGameProcess() : ''),
+  access: () => require('./sensor-service/fps-access.js').instance().current(),
 });
 // With Game Mode on, or in a Performance Mode session, the background work that can
 // wait does, for as long as a game runs. Everything that answers a person keeps answering.
@@ -27687,6 +27691,7 @@ async function _systemTick() {
         const game = gameDetect.isGameRunning() ? gameDetect.getGameProcess() : '';
         _stutterWatch.onSystem(game ? { ...sys, cpuMaxCore: cachedCpuMaxCore } : null, game);
         try { _exclusiveHint.onTick(game); } catch {}
+        _fpsNotice.onTick(game);
       } catch {}
     } catch {}
   }

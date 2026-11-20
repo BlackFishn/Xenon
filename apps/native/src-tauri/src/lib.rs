@@ -2,6 +2,7 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 mod crash_log;
 mod embed_nav;
+mod engine_install;
 #[cfg(windows)]
 mod crosshair_launch;
 #[cfg(windows)]
@@ -15,6 +16,23 @@ mod gpu;
 mod layers;
 #[cfg(windows)]
 pub use layers::{pad_reader, PAD_READER_ARG};
+
+/// First argument that turns this binary into the engine install self-test.
+pub const ENGINE_SELFTEST_ARG: &str = "--install-engine-selftest";
+
+/// Runs the self-test (`engine_install::selftest`) and returns the exit code.
+pub fn engine_selftest(args: &[String]) -> i32 {
+    engine_install::selftest(args)
+}
+
+/// First argument of the "Installed apps" entry: remove Xenon (Windows).
+pub const UNINSTALL_ARG: &str = "--uninstall";
+
+/// Removes the engine this app installed, then the app (`engine_install::uninstall`).
+#[cfg(windows)]
+pub fn uninstall() -> i32 {
+    engine_install::uninstall()
+}
 #[cfg(windows)]
 mod login_task;
 mod memory_level;
@@ -229,6 +247,12 @@ pub(crate) fn sync_autostart(app: &tauri::AppHandle) {
     let manager = app.autolaunch();
     #[cfg(windows)]
     login_task::sync(want);
+    #[cfg(windows)]
+    engine_install::keep_one_entry();
+    #[cfg(windows)]
+    if !want {
+        engine_install::keep_task_for_phone();
+    }
     if want {
         // Idempotent, and it REWRITES the entry — which is what migrates an
         // existing registration onto the new `--autostart` argument.
@@ -677,6 +701,15 @@ fn spawn_backend_nudge(app: &tauri::AppHandle, port: u16) {
             // Someone running `node server/server.js` by hand answers it and is
             // left alone.
             if !backend_answers_once(port) {
+                // This build carries the engine: set it up now, with progress on
+                // the splash, instead of offering the old console bootstrap.
+                // Not over an engine already on disk whose task went missing (a
+                // cleanup tool, a failed query): that one is repaired by the
+                // splash's button, on the user's click.
+                if engine_install::packaged(&handle).is_some() && !engine_install::engine_on_disk() {
+                    engine_install::spawn(&handle, port);
+                    return;
+                }
                 tell_splash(&handle, "try{window.__XENON_BACKEND_ABSENT__=true;}catch(e){}");
             }
             return; // no task to nudge
@@ -877,40 +910,68 @@ fn run_backend_bootstrap(app: &tauri::AppHandle) {
     let Some(script) = bootstrap_script(app) else {
         return;
     };
+    let handle = app.clone();
     // Off the WebView UI thread: process creation blocks, and this is called
     // from the navigation hook, which runs on it.
     std::thread::spawn(move || {
-        use std::os::windows::process::CommandExt;
-        let Ok(mut slot) = BOOTSTRAP_CHILD.lock() else {
-            return;
-        };
-        // A console we started is still open: the user is watching that install
-        // right now, and a second one racing it over the same install root is
-        // the one thing this must never do. try_wait reaps an exited one, so a
-        // closed window frees the slot for a genuine retry.
-        if let Some(child) = slot.as_mut() {
-            if matches!(child.try_wait(), Ok(None)) {
-                return;
-            }
-        }
-        // Give the console app a console of its own — this GUI process has
-        // none, and the visible window IS the install progress UI.
-        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
-        // PowerShell by its FULL system path: an unqualified exe name resolves
-        // from the process's own directory first (binary planting, CWE-427).
-        let system_root =
-            std::env::var("SystemRoot").unwrap_or_else(|_| String::from("C:\\Windows"));
-        let powershell = std::path::Path::new(&system_root)
-            .join("System32\\WindowsPowerShell\\v1.0\\powershell.exe");
-        // A failed spawn leaves the slot empty on purpose — the splash hands the
-        // button back after a while, and that retry has to be able to work.
-        *slot = std::process::Command::new(powershell)
-            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
-            .arg(&script)
-            .creation_flags(CREATE_NEW_CONSOLE)
-            .spawn()
-            .ok();
+        start_bootstrap_console(&script);
+        watch_bootstrap_console(&handle);
     });
+}
+
+/// Tells the splash, once a second, whether the console is still open, so it
+/// never says "still not started" over an install the user is watching.
+#[cfg(windows)]
+fn watch_bootstrap_console(handle: &tauri::AppHandle) {
+    use tauri::Manager;
+    loop {
+        let running = BOOTSTRAP_CHILD
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.as_mut().map(|c| matches!(c.try_wait(), Ok(None))))
+            .unwrap_or(false);
+        if let Some(win) = handle.get_webview_window("main") {
+            let _ = win.eval(format!("try{{window.__XENON_SETUP_RUNNING__={running};}}catch(e){{}}"));
+        }
+        if !running {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+}
+
+#[cfg(windows)]
+fn start_bootstrap_console(script: &std::path::Path) {
+    use std::os::windows::process::CommandExt;
+    let Ok(mut slot) = BOOTSTRAP_CHILD.lock() else {
+        return;
+    };
+    // A console we started is still open: the user is watching that install
+    // right now, and a second one racing it over the same install root is
+    // the one thing this must never do. try_wait reaps an exited one, so a
+    // closed window frees the slot for a genuine retry.
+    if let Some(child) = slot.as_mut() {
+        if matches!(child.try_wait(), Ok(None)) {
+            return;
+        }
+    }
+    // Give the console app a console of its own — this GUI process has
+    // none, and the visible window IS the install progress UI.
+    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+    // PowerShell by its FULL system path: an unqualified exe name resolves
+    // from the process's own directory first (binary planting, CWE-427).
+    let system_root =
+        std::env::var("SystemRoot").unwrap_or_else(|_| String::from("C:\\Windows"));
+    let powershell = std::path::Path::new(&system_root)
+        .join("System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    // A failed spawn leaves the slot empty on purpose — the splash hands the
+    // button back after a while, and that retry has to be able to work.
+    *slot = std::process::Command::new(powershell)
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(script)
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .spawn()
+        .ok();
 }
 
 /// macOS twin of the Windows nudge above. The two signals differ from Windows
@@ -1060,6 +1121,28 @@ fn find_node() -> Option<std::path::PathBuf> {
     (!found.is_empty()).then(|| std::path::PathBuf::from(found))
 }
 
+/// Start server.js as this app's child (see spawn_backend_nudge for why it must
+/// be a child here). The node an install carries in `node-runtime` wins over
+/// any system one: it is the version that engine was built and tested with.
+#[cfg(target_os = "macos")]
+pub(crate) fn start_backend_child(entry: &std::path::Path) -> bool {
+    let root = entry.parent().and_then(|p| p.parent());
+    let bundled = root
+        .map(|r| r.join(engine_install::RUNTIME_DIR).join("bin/node"))
+        .filter(|p| p.is_file());
+    let Some(node) = bundled.or_else(find_node) else { return false };
+    let mut cmd = std::process::Command::new(node);
+    cmd.arg(entry);
+    if let Some(root) = root {
+        cmd.current_dir(root);
+    }
+    let Ok(child) = cmd.spawn() else { return false };
+    if let Ok(mut guard) = BACKEND_CHILD.lock() {
+        *guard = Some(child);
+    }
+    true
+}
+
 /// Open a script in Terminal.app and, when `marker` is given, make sure it
 /// actually ran.
 ///
@@ -1126,6 +1209,7 @@ fn spawn_backend_nudge(app: &tauri::AppHandle, port: u16) {
         .resolve("posix/xenon-bootstrap.sh", BaseDirectory::Resource)
         .ok();
     let home = app.path().home_dir().ok();
+    let handle = app.clone();
     std::thread::spawn(move || {
         if backend_answers(port) {
             return;
@@ -1159,19 +1243,13 @@ fn spawn_backend_nudge(app: &tauri::AppHandle, port: u16) {
                     ])
                     .status();
             }
-            if let Some(node) = find_node() {
-                let root = entry.parent().and_then(|p| p.parent());
-                let mut cmd = std::process::Command::new(node);
-                cmd.arg(&entry);
-                if let Some(root) = root {
-                    cmd.current_dir(root);
+            if start_backend_child(&entry) {
+                if let Some(root) = entry.parent().and_then(|p| p.parent()) {
+                    engine_install::ensure_login_item(root);
                 }
-                if let Ok(child) = cmd.spawn() {
-                    if let Ok(mut guard) = BACKEND_CHILD.lock() {
-                        *guard = Some(child);
-                    }
-                }
-            } else if let Some(installer) = entry
+                return;
+            }
+            if let Some(installer) = entry
                 .parent()
                 .map(|p| p.join("install.sh"))
                 .filter(|p| p.exists())
@@ -1187,8 +1265,13 @@ fn spawn_backend_nudge(app: &tauri::AppHandle, port: u16) {
             }
             return;
         }
-        // Nothing installed here at all. Open the bootstrap in Terminal so the
-        // install has a UI and an exit.
+        // Nothing installed here at all. A build that carries the engine sets it
+        // up itself, with progress on the splash; an older one opens the
+        // bootstrap in Terminal so the install has a UI and an exit.
+        if engine_install::packaged(&handle).is_some() {
+            engine_install::spawn(&handle, port);
+            return;
+        }
         let Some(script) = script else { return };
         if !script.exists() {
             return;
@@ -1216,6 +1299,7 @@ fn spawn_backend_nudge(app: &tauri::AppHandle, port: u16) {
         .resolve("posix/xenon-bootstrap.sh", BaseDirectory::Resource)
         .ok();
     let config = app.path().config_dir().ok();
+    let handle = app.clone();
     std::thread::spawn(move || {
         if backend_answers(port) {
             return;
@@ -1245,8 +1329,13 @@ fn spawn_backend_nudge(app: &tauri::AppHandle, port: u16) {
         if autostart.map(|p| p.exists()).unwrap_or(false) {
             return;
         }
-        // Nothing installed → offer to set the backend up, in a terminal the
-        // user can read and interrupt.
+        // Nothing installed. A build that carries the engine sets it up itself,
+        // with progress on the splash; an older one offers the bootstrap in a
+        // terminal the user can read and interrupt.
+        if engine_install::packaged(&handle).is_some() {
+            engine_install::spawn(&handle, port);
+            return;
+        }
         let Some(script) = script else { return };
         if !script.exists() {
             return;
@@ -1743,20 +1832,88 @@ mod host_libs_shim_tests {
     }
 }
 
-/// On a Wayland compositor that offers explicit sync (Hyprland, and so Omarchy,
-/// among others) WebKitGTK's DMABUF renderer can make the compositor drop the
-/// window with protocol error 71, "Missing acquire timeline". Turning the
-/// renderer off avoids it, at the price of copying each frame, so it is done
-/// only where that error can happen: a session GTK will draw through Wayland.
-/// Under X11 (including a forced GDK_BACKEND=x11 on a Wayland desktop) nothing
-/// changes. A value the user already set always wins, so "=0" brings it back.
+/// On Hyprland (and so Omarchy) WebKitGTK's DMABUF renderer can make the
+/// compositor drop the window with protocol error 71, "Missing acquire
+/// timeline". Turning the renderer off avoids it, at the price of copying every
+/// frame on the CPU, which on GNOME made the whole dashboard lag (#157). So it
+/// is turned off only on Hyprland drawn through Wayland, where the
+/// error was seen; every other desktop keeps WebKit's own choice. Under X11
+/// (including a forced GDK_BACKEND=x11) nothing changes. A value the user
+/// already set always wins: "=1" turns it off anywhere, "=0" keeps it on.
 #[cfg(target_os = "linux")]
-fn disable_dmabuf_on_wayland() {
+fn disable_dmabuf_on_hyprland() {
     const VAR: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
-    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty());
-    let forced_x11 = std::env::var("GDK_BACKEND").is_ok_and(|b| b.trim_start().starts_with("x11"));
-    if wayland && !forced_x11 && std::env::var_os(VAR).is_none() {
+    let session = DmabufSession {
+        wayland: std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty()),
+        gdk_backend: std::env::var("GDK_BACKEND").unwrap_or_default(),
+        hyprland_instance: std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some_and(|v| !v.is_empty()),
+        desktop: std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default(),
+        user_set: std::env::var_os(VAR).is_some(),
+    };
+    if session.should_disable_dmabuf() {
         std::env::set_var(VAR, "1");
+    }
+}
+
+/// What `disable_dmabuf_on_hyprland` reads from the environment, kept apart so
+/// the decision is testable on any OS.
+#[cfg_attr(not(any(test, target_os = "linux")), allow(dead_code))]
+struct DmabufSession {
+    wayland: bool,
+    gdk_backend: String,
+    hyprland_instance: bool,
+    desktop: String,
+    user_set: bool,
+}
+
+#[cfg_attr(not(any(test, target_os = "linux")), allow(dead_code))]
+impl DmabufSession {
+    fn should_disable_dmabuf(&self) -> bool {
+        if self.user_set || !self.wayland || self.gdk_backend.trim_start().starts_with("x11") {
+            return false;
+        }
+        // XDG_CURRENT_DESKTOP is a colon-separated list ("Hyprland", or
+        // "Hyprland:wlroots" under some launchers).
+        self.hyprland_instance
+            || self.desktop.split(':').any(|d| d.trim().eq_ignore_ascii_case("hyprland"))
+    }
+}
+
+#[cfg(test)]
+mod dmabuf_tests {
+    use super::DmabufSession;
+
+    fn session(desktop: &str) -> DmabufSession {
+        DmabufSession {
+            wayland: true,
+            gdk_backend: String::new(),
+            hyprland_instance: false,
+            desktop: desktop.to_string(),
+            user_set: false,
+        }
+    }
+
+    #[test]
+    fn hyprland_on_wayland_turns_the_renderer_off() {
+        assert!(session("Hyprland").should_disable_dmabuf());
+        assert!(session("Hyprland:wlroots").should_disable_dmabuf());
+        let by_signature = DmabufSession { hyprland_instance: true, ..session("") };
+        assert!(by_signature.should_disable_dmabuf());
+    }
+
+    #[test]
+    fn gnome_and_kde_keep_webkits_own_choice() {
+        assert!(!session("GNOME").should_disable_dmabuf());
+        assert!(!session("ubuntu:GNOME").should_disable_dmabuf());
+        assert!(!session("KDE").should_disable_dmabuf());
+        assert!(!session("").should_disable_dmabuf());
+    }
+
+    #[test]
+    fn x11_and_a_value_the_user_set_are_left_alone() {
+        assert!(!DmabufSession { wayland: false, ..session("Hyprland") }.should_disable_dmabuf());
+        assert!(!DmabufSession { gdk_backend: "x11".into(), ..session("Hyprland") }.should_disable_dmabuf());
+        assert!(!DmabufSession { user_set: true, ..session("Hyprland") }.should_disable_dmabuf());
     }
 }
 
@@ -1820,7 +1977,7 @@ pub fn run() {
 
     // Before GTK starts and before any thread exists (set_var is not thread-safe).
     #[cfg(target_os = "linux")]
-    disable_dmabuf_on_wayland();
+    disable_dmabuf_on_hyprland();
 
     // Before anything can touch a display: an AppImage whose bundled libraries
     // shadow the host's driver stack renders NOTHING, and never says so.
@@ -2105,13 +2262,14 @@ pub fn run() {
             // Windows builds that actually carry the bootstrap, and nothing
             // else (see bootstrap_script). Without this the button would show
             // up in `tauri dev` and on any future non-Windows target.
+            let engine_bundled = engine_install::packaged(app.handle()).is_some();
             #[cfg(windows)]
-            let setup_available = bootstrap_script(app.handle()).is_some();
+            let setup_available = engine_bundled || bootstrap_script(app.handle()).is_some();
             #[cfg(not(windows))]
-            let setup_available = false;
+            let setup_available = engine_bundled;
             let setup_js = format!(
-                "try{{window.__XENON_SETUP_AVAILABLE__={};}}catch(e){{}}",
-                setup_available
+                "try{{window.__XENON_SETUP_AVAILABLE__={};window.__XENON_ENGINE_BUNDLED__={};}}catch(e){{}}",
+                setup_available, engine_bundled
             );
             // The nonce every signal URL from this window must carry, and the
             // script that hands it to the top-level page of our own origins only
@@ -2335,6 +2493,13 @@ pub fn run() {
                     // deliberately replaced the installer's silent post-install
                     // spawn — see run_backend_bootstrap.
                     if scheme == "xenon-setup" {
+                        // "Install" and "Repair" with the engine this build
+                        // carries: no console, progress on the splash. Builds
+                        // without one keep the bootstrap below.
+                        if url.path() == "run" && engine_install::packaged(&nav_handle).is_some() {
+                            engine_install::spawn(&nav_handle, port);
+                            return false;
+                        }
                         #[cfg(windows)]
                         match url.path() {
                             // Also the "Repair Xenon" button: the same script
@@ -2592,6 +2757,11 @@ pub fn run() {
             // touch on the kiosk yanks it onto the Edge (tray-toggleable).
             #[cfg(windows)]
             cursor_guard::start(&window);
+
+            // While Windows has the screens off, Xenon's windows on them draw
+            // nothing, and come back a moment after the screens do.
+            #[cfg(windows)]
+            layers::watch_screens(app.handle(), &window);
 
             // While a game runs, stop kiosk touches from stealing its focus; if
             // an activation slips through anyway, hand the focus straight back.

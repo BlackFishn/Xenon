@@ -13,7 +13,7 @@ macOS and Linux surfaces with platform-specific limitations. The dashboard inclu
 system/FPS/network monitoring, media and audio controls, microphone controls,
 calendar/tasks/notes, smart-home integrations, AI chat and usage, and custom widgets.
 
-The repository is an npm workspace, currently version 4.11.7. Check `package.json`
+The repository is an npm workspace, currently version 5.1.1. Check `package.json`
 for the current version and scripts rather than treating this snapshot as permanent.
 The interface uses HTML, CSS and build-free JavaScript; it is not a React application.
 The backend is Node.js. The native kiosk is a Tauri 2/Rust shell that loads this same

@@ -52,7 +52,7 @@
     mic: { ...SYSTEM, markup: ['system', 'mic', '#picker-overlay'] },
     audio: { ...SYSTEM, markup: ['system', 'mic', 'audio', '#picker-overlay'] },
     // The page builds the tile itself; a tap opens its details, cut from index.html.
-    weather: { css: ['components/WeatherModal/WeatherModal.css', 'components/WeatherTile/WeatherTile.css', 'styles/liquid-sheets.css'], js: ['js/spark-path.js', 'js/dialog-focus.js', 'js/system.js', 'js/weather-art.js', 'js/weather-outlook.js', 'js/weather-tile.js', 'js/weather-window.js'], markup: ['#weather-overlay'], copies: true },
+    weather: { css: ['components/WeatherModal/WeatherModal.css', 'components/WeatherTile/WeatherTile.css', 'styles/liquid-sheets.css'], js: ['js/dialog-focus.js', 'js/system.js', 'js/weather-art.js', 'js/weather-outlook.js', 'js/weather-tile.js', 'js/weather-look.js', 'js/weather-window.js'], markup: ['#weather-overlay'], copies: true },
     // The Media tile with what draws inside it: Spotify extras, lyrics, the
     // waveform and its cover tint. Not the Lyrics widget's stage or translation.
     media: {
@@ -118,9 +118,10 @@
       ['components/CustomSelect/CustomSelect.css']),
     twitch: tile('twitch', 'StreamingPage', ['js/twitch-chat.js', 'js/streaming-page.js'],
       { status: 'onStatus', obs: 'onObs', obs_preview: 'onObsPreview' }, 'TwitchPanel'),
-    // The Deck as the Virtual Deck popup shows it: keys and presses, no editor
-    // (deck-editor.js is not here). deck.js draws it by itself; js/deck-feed.js
-    // gives it the stream (layer-lite-tiles.js attaches it).
+    // The Deck with its edit mode, but no key editor (deck-editor.js is not here):
+    // a key opens in the Xenon menu's window, which takes typing (deck.js openSlot).
+    // deck.js draws it by itself; js/deck-feed.js gives it the stream
+    // (layer-lite-tiles.js attaches it).
     deck: {
       css: ['components/CustomSelect/CustomSelect.css', 'components/DeckPanel/DeckPanel.css'],
       js: ['js/custom-select.js', 'js/spark-path.js', 'js/deck-shortcuts.js', 'js/deck-model.js', 'js/vitals-core.js', 'js/deck-store.js',

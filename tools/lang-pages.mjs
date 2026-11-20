@@ -32,6 +32,7 @@ export const LANG_PAGES = [
   { page: 'claude-code.html', langs: ALL, dict: 'claude-code' },
   { page: 'codex.html', langs: ALL, dict: 'codex' },
   { page: 'sensor-panel.html', langs: ALL, dict: 'sensor-panel' },
+  { page: 'compare.html', langs: ALL, dict: 'compare' },
   { page: 'single-screen.html', langs: ALL, dict: 'single-screen' },
   { page: 'fps-overlay.html', langs: ALL, dict: 'fps-overlay' },
   { page: 'screen-recorder.html', langs: ALL, dict: 'screen-recorder' },
@@ -39,9 +40,19 @@ export const LANG_PAGES = [
   { page: 'pawnio.html', langs: ALL, dict: 'pawnio' },
 ];
 
+// The catalog carries its seven languages in its own inline table, and its copies
+// (/<lang>/catalog/) are built by tools/catalog-langs.mjs once build-seo.mjs has
+// written the entry list into the English page, so it is not in LANG_PAGES.
+export const CATALOG_PAGE = { page: 'catalog/', langs: ALL };
+
+// Every page that has language copies, the catalog included: what a link in a
+// copy is pointed at.
+export const COPY_PAGES = [...LANG_PAGES, CATALOG_PAGE];
+
 // Every language a page is published in, English first.
 export function langsOf(page) {
   if (page === '' || page === 'index.html') return ['en', ...HOME_LANGS];
+  if (page === CATALOG_PAGE.page) return ['en', ...CATALOG_PAGE.langs];
   const p = LANG_PAGES.find((x) => x.page === page);
   return p ? ['en', ...p.langs.filter((l) => READY(p, l))] : ['en'];
 }

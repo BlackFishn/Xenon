@@ -137,6 +137,7 @@ if (need.audio) startVisibleAudioRefresh();
   let es = null;
   let pollFallbackTimers = [];
   let reconnectDelay = 2000;
+  let streamDropped = false;   // the stream errored since it last opened
   // First server version seen on this page load. A LATER status event carrying a
   // different version means the server self-updated while this page stayed open
   // (typical for the Xeneon Edge screen) — the stale client JS must reload, or
@@ -364,6 +365,9 @@ if (need.audio) startVisibleAudioRefresh();
     });
     es.addEventListener('exclusive_hint', e => {
       try { if (window.PerfWidget) window.PerfWidget.onExclusiveHint(JSON.parse(e.data)); } catch {}
+    });
+    es.addEventListener('fps_access', e => {
+      try { if (window.PerfWidget) window.PerfWidget.onFpsAccess(JSON.parse(e.data)); } catch {}
     });
     es.addEventListener('capture', e => {
       try { if (window.CaptureToast) window.CaptureToast.onCapture(JSON.parse(e.data)); } catch {}
@@ -949,10 +953,15 @@ if (need.audio) startVisibleAudioRefresh();
         window._reconcileSettingsAfterReconnect();
       }
       if (window.LayersShell && typeof window.LayersShell.onStream === 'function') window.LayersShell.onStream();
+      // Back after a drop: background widget frames mounted while the engine was
+      // away hold an error page, so they are mounted again now.
+      if (streamDropped && window.CustomWidget && typeof window.CustomWidget.onStreamBack === 'function') window.CustomWidget.onStreamBack();
+      streamDropped = false;
     };
 
     es.onerror = () => {
       if (window.TclAcWidget && typeof window.TclAcWidget.disconnected === 'function') window.TclAcWidget.disconnected();
+      streamDropped = true;
       // On error EventSource auto-reconnects, but if we get repeated failures
       // fall back to polling so the UI never stays stale.
       if (es.readyState === EventSource.CLOSED) {

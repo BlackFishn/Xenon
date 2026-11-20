@@ -69,6 +69,7 @@
 <link rel="alternate" hreflang="zh" href="https://xenon-app.com/zh/">
 <link rel="alternate" hreflang="x-default" href="https://xenon-app.com/">
 <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
+<meta name="facebook-domain-verification" content="ttch6k5j220bdasi84ghfaxz87hytf" />
 <meta name="theme-color" content="#6EE787" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#6EE787" media="(prefers-color-scheme: dark)">
 <link rel="icon" type="image/png" href="/images/favicon.png">
@@ -496,6 +497,19 @@ html:not(.js) .ask, html:not(.js) .pz { display: none; }
 .maker { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px clamp(32px, 5vw, 72px); align-items: center; margin-top: clamp(48px, 6vw, 88px); }
 .maker-f { position: relative; margin: 0; min-width: 0; }
 .maker-v { display: block; width: 100%; height: auto; aspect-ratio: 960 / 720; object-fit: cover; object-position: top; border-radius: 10px; background: var(--g-1); box-shadow: 0 0 0 1px var(--rule); }
+/* The launch video, under the hero: it plays muted while in view (its words are on screen),
+   one press starts it again from the top with sound. It never covers the page. */
+.film { padding-block: clamp(36px, 5vw, 72px); }
+.film-h { margin: 0 0 clamp(16px, 2vw, 26px); font: 800 clamp(30px, 3.4vw, 52px)/1 var(--f-display); letter-spacing: -.02em; }
+/* As tall as the screen allows under the heading, so the whole frame is in view at once. */
+.film-v { max-width: max(320px, calc((100svh - 330px) * 16 / 9)); }
+.film-v video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: 10px; background: var(--g-1); box-shadow: 0 0 0 1px var(--rule); }
+.film-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; max-width: max(320px, calc((100svh - 330px) * 16 / 9)); margin-top: 10px; }
+.film-sound { display: inline-flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 16px 0 12px; border: 0; border-radius: 6px; background: none; color: inherit; font: 700 18px/1 var(--f-text); cursor: pointer; }
+.film-sound:hover { background: var(--hover); }
+.film-sound[hidden], .film-bar .pz[hidden] { display: none; }
+.film-sound svg { width: 22px; height: 22px; flex: none; }
+.film-go svg { width: 18px; height: 18px; }
 #catalog .maker h3 { font: 800 clamp(34px, 3.6vw, 56px)/1 var(--f-display); letter-spacing: -.018em; }
 .maker-tx p:not(.links) { margin: 10px 0 0; font-size: clamp(18px, 1.35vw, 20px); line-height: 1.4; color: var(--fg-2); }
 .maker-tx .links { margin-top: 8px; }
@@ -608,6 +622,11 @@ html[data-mobile] .onphone { display: block; }
 .ft-bottom .langs a[aria-current] { color: var(--fg); font-weight: 700; }
 .bit { width: 36px; height: 36px; image-rendering: pixelated; }
 .bit-line { display: flex; align-items: center; gap: 12px; font-size: 15px; color: var(--fg-2); }
+/* The official channels, as the shared footer (.xf-social in site.css). */
+.ft-social { list-style: none; margin: 0 0 0 -10px; padding: 0; display: flex; flex-wrap: wrap; gap: 2px; }
+.ft-social .mk { color: var(--fg-2); }
+.ft-social .mk:hover { color: var(--fg); }
+.ft-social .mk svg { width: 20px; height: 20px; }
 
 /* Targets: at least 24 px with a mouse (WCAG 2.5.8) and 44 px under a finger (WCAG 2.5.5,
    Apple HIG). With a mouse the hit area grows into the gaps (padding, matching negative
@@ -772,6 +791,10 @@ html[data-mobile] .onphone { display: block; }
   <symbol id="i-gh" viewBox="0 0 24 24"><path fill="currentColor" d="M12 .5A11.5 11.5 0 0 0 .5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.34-1.3-1.7-1.3-1.7-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.78 2.73 1.27 3.4.97.1-.75.4-1.27.73-1.56-2.56-.29-5.26-1.28-5.26-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.43-2.7 5.41-5.27 5.69.41.36.78 1.06.78 2.14v3.17c0 .31.2.67.8.56A11.5 11.5 0 0 0 23.5 12 11.5 11.5 0 0 0 12 .5Z"/></symbol>
   <symbol id="i-cup" viewBox="0 0 24 24"><path fill="currentColor" d="M2.4 6.2h13.4v7a5.5 5.5 0 0 1-5.5 5.5H7.9a5.5 5.5 0 0 1-5.5-5.5v-7Zm14 2.2h1.7a3.7 3.7 0 0 1 0 7.4h-1.7v-2.3h1.7a1.4 1.4 0 0 0 0-2.8h-1.7V8.4ZM2.4 20.1h16.4v1.8H2.4v-1.8Z"/></symbol>
   <symbol id="i-dc" viewBox="0 0 24 24"><path fill="currentColor" d="M20.317 4.369a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.865-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.291.074.074 0 0 1 .077-.01c3.927 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.009c.12.099.246.198.373.292a.077.077 0 0 1-.006.127 12.3 12.3 0 0 1-1.873.891.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.331c-1.183 0-2.157-1.086-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.332-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.086-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.332-.946 2.418-2.157 2.418z"/></symbol>
+  <symbol id="i-yt" viewBox="0 0 24 24"><path fill="currentColor" d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814ZM9.545 15.568V8.432L15.818 12l-6.273 3.568Z"/></symbol>
+  <symbol id="i-ig" viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M7.5 2h9A5.5 5.5 0 0 1 22 7.5v9a5.5 5.5 0 0 1-5.5 5.5h-9A5.5 5.5 0 0 1 2 16.5v-9A5.5 5.5 0 0 1 7.5 2Zm0 2A3.5 3.5 0 0 0 4 7.5v9A3.5 3.5 0 0 0 7.5 20h9a3.5 3.5 0 0 0 3.5-3.5v-9A3.5 3.5 0 0 0 16.5 4h-9ZM12 7a5 5 0 1 1 0 10 5 5 0 0 1 0-10Zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm5.25-3.5a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5Z"/></symbol>
+  <symbol id="i-tt" viewBox="0 0 24 24"><path fill="currentColor" d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07Z"/></symbol>
+  <symbol id="i-fb" viewBox="0 0 24 24"><path fill="currentColor" d="M9.101 23.691v-7.98H6.627v-3.667h2.474v-1.58c0-4.085 1.848-5.978 5.858-5.978.401 0 .955.042 1.468.103a8.68 8.68 0 0 1 1.141.195v3.325a8.623 8.623 0 0 0-.653-.036 26.805 26.805 0 0 0-.733-.009c-.707 0-1.259.096-1.675.309a1.686 1.686 0 0 0-.679.622c-.258.42-.374.995-.374 1.752v1.297h3.919l-.386 2.103-.287 1.564h-3.246v8.245C19.396 23.238 24 18.179 24 12.044c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.628 3.874 10.35 9.101 11.647Z"/></symbol>
 </svg>
 
 <header class="hd" id="hd">
@@ -780,7 +803,7 @@ html[data-mobile] .onphone { display: block; }
     <nav aria-label="Main">
       <ul>
         <li><a href="/demo/" data-i18n="nav.demo">デモ</a></li>
-        <li><a href="/catalog/" data-i18n="nav.catalog">カタログ</a></li>
+        <li><a href="/ja/catalog/" data-i18n="nav.catalog">カタログ</a></li>
         <li><a href="/maker/"><span data-i18n="nav.maker">Maker</span><span class="beta" data-i18n="beta">ベータ</span></a></li>
         <li><a href="#support" data-i18n="nav.supporters">サポーター</a></li>
         <li><a href="/ja/faq.html" data-i18n="nav.help">ヘルプ</a></li>
@@ -814,7 +837,7 @@ html[data-mobile] .onphone { display: block; }
     </div>
     <ul class="mlist">
       <li><a href="/demo/" data-i18n="nav.demo">デモ</a></li>
-      <li><a href="/catalog/" data-i18n="nav.catalog">カタログ</a></li>
+      <li><a href="/ja/catalog/" data-i18n="nav.catalog">カタログ</a></li>
       <li><a href="/maker/"><span data-i18n="nav.maker">Maker</span><span class="beta" data-i18n="beta">ベータ</span></a></li>
       <li><a href="#support" data-i18n="nav.supporters">サポーター</a></li>
       <li><a href="/ja/faq.html" data-i18n="nav.help">ヘルプ</a></li>
@@ -848,6 +871,7 @@ html[data-mobile] .onphone { display: block; }
         <a class="key-alt for-desk" href="/demo/" data-track="demo_click" data-track-location="hero" data-i18n="hero.try">ブラウザで試す</a>
         <div class="act-row for-desk">
           <a class="mk" id="hero-store" href="https://apps.microsoft.com/detail/XPFCJFFQ3DQSK0" rel="noopener" title="Microsoft Store" data-track="store_click" data-track-location="hero"><svg aria-hidden="true"><use href="#i-store"/></svg><span class="sr">Microsoft Store</span></a>
+          <a class="mk film-go" href="#film" data-film-go data-track="video_play" data-track-location="hero"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 5.5v13l11-6.5z"/></svg><span data-i18n="film.link">動画を見る</span></a>
           <a class="mk os-alt" href="#install"><svg aria-hidden="true"><use href="#os-mac"/></svg><svg aria-hidden="true"><use href="#os-linux"/></svg><span data-i18n="hero.alt">MacとLinux（ベータ版）</span></a>
           <a class="mk" id="p-dc" href="https://discord.gg/MBVrw9kZyg" data-discord target="_blank" rel="noopener"><svg aria-hidden="true"><use href="#i-dc"/></svg><span class="sr">Discord</span><span class="n" data-count="dc"></span></a>
           <a class="mk" id="p-dl" href="https://github.com/marcimastro98/Xenon" target="_blank" rel="noopener" title="GitHub"><svg aria-hidden="true"><use href="#i-gh"/></svg><span class="sr">GitHub</span><svg class="down" aria-hidden="true"><use href="#i-dl"/></svg><span class="n" data-count="dl"></span></a>
@@ -894,6 +918,19 @@ html[data-mobile] .onphone { display: block; }
     </div>
   </section>
 
+  <section class="paper film" id="film" aria-labelledby="h-film">
+    <div class="w">
+      <h2 class="film-h" id="h-film" data-i18n="film.h2">1分でわかる Xenon</h2>
+      <div class="film-v">
+        <video id="film-v" src="/images/home/launch.mp4" poster="/images/home/launch.webp" width="1920" height="1080" muted loop playsinline preload="none" controls aria-label="Xenon の動画：デスクトップ、ゲームの上、あらゆる画面のウィジェットと Bit" data-i18n-aria="film.alt"></video>
+      </div>
+      <div class="film-bar">
+        <button class="film-sound" id="film-sound" type="button" data-track="video_play" data-track-location="film" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 9h4l5-4v14l-5-4H3zM15.5 8.5a5 5 0 0 1 0 7l-1.4-1.4a3 3 0 0 0 0-4.2zM18.3 5.7a9 9 0 0 1 0 12.6l-1.4-1.4a7 7 0 0 0 0-9.8z"/></svg><span data-i18n="film.sound">音ありで見る</span></button>
+        <button class="pz" id="film-pause" type="button" aria-pressed="false" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path class="i-pause" fill="currentColor" d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/><path class="i-play" fill="currentColor" d="M8 5.5v13l11-6.5z"/></svg><span class="sr" data-i18n="anim.pause">アニメーションを一時停止</span></button>
+      </div>
+    </div>
+  </section>
+
   <section class="flood" id="widgets" aria-labelledby="h-widgets">
     <div class="w flood-in">
       <div class="flood-l">
@@ -906,7 +943,7 @@ html[data-mobile] .onphone { display: block; }
           <button class="word" type="button" data-w="system" data-c="#FFA657" data-k="#2A1400" data-fact="w.system.fact" aria-pressed="false" data-i18n="w.system">CPU と GPU</button>
           <button class="word" type="button" data-w="football" data-c="#0B7F3E" data-k="#FFFFFF" data-fact="w.football.fact" aria-pressed="false" data-i18n="w.football">サッカー</button>
           <button class="word" type="button" data-w="youtube" data-c="#FF0033" data-k="#FFFFFF" data-fact="w.youtube.fact" aria-pressed="false">YouTube</button>
-          <button class="word" type="button" data-w="steam" data-c="#1B2838" data-k="#FFFFFF" data-fact="w.steam.fact" data-have="have.catalog" data-href="/catalog/#tgk-steam-launcher-battery" aria-pressed="false">Steam</button>
+          <button class="word" type="button" data-w="steam" data-c="#1B2838" data-k="#FFFFFF" data-fact="w.steam.fact" data-have="have.catalog" data-href="/ja/catalog/#tgk-steam-launcher-battery" aria-pressed="false">Steam</button>
           <button class="word" type="button" data-w="twitch" data-c="#9146FF" data-k="#FFFFFF" data-fact="w.twitch.fact" aria-pressed="false">Twitch</button>
           <button class="word" type="button" data-w="calendar" data-c="#FFD75E" data-k="#2A2200" data-fact="w.calendar.fact" aria-pressed="false" data-i18n="w.calendar">カレンダー</button>
           <button class="word" type="button" data-w="deck" data-c="#6EE787" data-k="#0B2412" data-fact="w.deck.fact" aria-pressed="false">Deck</button>
@@ -1025,7 +1062,7 @@ html[data-mobile] .onphone { display: block; }
         <a href="#support" data-i18n="cat.sup.note">サポーターの特典</a>
       </div>
       <div class="shelf" id="cat-sup"></div>
-      <p class="links"><a href="/catalog/" data-i18n="cat.open">カタログを開く</a></p>
+      <p class="links"><a href="/ja/catalog/" data-i18n="cat.open">カタログを開く</a></p>
       <article class="maker">
         <figure class="maker-f">
           <video class="maker-v" id="maker-v" src="/images/home/maker.mp4" poster="/images/home/maker.jpg" muted loop playsinline preload="none" data-play aria-label="ウィジェットを作っている Xenon Maker" data-i18n-aria="make.alt"></video>
@@ -1146,12 +1183,13 @@ html[data-mobile] .onphone { display: block; }
     <div class="ft-brand">
       <a class="brand" href="/" aria-label="Xenon"><svg class="mark-i" viewBox="0 0 8 11" shape-rendering="crispEdges" aria-hidden="true"><path class="bb" d="M4 0h1v2H4zM1 2h6v1H1zM0 3h8v6H0zM1 9h6v1H1zM1 10h2v1H1zM5 10h2v1H5z"/><path class="bf" d="M2 4h1v2H2zM5 4h1v2H5zM2 7h1v1H2zM3 8h2v1H3zM5 7h1v1H5z"/></svg>xenon</a>
       <p data-i18n="ft.tag">どの画面でも使える無料のPCウィジェット。Windowsに対応し、macOSとLinuxはベータ版です。</p>
-      <div class="bit-line"><img class="bit" src="/images/bit.svg" width="36" height="36" alt="" loading="lazy"><span data-i18n="ft.bit">BitはVitalsウィジェットに住んでいて、あなたの姿勢にひとこと言います。</span></div>
+      <div class="bit-line"><span data-i18n="ft.bit">BitはVitalsウィジェットに住んでいて、あなたの姿勢にひとこと言います。</span></div>
+      <ul class="ft-social"><li><a class="mk" href="https://www.youtube.com/@xenon-app" target="_blank" rel="noopener" aria-label="YouTube"><svg aria-hidden="true"><use href="#i-yt"/></svg></a></li><li><a class="mk" href="https://www.instagram.com/xenon.app/" target="_blank" rel="noopener" aria-label="Instagram"><svg aria-hidden="true"><use href="#i-ig"/></svg></a></li><li><a class="mk" href="https://www.tiktok.com/@xenon.app" target="_blank" rel="noopener" aria-label="TikTok"><svg aria-hidden="true"><use href="#i-tt"/></svg></a></li><li><a class="mk" href="https://www.facebook.com/profile.php?id=61596514267824" target="_blank" rel="noopener" aria-label="Facebook"><svg aria-hidden="true"><use href="#i-fb"/></svg></a></li><li><a class="mk" href="https://discord.gg/MBVrw9kZyg" data-discord target="_blank" rel="noopener" aria-label="Discord"><svg aria-hidden="true"><use href="#i-dc"/></svg></a></li><li><a class="mk" href="https://github.com/marcimastro98/Xenon" target="_blank" rel="noopener" aria-label="GitHub"><svg aria-hidden="true"><use href="#i-gh"/></svg></a></li></ul>
     </div>
     <div class="ft-col"><h2 data-i18n="ft.app">アプリ</h2><ul>
       <li><a href="/ja/download.html" data-i18n="ft.download">ダウンロード</a></li>
       <li><a href="/demo/" data-i18n="ft.demo">ブラウザデモ</a></li>
-      <li><a href="/catalog/" data-i18n="ft.catalog">カタログ</a></li>
+      <li><a href="/ja/catalog/" data-i18n="ft.catalog">カタログ</a></li>
       <li><a href="/maker/" data-i18n="ft.maker">Xenon Maker</a></li>
       <li><a href="/create/" data-i18n="ft.create">ウィジェットを作る</a></li>
       <li><a href="/releases.html" data-i18n="ft.releases">リリース</a></li>
@@ -1170,6 +1208,7 @@ html[data-mobile] .onphone { display: block; }
       <li><a href="/ja/claude-code.html" data-i18n="ft.claude">タッチスクリーンでClaude Code</a></li>
       <li><a href="/ja/codex.html" data-i18n="ft.codex">タッチスクリーンで OpenAI Codex</a></li>
       <li><a href="/ja/sensor-panel.html" data-i18n="ft.sensor">PCのセンサーパネル</a></li>
+      <li><a href="/ja/compare.html" data-i18n="ft.compare">Xenonとほかのツール</a></li>
       <li><a href="/ja/xenon-exe.html" data-i18n="ft.exe">インストーラーは安全ですか？</a></li>
     </ul></div>
     <div class="ft-col"><h2 data-i18n="ft.project">プロジェクト</h2><ul>
@@ -1209,7 +1248,11 @@ html[data-mobile] .onphone { display: block; }
       "sameAs": [
         "https://github.com/marcimastro98/Xenon",
         "https://discord.gg/MBVrw9kZyg",
-        "https://apps.microsoft.com/detail/XPFCJFFQ3DQSK0"
+        "https://apps.microsoft.com/detail/XPFCJFFQ3DQSK0",
+        "https://www.youtube.com/@xenon-app",
+        "https://www.instagram.com/xenon.app/",
+        "https://www.tiktok.com/@xenon.app",
+        "https://www.facebook.com/profile.php?id=61596514267824"
       ]
     },
     {
@@ -1308,6 +1351,26 @@ html[data-mobile] .onphone { display: block; }
       "caption": "The Xenon dashboard on a 2560 × 720 CORSAIR Xeneon Edge"
     },
     {
+      "@type": "VideoObject",
+      "@id": "https://xenon-app.com/#video",
+      "name": "Xenon in one minute",
+      "description": "Xenon is a free app with PC widgets: on the desktop, over games with an FPS overlay, on an old phone or a spare screen, and Bit, an AI that builds widgets for you.",
+      "thumbnailUrl": "https://xenon-app.com/images/home/launch.webp",
+      "contentUrl": "https://xenon-app.com/images/home/launch.mp4",
+      "embedUrl": "https://www.youtube.com/embed/IuG-Ie9JPyE",
+      "uploadDate": "2026-11-17T12:00:00+01:00",
+      "duration": "PT59S",
+      "width": 1920,
+      "height": 1080,
+      "isFamilyFriendly": true,
+      "publisher": {
+        "@id": "https://xenon-app.com/#org"
+      },
+      "about": {
+        "@id": "https://xenon-app.com/#app"
+      }
+    },
+    {
       "@type": "WebPage",
       "@id": "https://xenon-app.com/#webpage",
       "url": "https://xenon-app.com/ja/",
@@ -1320,6 +1383,9 @@ html[data-mobile] .onphone { display: block; }
       },
       "primaryImageOfPage": {
         "@id": "https://xenon-app.com/#hero-image"
+      },
+      "video": {
+        "@id": "https://xenon-app.com/#video"
       },
       "inLanguage": "ja"
     }
@@ -1367,12 +1433,12 @@ html[data-mobile] .onphone { display: block; }
     "scr.run": "Run it live (about 8 MB)",
     "scr.live": "Xenon live demo, simulated data",
     "themes.label": "Themes",
-    "theme.ocean": "Deep Ocean, free in the <a href=\"/catalog/#deep-ocean\">catalog</a>.",
-    "theme.kintsugi": "Kintsugi, free in the <a href=\"/catalog/#kintsugi\">catalog</a>, with its own animated background.",
-    "theme.limnograph": "Limnograph, free in the <a href=\"/catalog/#limnograph\">catalog</a>: a light theme over a painted lake.",
-    "theme.afterimage": "Afterimage, free in the <a href=\"/catalog/#afterimage\">catalog</a>.",
+    "theme.ocean": "Deep Ocean, free in the <a href=\"/ja/catalog/#deep-ocean\">catalog</a>.",
+    "theme.kintsugi": "Kintsugi, free in the <a href=\"/ja/catalog/#kintsugi\">catalog</a>, with its own animated background.",
+    "theme.limnograph": "Limnograph, free in the <a href=\"/ja/catalog/#limnograph\">catalog</a>: a light theme over a painted lake.",
+    "theme.afterimage": "Afterimage, free in the <a href=\"/ja/catalog/#afterimage\">catalog</a>.",
     "theme.retro": "Pixel Retro, a style built into Xenon.",
-    "theme.forest": "Forest by Domi, from the community, free in the <a href=\"/catalog/#forest\">catalog</a>.",
+    "theme.forest": "Forest by Domi, from the community, free in the <a href=\"/ja/catalog/#forest\">catalog</a>.",
     "theme.amb": "Shown now: its Ambient screen saver.",
     "themes.pause": "Pause the themes",
     "themes.play": "Play the themes",
@@ -1456,6 +1522,7 @@ html[data-mobile] .onphone { display: block; }
     "ft.claude": "Claude Code on a touchscreen",
     "ft.codex": "OpenAI Codex on a touchscreen",
     "ft.sensor": "A sensor panel for your PC",
+    "ft.compare": "Xenon and other tools",
     "hero.try": "Try it in your browser",
     "bit.p": "The assistant inside Xenon, by voice or by text.",
     "make.open": "Open Xenon Maker",
@@ -1561,6 +1628,10 @@ html[data-mobile] .onphone { display: block; }
     "ft.recorder": "Screen recorder",
     "theme.liquid": "Liquid Glass, the look Xenon starts with.",
     "cat.sparks": "{n} Sparks",
+    "film.h2": "Xenon in one minute",
+    "film.link": "Watch the video",
+    "film.sound": "Watch with sound",
+    "film.alt": "The Xenon video: widgets on the desktop, over games and on any screen, with Bit",
   };
 
   I18N.fr = {
@@ -1597,12 +1668,12 @@ html[data-mobile] .onphone { display: block; }
     "scr.run": "Lancez-le en direct (environ 8 Mo)",
     "scr.live": "Xenon démo en direct, données simulées",
     "themes.label": "Thèmes",
-    "theme.ocean": "Océan profond, gratuit dans le <a href=\"/catalog/#deep-ocean\">catalogue<\/a>.",
-    "theme.kintsugi": "Kintsugi, gratuit dans le <a href=\"/catalog/#kintsugi\">catalogue<\/a>, avec son propre fond animé.",
-    "theme.limnograph": "Limnograph, gratuit dans le <a href=\"/catalog/#limnograph\">catalogue<\/a> : un thème clair sur un lac peint.",
-    "theme.afterimage": "Afterimage, gratuit dans le <a href=\"/catalog/#afterimage\">catalogue<\/a>.",
+    "theme.ocean": "Océan profond, gratuit dans le <a href=\"/ja/catalog/#deep-ocean\">catalogue<\/a>.",
+    "theme.kintsugi": "Kintsugi, gratuit dans le <a href=\"/ja/catalog/#kintsugi\">catalogue<\/a>, avec son propre fond animé.",
+    "theme.limnograph": "Limnograph, gratuit dans le <a href=\"/ja/catalog/#limnograph\">catalogue<\/a> : un thème clair sur un lac peint.",
+    "theme.afterimage": "Afterimage, gratuit dans le <a href=\"/ja/catalog/#afterimage\">catalogue<\/a>.",
     "theme.retro": "Pixel Retro, un style intégré à Xenon.",
-    "theme.forest": "Forest par Domi, de la communauté, gratuit dans le <a href=\"/catalog/#forest\">catalogue<\/a>.",
+    "theme.forest": "Forest par Domi, de la communauté, gratuit dans le <a href=\"/ja/catalog/#forest\">catalogue<\/a>.",
     "theme.amb": "Affiché actuellement : économiseur d'écran Ambiant.",
     "themes.pause": "Mettre les thèmes en pause",
     "themes.play": "Écouter les thèmes",
@@ -1686,6 +1757,7 @@ html[data-mobile] .onphone { display: block; }
     "ft.claude": "Claude Code sur un écran tactile",
     "ft.codex": "OpenAI Codex sur un écran tactile",
     "ft.sensor": "Un panneau de capteurs pour votre PC",
+    "ft.compare": "Xenon et les autres outils",
     "hero.try": "Essayez-le dans le navigateur",
     "bit.p": "L'assistant intégré à Xenon, à la voix ou par écrit.",
     "make.open": "Ouvrir Xenon Maker",
@@ -1791,6 +1863,10 @@ html[data-mobile] .onphone { display: block; }
     "ft.recorder": "Enregistrer l’écran",
     "theme.liquid": "Liquid Glass, le thème de départ de Xenon.",
     "cat.sparks": "{n} Étincelles",
+    "film.h2": "Xenon en une minute",
+    "film.link": "Voir la vidéo",
+    "film.sound": "Regarder avec le son",
+    "film.alt": "La vidéo de Xenon : des widgets sur le bureau, par-dessus les jeux et sur n'importe quel écran, avec Bit",
   };
 
   I18N.it = {
@@ -1827,12 +1903,12 @@ html[data-mobile] .onphone { display: block; }
     "scr.run": "Provala dal vivo (circa 8 MB)",
     "scr.live": "Demo dal vivo di Xenon, dati simulati",
     "themes.label": "Temi",
-    "theme.ocean": "Deep Ocean, gratis nel <a href=\"/catalog/#deep-ocean\">catalogo</a>.",
-    "theme.kintsugi": "Kintsugi, gratis nel <a href=\"/catalog/#kintsugi\">catalogo</a>, con il suo sfondo animato.",
-    "theme.limnograph": "Limnograph, gratis nel <a href=\"/catalog/#limnograph\">catalogo</a>: un tema chiaro sopra un lago dipinto.",
-    "theme.afterimage": "Afterimage, gratis nel <a href=\"/catalog/#afterimage\">catalogo</a>.",
+    "theme.ocean": "Deep Ocean, gratis nel <a href=\"/ja/catalog/#deep-ocean\">catalogo</a>.",
+    "theme.kintsugi": "Kintsugi, gratis nel <a href=\"/ja/catalog/#kintsugi\">catalogo</a>, con il suo sfondo animato.",
+    "theme.limnograph": "Limnograph, gratis nel <a href=\"/ja/catalog/#limnograph\">catalogo</a>: un tema chiaro sopra un lago dipinto.",
+    "theme.afterimage": "Afterimage, gratis nel <a href=\"/ja/catalog/#afterimage\">catalogo</a>.",
     "theme.retro": "Pixel Retro, uno stile già incluso in Xenon.",
-    "theme.forest": "Forest di Domi, dalla community, gratis nel <a href=\"/catalog/#forest\">catalogo</a>.",
+    "theme.forest": "Forest di Domi, dalla community, gratis nel <a href=\"/ja/catalog/#forest\">catalogo</a>.",
     "theme.amb": "Ora: il suo screensaver Ambient.",
     "themes.pause": "Metti in pausa i temi",
     "themes.play": "Riprendi i temi",
@@ -1916,6 +1992,7 @@ html[data-mobile] .onphone { display: block; }
     "ft.claude": "Claude Code su uno schermo touch",
     "ft.codex": "OpenAI Codex su uno schermo touch",
     "ft.sensor": "Un pannello sensori per il PC",
+    "ft.compare": "Xenon e gli altri programmi",
     "hero.try": "Provalo nel browser",
     "bit.p": "L'assistente dentro Xenon, a voce o per iscritto.",
     "make.open": "Apri Xenon Maker",
@@ -2021,6 +2098,10 @@ html[data-mobile] .onphone { display: block; }
     "ft.recorder": "Registrare lo schermo",
     "theme.liquid": "Liquid Glass, il tema con cui parte Xenon.",
     "cat.sparks": "{n} Scintille",
+    "film.h2": "Xenon in un minuto",
+    "film.link": "Guarda il video",
+    "film.sound": "Guarda con l'audio",
+    "film.alt": "Il video di Xenon: widget sul desktop, sopra i giochi e su ogni schermo, con Bit",
   };
 
   I18N.es = {
@@ -2057,12 +2138,12 @@ html[data-mobile] .onphone { display: block; }
     "scr.run": "Pruébala en vivo (unos 8 MB)",
     "scr.live": "Demo en vivo de Xenon, datos simulados",
     "themes.label": "Temas",
-    "theme.ocean": "Deep Ocean, gratis en el <a href=\"/catalog/#deep-ocean\">catálogo</a>.",
-    "theme.kintsugi": "Kintsugi, gratis en el <a href=\"/catalog/#kintsugi\">catálogo</a>, con su propio fondo animado.",
-    "theme.limnograph": "Limnograph, gratis en el <a href=\"/catalog/#limnograph\">catálogo</a>: un tema claro sobre un lago pintado.",
-    "theme.afterimage": "Afterimage, gratis en el <a href=\"/catalog/#afterimage\">catálogo</a>.",
+    "theme.ocean": "Deep Ocean, gratis en el <a href=\"/ja/catalog/#deep-ocean\">catálogo</a>.",
+    "theme.kintsugi": "Kintsugi, gratis en el <a href=\"/ja/catalog/#kintsugi\">catálogo</a>, con su propio fondo animado.",
+    "theme.limnograph": "Limnograph, gratis en el <a href=\"/ja/catalog/#limnograph\">catálogo</a>: un tema claro sobre un lago pintado.",
+    "theme.afterimage": "Afterimage, gratis en el <a href=\"/ja/catalog/#afterimage\">catálogo</a>.",
     "theme.retro": "Pixel Retro, un estilo incluido en Xenon.",
-    "theme.forest": "Forest de Domi, de la comunidad, gratis en el <a href=\"/catalog/#forest\">catálogo</a>.",
+    "theme.forest": "Forest de Domi, de la comunidad, gratis en el <a href=\"/ja/catalog/#forest\">catálogo</a>.",
     "theme.amb": "Ahora: su salvapantallas Ambient.",
     "themes.pause": "Pausar los temas",
     "themes.play": "Reanudar los temas",
@@ -2146,6 +2227,7 @@ html[data-mobile] .onphone { display: block; }
     "ft.claude": "Claude Code en una pantalla táctil",
     "ft.codex": "OpenAI Codex en una pantalla táctil",
     "ft.sensor": "Un panel de sensores para tu PC",
+    "ft.compare": "Xenon y otras herramientas",
     "hero.try": "Pruébalo en el navegador",
     "bit.p": "El asistente dentro de Xenon, por voz o por texto.",
     "make.open": "Abrir Xenon Maker",
@@ -2251,6 +2333,10 @@ html[data-mobile] .onphone { display: block; }
     "ft.recorder": "Grabar la pantalla",
     "theme.liquid": "Liquid Glass, el tema con el que arranca Xenon.",
     "cat.sparks": "{n} Chispas",
+    "film.h2": "Xenon en un minuto",
+    "film.link": "Mira el vídeo",
+    "film.sound": "Verlo con sonido",
+    "film.alt": "El vídeo de Xenon: widgets en el escritorio, sobre los juegos y en cualquier pantalla, con Bit",
   };
 
   I18N.ja = {
@@ -2287,12 +2373,12 @@ html[data-mobile] .onphone { display: block; }
     "scr.run": "ライブで動かす（約8 MB）",
     "scr.live": "Xenonのライブデモ（シミュレーションデータ）",
     "themes.label": "テーマ",
-    "theme.ocean": "Deep Ocean。<a href=\"/catalog/#deep-ocean\">カタログ</a>から無料で入手できます。",
-    "theme.kintsugi": "Kintsugi。<a href=\"/catalog/#kintsugi\">カタログ</a>から無料で入手でき、専用のアニメーション背景が付いています。",
-    "theme.limnograph": "Limnograph。<a href=\"/catalog/#limnograph\">カタログ</a>から無料で入手できます。湖の絵に重ねたライトテーマです。",
-    "theme.afterimage": "Afterimage。<a href=\"/catalog/#afterimage\">カタログ</a>から無料で入手できます。",
+    "theme.ocean": "Deep Ocean。<a href=\"/ja/catalog/#deep-ocean\">カタログ</a>から無料で入手できます。",
+    "theme.kintsugi": "Kintsugi。<a href=\"/ja/catalog/#kintsugi\">カタログ</a>から無料で入手でき、専用のアニメーション背景が付いています。",
+    "theme.limnograph": "Limnograph。<a href=\"/ja/catalog/#limnograph\">カタログ</a>から無料で入手できます。湖の絵に重ねたライトテーマです。",
+    "theme.afterimage": "Afterimage。<a href=\"/ja/catalog/#afterimage\">カタログ</a>から無料で入手できます。",
     "theme.retro": "Pixel Retro。Xenonに組み込まれたスタイルです。",
-    "theme.forest": "Domiによるコミュニティ作品のForest。<a href=\"/catalog/#forest\">カタログ</a>で無料。",
+    "theme.forest": "Domiによるコミュニティ作品のForest。<a href=\"/ja/catalog/#forest\">カタログ</a>で無料。",
     "theme.amb": "表示中: このテーマの Ambient スクリーンセーバー。",
     "themes.pause": "テーマを一時停止",
     "themes.play": "テーマを再生",
@@ -2376,6 +2462,7 @@ html[data-mobile] .onphone { display: block; }
     "ft.claude": "タッチスクリーンでClaude Code",
     "ft.codex": "タッチスクリーンで OpenAI Codex",
     "ft.sensor": "PCのセンサーパネル",
+    "ft.compare": "Xenonとほかのツール",
     "hero.try": "ブラウザで試す",
     "bit.p": "Xenon に入っているアシスタント。声でも文字でも。",
     "make.open": "Xenon Makerを開く",
@@ -2481,6 +2568,10 @@ html[data-mobile] .onphone { display: block; }
     "ft.recorder": "画面録画",
     "theme.liquid": "Liquid Glass、Xenon の初期テーマです。",
     "cat.sparks": "{n} スパーク",
+    "film.h2": "1分でわかる Xenon",
+    "film.link": "動画を見る",
+    "film.sound": "音ありで見る",
+    "film.alt": "Xenon の動画：デスクトップ、ゲームの上、あらゆる画面のウィジェットと Bit",
   };
 
   I18N.ko = {
@@ -2517,12 +2608,12 @@ html[data-mobile] .onphone { display: block; }
     "scr.run": "라이브 데모 실행(약 8 MB)",
     "scr.live": "Xenon 라이브 데모, 시뮬레이션 데이터",
     "themes.label": "테마",
-    "theme.ocean": "Deep Ocean, <a href=\"/catalog/#deep-ocean\">카탈로그</a>의 무료 테마.",
-    "theme.kintsugi": "Kintsugi, <a href=\"/catalog/#kintsugi\">카탈로그</a>의 무료 테마. 전용 애니메이션 배경이 함께 있습니다.",
-    "theme.limnograph": "Limnograph, <a href=\"/catalog/#limnograph\">카탈로그</a>의 무료 테마. 그림으로 그린 호수를 배경으로 한 밝은 테마입니다.",
-    "theme.afterimage": "Afterimage, <a href=\"/catalog/#afterimage\">카탈로그</a>의 무료 테마.",
+    "theme.ocean": "Deep Ocean, <a href=\"/ja/catalog/#deep-ocean\">카탈로그</a>의 무료 테마.",
+    "theme.kintsugi": "Kintsugi, <a href=\"/ja/catalog/#kintsugi\">카탈로그</a>의 무료 테마. 전용 애니메이션 배경이 함께 있습니다.",
+    "theme.limnograph": "Limnograph, <a href=\"/ja/catalog/#limnograph\">카탈로그</a>의 무료 테마. 그림으로 그린 호수를 배경으로 한 밝은 테마입니다.",
+    "theme.afterimage": "Afterimage, <a href=\"/ja/catalog/#afterimage\">카탈로그</a>의 무료 테마.",
     "theme.retro": "Pixel Retro, Xenon에 기본으로 들어 있는 스타일.",
-    "theme.forest": "커뮤니티 제작자 Domi의 Forest, <a href=\"/catalog/#forest\">카탈로그</a>에서 무료.",
+    "theme.forest": "커뮤니티 제작자 Domi의 Forest, <a href=\"/ja/catalog/#forest\">카탈로그</a>에서 무료.",
     "theme.amb": "지금: 이 테마의 Ambient 화면 보호기.",
     "themes.pause": "테마 일시정지",
     "themes.play": "테마 재생",
@@ -2606,6 +2697,7 @@ html[data-mobile] .onphone { display: block; }
     "ft.claude": "터치스크린에서 쓰는 Claude Code",
     "ft.codex": "터치스크린에서 쓰는 OpenAI Codex",
     "ft.sensor": "PC 센서 패널",
+    "ft.compare": "Xenon과 다른 도구",
     "hero.try": "브라우저에서 체험하기",
     "bit.p": "Xenon 안의 어시스턴트, 음성으로도 글로도.",
     "make.open": "Xenon Maker 열기",
@@ -2711,6 +2803,10 @@ html[data-mobile] .onphone { display: block; }
     "ft.recorder": "화면 녹화",
     "theme.liquid": "Liquid Glass, Xenon의 기본 테마입니다.",
     "cat.sparks": "스파크 {n}개",
+    "film.h2": "1분 만에 보는 Xenon",
+    "film.link": "영상 보기",
+    "film.sound": "소리와 함께 보기",
+    "film.alt": "Xenon 영상: 데스크톱, 게임 위, 모든 화면의 위젯과 Bit",
   };
 
   I18N.zh = {
@@ -2747,12 +2843,12 @@ html[data-mobile] .onphone { display: block; }
     "scr.run": "运行在线演示（约 8 MB）",
     "scr.live": "Xenon 在线演示，模拟数据",
     "themes.label": "主题",
-    "theme.ocean": "Deep Ocean，可在<a href=\"/catalog/#deep-ocean\">目录</a>中免费获取。",
-    "theme.kintsugi": "Kintsugi，可在<a href=\"/catalog/#kintsugi\">目录</a>中免费获取，带有自己的动态背景。",
-    "theme.limnograph": "Limnograph，可在<a href=\"/catalog/#limnograph\">目录</a>中免费获取：一款以手绘湖景为背景的浅色主题。",
-    "theme.afterimage": "Afterimage，可在<a href=\"/catalog/#afterimage\">目录</a>中免费获取。",
+    "theme.ocean": "Deep Ocean，可在<a href=\"/ja/catalog/#deep-ocean\">目录</a>中免费获取。",
+    "theme.kintsugi": "Kintsugi，可在<a href=\"/ja/catalog/#kintsugi\">目录</a>中免费获取，带有自己的动态背景。",
+    "theme.limnograph": "Limnograph，可在<a href=\"/ja/catalog/#limnograph\">目录</a>中免费获取：一款以手绘湖景为背景的浅色主题。",
+    "theme.afterimage": "Afterimage，可在<a href=\"/ja/catalog/#afterimage\">目录</a>中免费获取。",
     "theme.retro": "Pixel Retro，Xenon 内置的一种风格。",
-    "theme.forest": "社区作者 Domi 制作的 Forest，在<a href=\"/catalog/#forest\">目录</a>中免费。",
+    "theme.forest": "社区作者 Domi 制作的 Forest，在<a href=\"/ja/catalog/#forest\">目录</a>中免费。",
     "theme.amb": "当前：该主题的 Ambient 屏保。",
     "themes.pause": "暂停主题轮播",
     "themes.play": "继续主题轮播",
@@ -2836,6 +2932,7 @@ html[data-mobile] .onphone { display: block; }
     "ft.claude": "在触摸屏上使用 Claude Code",
     "ft.codex": "在触摸屏上使用 OpenAI Codex",
     "ft.sensor": "电脑传感器面板",
+    "ft.compare": "Xenon 与其他工具",
     "hero.try": "在浏览器中试用",
     "bit.p": "Xenon 内置的助手，语音或文字都可以。",
     "make.open": "打开 Xenon Maker",
@@ -2941,6 +3038,10 @@ html[data-mobile] .onphone { display: block; }
     "ft.recorder": "屏幕录制",
     "theme.liquid": "Liquid Glass，Xenon 的默认主题。",
     "cat.sparks": "{n} 火花",
+    "film.h2": "一分钟了解 Xenon",
+    "film.link": "观看视频",
+    "film.sound": "带声音观看",
+    "film.alt": "Xenon 视频：桌面上、游戏上方和任意屏幕上的小组件，还有 Bit",
   };
 
   // Language engine. Every language has a URL of its own, generated by
